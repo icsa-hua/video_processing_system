@@ -1,6 +1,7 @@
 from obs_system.logic_module.interface.event_extractor import EventExtractorInterface
 import numpy as np
 import cv2
+import time 
 
 class BoundingBoxOverlapDetector(EventExtractorInterface):
     def detect(self, predictions: np.ndarray) -> list:
@@ -44,6 +45,9 @@ class BoundingBoxOverlapDetector(EventExtractorInterface):
         return image
     
     def draw_overlaps(self, image: np.ndarray, overlaps: list) -> np.ndarray:
+        print(type(image))
+        print(type(overlaps))
+        time.sleep(90)
         for overlap in overlaps:
             box1, box2 = overlap
             image = self._draw_semitransparent_rectangle(image, box1[:4])

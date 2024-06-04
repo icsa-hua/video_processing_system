@@ -1,36 +1,229 @@
 from obs_system.detection_module.interface.predictor import ModelLoader
+from obs_system.detection_module.interface.soft_nms import py_cpu_softnms
 import numpy as np
 import cv2 
+import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
+from matplotlib import pyplot as plt
+
+import uuid
+import sys 
+
+# import supervision as sp
+
+model_lock = Lock()
 
 class DummyPredictor(ModelLoader):
-    def __init__(self,model_path: str) -> None:
+
+    def __init__(self,config, model_path: str, weights_path: str, model_name:str) -> None:
+        print("Initilized the dummy predictor")
         self.model = None
-        self.load_model(model_path)
+        self.model_name = model_name
+        self.model_path = model_path 
+        self.weights_path = weights_path
+        self.config = config
+        self.class_names = {0: u'person', 1: u'bicycle',2: u'car', 3: u'motorcycle', 
+             4: u'airplane', 5: u'bus', 6: u'train', 7: u'truck', 8: u'boat', 9: u'traffic light', 
+             10: u'fire hydrant', 11: u'stop sign', 12: u'parking meter', 13: u'bench', 14: u'bird', 
+             15: u'cat', 16: u'dog', 17: u'horse', 18: u'sheep', 19: u'cow', 20: u'elephant', 
+             21: u'bear', 22: u'zebra', 23: u'giraffe', 24: u'backpack', 25: u'umbrella', 26: u'handbag',
+             27: u'tie', 28: u'suitcase', 29: u'frisbee', 30: u'skis', 31: u'snowboard', 32: u'sports ball', 
+             33: u'kite', 34: u'baseball bat', 35: u'baseball glove', 36: u'skateboard', 37: u'surfboard', 
+             38: u'tennis racket', 39: u'bottle', 40: u'wine glass', 41: u'cup', 42: u'fork', 43: u'knife', 
+             44: u'spoon', 45: u'bowl', 46: u'banana', 47: u'apple', 48: u'sandwich', 49: u'orange', 
+             50: u'broccoli', 51: u'carrot', 52: u'hot dog', 53: u'pizza', 54: u'donut', 55: u'cake', 
+             56: u'chair', 57: u'couch', 58: u'potted plant', 59: u'bed', 60: u'dining table', 
+             61: u'toilet', 62: u'tv', 63: u'laptop', 
+             64: u'mouse', 65: u'remote', 66: u'keyboard', 67: u'cell phone', 68: u'microwave', 
+             69: u'oven', 70: u'toaster', 71: u'sink', 72: u'refrigerator', 73: u'book', 74: u'clock', 
+             75: u'vase', 76: u'scissors', 77: u'teddy bear', 78: u'hair drier', 79: u'toothbrush'}
+        self.device = None
+        self.executor = ThreadPoolExecutor(max_workers=4)
+        self.load_model(config, model_path, weights_path)
+        
 
-    def load_model(self, model_path: str) -> None:
-        pass
+    def load_model(self, config, model_path: str, weights_path: str) -> None:
+
+        if self.model_name == "Yolo" or self.model_name=='YOLO':     # peripou 1.8GB
+            try:
+                import torch 
+                cuda_use = torch.cuda.is_available()
+
+                self.device = torch.device("cuda" if cuda_use else "cpu")
+                self.model = torch.hub.load('ultralytics/yolov5', 'yolov5m', force_reload=True)
+
+                self.model.conf = 0.25
+                self.model.iou = 0.50
+                self.model.multi_label = False
+                self.model.max_det = 500
+
+                if cuda_use :
+                    print("CUDA is available. GPU is working!")
+                else:
+                    print("CUDA is not available. GPU is not working.")
+            
+            except ImportError as e: 
+                print(e)
+                print(sys.exc_type)
+
+        elif self.model_name == 'maskrcnn' or self.model_name == "Mask R-CNN":     #peripou 7GB   
+            try: 
+                import obs_system.Mask_RCNN.mrcnn.model as modellib
+                self.model = modellib.MaskRCNN(mode='inference', model_dir=model_path, config=config)
+                self.model.load_weights(weights_path, by_name=True)
+            except ImportError as e: 
+                print(e)
+                print(sys.exc_type)
+
+    def clear_gpu_memory(self):
+        import torch
+        torch.cuda.empty_cache()
+        with torch.no_grad():
+            torch.cuda.empty_cache()
+
+    def predict(self, patch):
+        results = []
+        if self.model_name == "Yolo" or self.model_name=='YOLO': 
+            try: 
+                from datetime import datetime 
+                results = self.model(patch)
+                # results.save() #save images with detections. 
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                plt.imshow(np.squeeze(results.render()))
+                plt.savefig(f"./patches_imgs/{str(uuid.uuid4().fields[-1])[:5]}_{timestamp}.jpg")
+
+            except ImportError as e: 
+                print(e)
+                print(sys.exc_type)
+
+        elif self.model_name == 'maskrcnn' or self.model_name == "Mask R-CNN":   
+            try: 
+                results = self.model.detect([patch], verbose = 1)
+
+            except ImportError as e: 
+                print(e) 
+
+        return results
+
+    def concurrent_prediction(self,patches) -> list :
+        predictions = list(self.executor.map(self.predict,patches))
+        if predictions is None: 
+            print("No predictions were successful")
+        else: 
+            print(f"Finished Concurrent Predictions")
+        return predictions
+
+    def non_max_suppressions(self,predictions, iou_thres=0.5):
+        if self.model_name == "Yolo" or self.model_name == "YOLO":
+            import torchvision.ops as ops
+            nms_detections = ops.nms(predictions[:,:4], predictions[:,4], iou_threshold=iou_thres)            
+            return predictions[nms_detections] 
+
+            # detections = sp.Detections.from_ultralytics(predictions)
+            # detections = sp.Detections.from_yolov5(yolov5_results=predictions)
+            # detections = detections.with_nms(threshold=0.5)
+
+    def soft_nms_detections(self,predictions): 
+        from keras import backend as K
+        import tensorflow as tf
+        array = np.asarray(predictions)
+        with tf.compat.v1.Session() as sess:
+            index = py_cpu_softnms(array[:,:4], array[:,4], method=2)
+            selected_predictions = sess.run(tf.gather(array, index))
+        
+        return selected_predictions
+
+    def gather_preds(self,patches,positions,predictions,frame_shape,stride,conf_thrs=0.4): 
+        boxes = []
+        scores = []
+        class_ids =[]
+
+        for (patch, pos, pred) in zip(patches,positions, predictions): 
+            patch_height, patch_width,_ = patch.shape
+            x_offset, y_offset = pos 
+            left = x_offset * stride
+            top = y_offset * stride
+
+            if left + patch_width > frame_shape[1]:
+                left = frame_shape[1] - patch_width
+            if top + patch_height > frame_shape[0]:
+                top = frame_shape[0] - patch_height
+
+            prediction = pred.pandas().xyxy[0]
+        
+            for _,row in prediction.iterrows(): 
+            
+                if conf_thrs > row['confidence']:
+                    continue
+                
+                boxes.append([row['xmin'] + left, row['ymin'] + top,
+                             row['xmax'] + left, row['ymax'] + top] )
+                
+                scores.append(row['confidence'])
+                class_ids.append(int(row['class']))   
+
+        import torch
+        boxes = torch.tensor(boxes, dtype=torch.float32) #If float16 it creates the nms_kernel not implemented for 'Half'
+        scores = torch.tensor(scores, dtype=torch.float32)
+        class_ids = torch.tensor(class_ids, dtype=torch.int8)
+        detections_tensor = torch.cat((boxes, scores.unsqueeze(1), class_ids.unsqueeze(1)), dim=1)
+        
+        return detections_tensor
     
-    def predict(self, frame: np.ndarray) -> np.ndarray:
-        #result = self.model.predict(frame)
-        #Dummy result
-        # Each detection is represented by [x, y, width, height, class_id]
-        result = np.array([
-            [100, 150, 200, 250, 1],  # First dummy detection
-            [400, 350, 150, 200, 2],  # Second dummy detection
-            [50, 80, 100, 150, 3]   # Third dummy detection
-        ])
-        return result
+    def unique_elements(self,detections): 
+        unique = set() 
+        for det in detections: 
+            box = det[0:4]
+            unique.add(box)
+
+        if len(unique) != len(detections): 
+            print("Duplicates found")
+            return [] 
+        return detections 
+        
+
+    def tensor_to_det(self,tensor_predictions): 
+        detections = []
+        for det in tensor_predictions: 
+            detections.append((det[0].item(),
+                           det[1].item(),
+                           det[2].item(),
+                           det[3].item(), 
+                           det[4].item(), 
+                           int(det[5].item())))
+
+        detections = self.unique_elements(detections)
+
+        return detections 
+
+    def draw_boxes(self, frame,  patches, positions, predictions,  full_image_shape, stride):
+
+        if self.model_name == "Yolo" or self.model_name=="YOLO":
+            predictions = self.gather_preds(patches,positions,predictions,full_image_shape, stride)
+            predictions = self.non_max_suppressions(predictions)
+
+            detections = self.tensor_to_det(predictions)
+            detections = self.soft_nms_detections(detections)
+
+            for det in detections: 
+                x1 = int(det[0])
+                y1 = int(det[1])
+                x2 = int(det[2])
+                y2 = int(det[3])
+                score = det[4] 
+                class_id = int(det[5])
+                cv2.rectangle(frame,(x1,y1), (x2,y2),(0, 255, 0), 2)
+                cv2.putText(frame, f'{self.class_names[class_id]} {score:.2f}', (x1,y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (36, 255, 12), 2)
+            
+            return detections
+            
+        elif self.model_name == "maskrcnn" or self.model_name == "YOLO":
+
+                pass
+        
+       
+        
+
     
-    def draw_boxes(self, frame: np.ndarray, detections: np.ndarray) -> np.ndarray:
-        for detection in detections:
-            x, y, width, height, class_id = detection
-            # Draw a rectangle around each detection
-            start_point = (int(x), int(y))
-            end_point = (int(x + width), int(y + height))
-            color = (0, 255, 0)  # Green color for the rectangle
-            thickness = 2  # Thickness of the rectangle border
-            final_frane = cv2.rectangle(frame, start_point, end_point, color, thickness)
-
-        return final_frane
-
 
