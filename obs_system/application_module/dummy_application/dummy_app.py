@@ -39,8 +39,6 @@ class MainWindow(QMainWindow):
         for processed_patch in processed_patches:
             self.imageUpdateSignal.signal.emit(processed_patch)
 
-
-
     @pyqtSlot(np.ndarray)
     def updateImageDisplay(self, image:np.ndarray):
         height, width, channel = image.shape

@@ -8,9 +8,17 @@ class BoundingBoxOverlapDetector(EventExtractorInterface):
         overlaps = []
 
         for i in range(predictions.shape[0]):
+            x,y,xmax,ymax = predictions[i][:4]
+            w = xmax - x 
+            h = ymax - y 
+            new_box_i = x,y,w,h
             for j in range(i+1, predictions.shape[0]):
-                if self._boxes_overlap(predictions[i][:4], predictions[j][:4]):
-                    overlaps.append((predictions[i], predictions[j]))
+                x,y,xmax,ymax = predictions[j][:4]
+                w = xmax - x
+                h = ymax - y
+                new_box_j = x,y,w,h
+                if self._boxes_overlap(new_box_i, new_box_j):
+                    overlaps.append((new_box_i,new_box_j))
 
         return overlaps
 
@@ -32,22 +40,19 @@ class BoundingBoxOverlapDetector(EventExtractorInterface):
         return True
     
     def _draw_semitransparent_rectangle(self, image: np.ndarray, box: np.ndarray) -> np.ndarray:
-        overlay = image.copy()
-        x, y, w, h = box
 
-        # Define color and transparency factor (alpha)
+        overlay = image.copy()
         color = (0, 255, 0)  # Green color
         alpha = 0.5  # 50% transparency
-
-        cv2.rectangle(overlay, (x, y), (x + w, y + h), color, -1)  # -1 fills the rectangle
+        x, y, w, h = box
+        # Define color and transparency factor (alpha)        
+        cv2.rectangle(overlay, (int(x), int(y)), (int(x) + int(w), int(y) + int(h)), color, -1)  # -1 fills the rectangle
         cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0, image)
 
         return image
     
     def draw_overlaps(self, image: np.ndarray, overlaps: list) -> np.ndarray:
-        print(type(image))
-        print(type(overlaps))
-        time.sleep(90)
+        
         for overlap in overlaps:
             box1, box2 = overlap
             image = self._draw_semitransparent_rectangle(image, box1[:4])
