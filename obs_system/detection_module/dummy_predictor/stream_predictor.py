@@ -277,8 +277,8 @@ class StreamPredictor():
             print("CUDA is not available. GPU is not working.")
     
         #Load Model 
-        self.model = torch.hub.load('ultralytics/yolov5', 'custom', path=model, force_reload=True)
-        # self.model = torch.hub.load('ultralytics/yolov5', 'yolov5n', force_reload=True)
+        # self.model = torch.hub.load('ultralytics/yolov5', 'custom', path=model, force_reload=True)
+        self.model = torch.hub.load('ultralytics/yolov5', 'yolov5s', force_reload=True)
         self.model.conf = 0.25
         self.model.iou = 0.50
         self.model.multi_label = False

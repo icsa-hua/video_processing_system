@@ -97,8 +97,8 @@ class DummyPredictor(ModelLoader):
                 print("CUDA is not available. GPU is not working.")
         
             #Load Model 
-            self.model = torch.hub.load('ultralytics/yolov5', 'custom', path=model_path, force_reload=True)
-            # self.model = torch.hub.load('ultralytics/yolov5', 'yolov5m', force_reload=True)
+            # self.model = torch.hub.load('ultralytics/yolov5', 'custom', path=model_path, force_reload=True)
+            self.model = torch.hub.load('ultralytics/yolov5', 'yolov5s', force_reload=True)
             self.model.conf = 0.25
             self.model.iou = 0.50
             self.model.multi_label = False
