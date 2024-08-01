@@ -1,18 +1,19 @@
 from obs_system.detection_module.interface.predictor import ModelLoader
 from obs_system.detection_module.interface.soft_nms import py_cpu_softnms
+from concurrent.futures import ThreadPoolExecutor
+from matplotlib import pyplot as plt
 
 import numpy as np
 import cv2 
-from concurrent.futures import ThreadPoolExecutor
-from matplotlib import pyplot as plt
 import uuid
 import sys 
 import time
+import torch
 
-# import supervision as sp
+import pdb 
 class DummyPredictor(ModelLoader):
 
-    def __init__(self,model_path: str, model_name:str) -> None:
+    def __init__(self, model_path: str, model_name:str) -> None:
         
         self.model = None
         self.model_name = model_name
@@ -39,8 +40,9 @@ class DummyPredictor(ModelLoader):
         self.executor = ThreadPoolExecutor(max_workers=8)
         self.frame_id = 1
         self.load_model(model_path)
-        print("Completed Model Configuration")
         
+
+
     def get_load_model_func(self, model_name:str): 
         load_model_func = {
             "yolo": self.load_yolo,
@@ -54,6 +56,7 @@ class DummyPredictor(ModelLoader):
             "Onnx" : self.load_onnx
         }
         return load_model_func.get(model_name, lambda *args:None)
+
 
     def get_predict_func(self,model_name:str):
         predict_func = {
@@ -69,6 +72,7 @@ class DummyPredictor(ModelLoader):
         }
         return predict_func.get(model_name, lambda *args: None)
 
+
     def get_draw_func(self,model_name:str):
         draw_func = {
             "yolo": self.draw_yolo_boxes,
@@ -82,7 +86,7 @@ class DummyPredictor(ModelLoader):
 
 
     def load_yolo(self, model_path: str) -> None:
-
+        
         try:
             import torch
             cuda_use = torch.cuda.is_available()
@@ -104,9 +108,10 @@ class DummyPredictor(ModelLoader):
             print(e)
             print(sys.exc_type)
 
+
     def load_maskrcnn(self,model_path: str) -> None:
         
-        try: 
+        try:  
             import obs_system.Mask_RCNN.mrcnn.model as modellib
             from obs_system.detection_module.interface.config import Camera360Config
             config = Camera360Config()
@@ -117,6 +122,7 @@ class DummyPredictor(ModelLoader):
         except ImportError as e: 
             print(e)
             print(sys.exc_type)
+
 
     def load_onnx(self, model_path:str) -> None: 
         try: 
@@ -133,13 +139,16 @@ class DummyPredictor(ModelLoader):
             print(e)
             print(sys.exc_type)
 
+
     def load_model(self, model_path: str) -> None:
         load_model_func  = self.get_load_model_func(self.model_name)
         load_model_func(model_path)
 
 
     def predict_yolo(self,patch):
+
         try: 
+        
             from datetime import datetime 
             results = self.model(patch)
             verbose = False
@@ -149,11 +158,13 @@ class DummyPredictor(ModelLoader):
                 plt.imshow(np.squeeze(results.render()))
                 plt.savefig(f"./patches_imgs/{str(uuid.uuid4().fields[-1])[:5]}_{timestamp}.jpg")
             return results
+        
         except ImportError as e: 
             print(e)
             print(sys.exc_type)
             return []
         
+
     def predict_maskrcnn(self,patch):
         try: 
             results = self.model.detect([patch], verbose = 1)
@@ -161,20 +172,21 @@ class DummyPredictor(ModelLoader):
         except ImportError as e: 
             print(e) 
 
+
     def predict_onnx(self,patch) :
-        import time
-        time.sleep(90)
         try: 
             results = self.model.session_run(patch)
-            [print(f"Output {i} : {result}") for i, result in enumerate(results)]
+            # [print(f"Output {i} : {result}") for i, result in enumerate(results)]
             return results
         except AttributeError as e:
             print(e)
             print(sys.exc_type)
 
+
     def predict(self, patch):
         predict_func = self.get_predict_func(self.model_name)
         return predict_func(patch)
+
 
     def clear_gpu_memory(self):
         import torch
@@ -182,15 +194,15 @@ class DummyPredictor(ModelLoader):
         with torch.no_grad():
             torch.cuda.empty_cache()
 
+
     def concurrent_prediction(self,patches) -> list :
         init_time = time.time()
         predictions = list(self.executor.map(self.predict,patches))
-        if predictions is None: 
-            print("No predictions were successful")
-        else: 
+        if predictions is not  None:  
             print(f"Frame {self.frame_id}/1800 inference done at {(time.time() - init_time):.2f} seconds")
             self.frame_id += 1
         return predictions
+
 
     def non_max_suppressions(self,predictions, iou_thres=0.5):
         if self.model_name == "Yolo" or self.model_name == "YOLO":
@@ -198,9 +210,6 @@ class DummyPredictor(ModelLoader):
             nms_detections = ops.nms(predictions[:,:4], predictions[:,4], iou_threshold=iou_thres)            
             return predictions[nms_detections] 
 
-    # detections = sp.Detections.from_ultralytics(predictions)
-    # detections = sp.Detections.from_yolov5(yolov5_results=predictions)
-    # detections = detections.with_nms(threshold=0.5)
 
     def soft_nms_detections(self,predictions,method=2): 
         from keras import backend as K
@@ -211,6 +220,7 @@ class DummyPredictor(ModelLoader):
             selected_predictions = sess.run(tf.gather(array, index))
         
         return selected_predictions
+
 
     def gather_preds(self,patches,positions,predictions,frame_shape,stride,conf_thrs=0.4): 
         boxes = []
@@ -241,7 +251,6 @@ class DummyPredictor(ModelLoader):
                 scores.append(row['confidence'])
                 class_ids.append(int(row['class']))   
 
-        import torch
         boxes = torch.tensor(boxes, dtype=torch.float32) #If float16 it creates the nms_kernel not implemented for 'Half'
         scores = torch.tensor(scores, dtype=torch.float32)
         class_ids = torch.tensor(class_ids, dtype=torch.int8)
@@ -249,6 +258,7 @@ class DummyPredictor(ModelLoader):
         
         return detections_tensor
     
+
     def unique_elements(self,detections): 
         unique = set() 
         for det in detections: 
@@ -256,10 +266,11 @@ class DummyPredictor(ModelLoader):
             unique.add(box)
 
         if len(unique) != len(detections): 
-            print("Duplicates found")
             return [] 
+
         return detections 
         
+
     def tensor_to_det(self,tensor_predictions): 
         detections = []
         for det in tensor_predictions: 
@@ -274,12 +285,14 @@ class DummyPredictor(ModelLoader):
 
         return detections 
 
+
     def draw_yolo_boxes(self,frame,patches,positions,predictions, full_image_shape, stride)->list:
-        predictions = self.gather_preds(patches,positions,predictions,full_image_shape, stride)
-        # predictions = self.non_max_suppressions(predictions)
-        # detections = self.tensor_to_det(predictions)
-        # detections = self.soft_nms_detections(detections,method=1)
-        detections = predictions    
+        
+        predictions = self.gather_preds(patches,positions,predictions,full_image_shape, stride)        
+        predictions = self.non_max_suppressions(predictions)
+        detections = self.tensor_to_det(predictions)
+        detections = self.soft_nms_detections(detections,method=1)
+
         for det in detections: 
             x1 = int(det[0])
             y1 = int(det[1])
@@ -292,8 +305,10 @@ class DummyPredictor(ModelLoader):
         
         return detections
 
+
     def draw_maskrcnn_boxes(self,frame,patches,positions,predictions)->list:
         pass
+
 
     def draw_boxes(self, frame,  patches, positions, predictions,  full_image_shape, stride):
         draw_boxes_func = self.get_draw_func(self.model_name)

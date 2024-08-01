@@ -4,6 +4,7 @@ import cv2
 import time 
 
 class BoundingBoxOverlapDetector(EventExtractorInterface):
+
     def detect(self, predictions: np.ndarray) -> list:
         overlaps = []
 
@@ -22,6 +23,7 @@ class BoundingBoxOverlapDetector(EventExtractorInterface):
 
         return overlaps
 
+
     def _boxes_overlap(self, box1: np.ndarray, box2: np.ndarray) -> bool:
         # Unpack coordinates and dimensions
         x1, y1, w1, h1 = box1
@@ -39,6 +41,7 @@ class BoundingBoxOverlapDetector(EventExtractorInterface):
 
         return True
     
+
     def _draw_semitransparent_rectangle(self, image: np.ndarray, box: np.ndarray) -> np.ndarray:
 
         overlay = image.copy()
@@ -50,6 +53,7 @@ class BoundingBoxOverlapDetector(EventExtractorInterface):
         cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0, image)
 
         return image
+    
     
     def draw_overlaps(self, image: np.ndarray, overlaps: list) -> np.ndarray:
         

@@ -1,11 +1,19 @@
 from PyQt5.QtWidgets import QMainWindow, QLabel, QVBoxLayout, QWidget
 from PyQt5.QtCore import pyqtSignal, pyqtSlot, QObject, QThread
 from PyQt5.QtGui import QPixmap, QImage
-from .worker import ImageUpdateSignal
+from worker import ImageUpdateSignal
 import numpy as np 
 
 
 class MainWindow(QMainWindow):
+    """
+    The `MainWindow` class is the main window of the application,
+    which displays the image with bounding boxes detected by the object detector.
+    
+    ***Under Construction***
+    
+    """
+        
     def __init__(self, object_detector):
         super().__init__()
         self.initUI()

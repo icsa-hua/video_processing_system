@@ -1,13 +1,33 @@
 from obs_system.conversion_module.interface.convertor import CameraProcessor
+from scipy.ndimage import map_coordinates 
+from datetime import datetime
+
+import os
 import imageio
 import numpy as np 
 from PIL import Image 
-from scipy.ndimage import map_coordinates 
 from tqdm import tqdm 
-import os
-from datetime import datetime
+
+
 
 class FrameConvertor(CameraProcessor): 
+    """
+    The FrameConvertor class is responsible for converting a panoramic image frame
+    into a set of overlapping patches, and optionally saving the patches and generating a video from the frame.
+    
+    The class takes in a frame, its shape, an output path, a model name, and optional
+    parameters for saving the conversion and adjusting the field of view (FOV) and
+    overlap. It then calculates the native size of the model, computes the Cartesian
+    coordinates for the frame, and provides methods for mapping the frame to a sphere,
+    interpolating colors, and computing the number of patches needed to cover the frame.
+    
+    The `video_conversion()` method generates a video from the frame by iterating through
+    different yaw angles and mapping the frame to a sphere. 
+    The `decomposition()` method splits the frame into overlapping patches, optionally
+    saves the patches, and returns the patches and their positions.
+    The `reconstruct_image()` method takes the patches and their positions and reconstructs the original frame.
+    """
+        
     def __init__(self,  frame, shape, output_path, model_name, save_conversion=False,  FOV=90, overlap=0.2):
         
         self.img = frame
@@ -109,7 +129,8 @@ class FrameConvertor(CameraProcessor):
 
         return num_patches_x, num_patches_y, stride
 
-    def decomposition(self): 
+    def decomposition(self):
+         
         patches = []
         positions = []
         num_patches_x, num_patches_y, stride = self.compute_patches()
