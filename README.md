@@ -24,7 +24,7 @@ The main technologies used for this project are:
 ## SetUp
 1. Clone the repository:
 ```sh
-git clone https://github.com/icsa-hua/Obstacle_Recognition_Edge_Ai.git
+git clone -b developer https://github.com/icsa-hua/Obstacle_Recognition_Edge_Ai.git
 ```
 2. Navigate to the project directory:
 ```sh
