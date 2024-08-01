@@ -5,7 +5,7 @@ from obs_system.detection_module.dummy_predictor.stream_predictor import StreamP
 from obs_system.logic_module.dummy_logic.overlap_detection import BoundingBoxOverlapDetector
 from obs_system.communication_module.mqtt_com.message_transmitter import RealMQTT
 from obs_system.conversion_module.dummy_convertor.frame_convertor import FrameConvertor
-from obs_system.detection_module.interface.config import Camera360Config
+# from obs_system.detection_module.interface.config import Camera360Config
 from obs_system.application_module.dummy_application.onnx_workflow.dummy_compression.compression import Compression
 # from obs_system.application_module.dummy_application.dummy_app import MainWindow
 
