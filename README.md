@@ -47,5 +47,8 @@ python3 test_dummy_pipeline.py --model='Yolo'
 python3 test_dummy_pipeline.py  --op='streaming'
 ```
 
-
+7. If you encounter any problem with the modules, setting the PYTHONPATH can be a solution:
+```sh
+export PYTHONPATH="/path to project:${PYTHONPATH}"
+```
 
