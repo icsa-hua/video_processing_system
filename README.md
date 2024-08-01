@@ -24,11 +24,11 @@ The main technologies used for this project are:
 ## SetUp
 1. Clone the repository:
 ```sh
-git clone https://github.com/icsa-hua/MvmTSP-MD.git
+git clone https://github.com/icsa-hua/Obstacle_Recognition_Edge_Ai.git
 ```
 2. Navigate to the project directory:
 ```sh
-cd MvmTSP-MD
+cd Obstacle_Recognition_Edge_Ai
 ```
 3. Install the dependencies:
 ```sh
