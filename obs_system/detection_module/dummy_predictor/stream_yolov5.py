@@ -19,10 +19,10 @@ from ultralytics.utils.files import increment_path
 from ultralytics.utils.torch_utils import select_device, smart_inference_mode
 # from soft_nms import py_cpu_softnms
 from obs_system.detection_module.interface.soft_nms import py_cpu_softnms
-
+from obs_system.detection_module.interface.streaming import YOLOStreamer
 import gc
 import psutil
-import pynvml
+# import pynvml
 
 
 
@@ -38,22 +38,23 @@ Example:
         probs = r.probs  # Class probabilities for classification outputs
 """
 
-class StreamPredictor(): 
+class Yolov5Streamer(YOLOStreamer): 
 
     def __init__(self, cfg=DEFAULT_CFG, overrides=None, _callbacks=None): 
-        self.args = get_cfg(cfg,overrides)
-        self.save_dir = get_save_dir(self.args)
+        super().__init__(cfg, overrides, _callbacks)
+        # self.args = get_cfg(cfg,overrides)
+        # self.save_dir = get_save_dir(self.args)
 
-        self.process_memory = psutil.Process(os.getpid())
-        pynvml.nvmlInit()
-        self.handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        # self.process_memory = psutil.Process(os.getpid())
+        # pynvml.nvmlInit()
+        # self.handle = pynvml.nvmlDeviceGetHandleByIndex(0)
         
-        if self.args.conf is None: 
-            self.args.conf = 0.25 
-        self.done_warmup = False 
+        # if self.args.conf is None: 
+        #     self.args.conf = 0.25 
+        # self.done_warmup = False 
         
-        if self.args.show: 
-            self.args.show = check_imshow(warn=True)
+        # if self.args.show: 
+        #     self.args.show = check_imshow(warn=True)
         
         self.class_names = {0: u'person', 1: u'bicycle',2: u'car', 3: u'motorcycle', 
                     4: u'airplane', 5: u'bus', 6: u'train', 7: u'truck', 8: u'boat', 9: u'traffic light', 
@@ -71,24 +72,24 @@ class StreamPredictor():
                     69: u'oven', 70: u'toaster', 71: u'sink', 72: u'refrigerator', 73: u'book', 74: u'clock', 
                     75: u'vase', 76: u'scissors', 77: u'teddy bear', 78: u'hair drier', 79: u'toothbrush'}
                 
-        self.model = None 
-        self.data = self.args.data
-        self.imgsz = None 
-        self.device = None 
-        self.dataset = None 
-        self.vid_writer = {} 
-        self.plotted_img = None
-        self.source_type = None 
-        self.seen = 0
-        self.windows = [] 
-        self.batch = None 
-        self.results = None
-        self.transforms = None 
-        self.callbacks = _callbacks or callbacks.get_default_callbacks() 
-        self.txt_path = None 
-        self._lock = threading.Lock() 
-        self.shape = None 
-        callbacks.add_integration_callbacks(self)
+        # self.model = None 
+        # self.data = self.args.data
+        # self.imgsz = None 
+        # self.device = None 
+        # self.dataset = None 
+        # self.vid_writer = {} 
+        # self.plotted_img = None
+        # self.source_type = None 
+        # self.seen = 0
+        # self.windows = [] 
+        # self.batch = None 
+        # self.results = None
+        # self.transforms = None 
+        # self.callbacks = _callbacks or callbacks.get_default_callbacks() 
+        # self.txt_path = None 
+        # self._lock = threading.Lock() 
+        # self.shape = None 
+        # callbacks.add_integration_callbacks(self)
 
 
     def _warmup(self, imgsz=(1, 3, 640, 640)):

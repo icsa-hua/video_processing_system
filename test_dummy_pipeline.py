@@ -1,6 +1,6 @@
 from obs_system.camera_module.dummy_impl.video_consumer import DummyConsumer
 from obs_system.detection_module.dummy_predictor.dummy_yolo import DummyPredictor
-from obs_system.detection_module.dummy_predictor.stream_predictor import StreamPredictor
+from obs_system.detection_module.dummy_predictor.stream_yolov5 import Yolov5Streamer
 
 from obs_system.logic_module.dummy_logic.overlap_detection import BoundingBoxOverlapDetector
 from obs_system.communication_module.mqtt_com.message_transmitter import RealMQTT
@@ -84,7 +84,7 @@ def main():
         model_weights = os.path.join(parent_path,'yolov5s.pt')
 
         if config == "streaming":
-             e = StreamPredictor()
+             e = Yolov5Streamer()
              e.predict_cli(source=test_video_path, model=model_weights)
              statistics(process_memory, handle, start_time) 
              #Close main process
@@ -94,6 +94,9 @@ def main():
              #Close nvidia GPU process 
              pynvml.nvmlShutdown()
              exit(0)
+
+    elif model_name == "yolov8" or model_name == "Yolo8" or model_name == "YOLO8":
+        model_weights = 'yolov8s.pt'
 
     elif model_name == "maskrcnn" or model_name == "MaskRCNN":   
         model_weights = os.path.join(parent_path,'obs_system/Mask_RCNN/mask_rcnn_coco.h5')
