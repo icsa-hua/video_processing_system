@@ -8,50 +8,25 @@ from ultralytics.utils import LOGGER, colorstr, ops
 from ultralytics.data.augment import classify_transforms
 from ultralytics.nn.autobackend import AutoBackend
 from ultralytics.utils.torch_utils import select_device, smart_inference_mode
+from ultralytics import YOLO 
+from ultralytics.engine.results import Results
 from pathlib import Path 
 import torch 
 import numpy as np
 import cv2 
 import re
-
+import pdb
+import torchvision.ops as operation
+import warnings 
 
 
 class Yolov8Streamer(YOLOStreamer):
 
     # Ultralytics YOLO 🚀, AGPL-3.0 license
-    """
-    Run prediction on images, videos, directories, globs, YouTube, webcam, streams, etc.
-
-    Usage - sources:
-        $ yolo mode=predict model=yolov8n.pt source=0                               # webcam
-                                                    img.jpg                         # image
-                                                    vid.mp4                         # video
-                                                    screen                          # screenshot
-                                                    path/                           # directory
-                                                    list.txt                        # list of images
-                                                    list.streams                    # list of streams
-                                                    'path/*.jpg'                    # glob
-                                                    'https://youtu.be/LNwODJXcvt4'  # YouTube
-                                                    'rtsp://example.com/media.mp4'  # RTSP, RTMP, HTTP, TCP stream
-
-    Usage - formats:
-        $ yolo mode=predict model=yolov8n.pt                 # PyTorch
-                                yolov8n.torchscript        # TorchScript
-                                yolov8n.onnx               # ONNX Runtime or OpenCV DNN with dnn=True
-                                yolov8n_openvino_model     # OpenVINO
-                                yolov8n.engine             # TensorRT
-                                yolov8n.mlpackage          # CoreML (macOS-only)
-                                yolov8n_saved_model        # TensorFlow SavedModel
-                                yolov8n.pb                 # TensorFlow GraphDef
-                                yolov8n.tflite             # TensorFlow Lite
-                                yolov8n_edgetpu.tflite     # TensorFlow Edge TPU
-                                yolov8n_paddle_model       # PaddlePaddle
-                                yolov8n_ncnn_model         # NCNN
-    """
-
 
     def __init__(self, cfg, overrides, _callbacks)->None: 
         super().__init__(cfg, overrides, _callbacks)
+        self.speed = {} 
 
 
     def warmup(self, imgsz): 
@@ -83,6 +58,7 @@ class Yolov8Streamer(YOLOStreamer):
             im (torch.Tensor | List(np.ndarray)): BCHW for tensor, [(HWC) x B] for list.
         """
         not_tensor = not isinstance(im, torch.Tensor)
+        self.orig_shape = im[0].shape if isinstance(im, list) else im.shape
         if not_tensor:
             im = np.stack(self.pre_transform(im))
             im = im[..., ::-1].transpose((0, 3, 1, 2))  # BGR to RGB, BHWC to BCHW, (n, 3, h, w)
@@ -92,7 +68,7 @@ class Yolov8Streamer(YOLOStreamer):
         im = im.to(self.device)
         im = im.half() if self.model.fp16 else im.float()  # uint8 to fp16/32
         if not_tensor:
-            im /= 255  # 0 - 255 to 0.0 - 1.0
+            im = im.div(255.0)  # 0 - 255 to 0.0 - 1.0
         return im
 
 
@@ -106,14 +82,12 @@ class Yolov8Streamer(YOLOStreamer):
         return self.model(im, augment=self.args.augment, visualize=visualize, embed=self.args.embed, *args, **kwargs)
 
 
-    def postprocess(self, preds): 
-        return super().postprocess(preds)
+    def postprocess(self, preds, img, orig_img): 
+        return super().postprocess(preds, img, orig_img)
     
      
     def predict_cli(self, source, model): 
-        gen = self.stream_inference(source, model)
-        for _ in gen: 
-            pass
+        return super().predict_cli(source, model)
 
 
     def setup_source(self, source=""): 
@@ -128,12 +102,14 @@ class Yolov8Streamer(YOLOStreamer):
             if self.args.task == "classify"
             else None
         )
+
         self.dataset = load_inference_source(
             source=source,
             batch=self.args.batch,
             vid_stride=self.args.vid_stride,
             buffer=self.args.stream_buffer,
         )
+
         self.source_type = self.dataset.source_type
         if not getattr(self, "stream", True) and (
             self.source_type.stream
@@ -142,11 +118,12 @@ class Yolov8Streamer(YOLOStreamer):
             or any(getattr(self.dataset, "video_flag", [False]))
         ):  # videos
             LOGGER.warning(YOLOStreamer.STREAM_WARNING)
-        self.vid_writer = {}
+        # self.vid_writer = {}
 
 
     def setup_model(self, model, verbose=True):
         """Initialize YOLO model with given parameters and set it to evaluation mode."""
+
         self.model = AutoBackend(
             weights=model or self.args.model,
             device=select_device(self.args.device, verbose=verbose),
@@ -158,16 +135,21 @@ class Yolov8Streamer(YOLOStreamer):
             verbose=verbose,
         )
 
+        # self.yolo = YOLO(model)
+
         self.device = self.model.device  # update device
         self.args.half = self.model.fp16  # update half
         self.model.eval()
 
-    def non_max_suppression(self, opt, detections, iou_thres):
-        pass 
-    
-    def translate_data(self)->None:
-        pass
-   
+
+    def non_max_suppression(self, opt, detections,scores, conf, iou, thr):
+        if len(detections)==0:
+            warnings.warn("No Detections were applicable from the model...")
+            return[]
+        
+        return operation.nms(detections, scores, iou_threshold=iou)            
+        
+
     @smart_inference_mode()
     def stream_inference(self, source, model, *args, **kwargs):
         
@@ -205,31 +187,36 @@ class Yolov8Streamer(YOLOStreamer):
 
                 # Preprocess
                 with profilers[0]:
-                    im = self.preprocess(im0s)
+                    images = self.preprocess(im0s)
 
                 # Inference
                 with profilers[1]:
-                    preds = self.inference(im, *args, **kwargs)
+                    preds = self.inference(images, *args, **kwargs)
+
                     if self.args.embed:
                         yield from [preds] if isinstance(preds, torch.Tensor) else preds  # yield embedding tensors
                         continue
 
                 # Postprocess
                 with profilers[2]:
-                    self.results = self.postprocess(preds, im, im0s)
+                    self.results = self.postprocess(preds, images, im0s)
+
                 self.run_callbacks("on_predict_postprocess_end")
 
                 # Visualize, save, write results
                 n = len(im0s)
+
                 for i in range(n):
                     self.seen += 1
-                    self.results[i].speed = {
+
+                    self.speed = {
                         "preprocess": profilers[0].dt * 1e3 / n,
                         "inference": profilers[1].dt * 1e3 / n,
                         "postprocess": profilers[2].dt * 1e3 / n,
                     }
+
                     if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
-                        s[i] += self.write_results(i, Path(paths[i]), im, s)
+                        s[i] += self.write_results(i, Path(paths[i]), images,im0s, s)
 
                 # Print batch results
                 if self.args.verbose:
@@ -248,19 +235,40 @@ class Yolov8Streamer(YOLOStreamer):
             t = tuple(x.t / self.seen * 1e3 for x in profilers)  # speeds per image
             LOGGER.info(
                 f"Speed: %.1fms preprocess, %.1fms inference, %.1fms postprocess per image at shape "
-                f"{(min(self.args.batch, self.seen), 3, *im.shape[2:])}" % t
+                f"{(min(self.args.batch, self.seen), 3, *images.shape[2:])}" % t
             )
         if self.args.save or self.args.save_txt or self.args.save_crop:
             nl = len(list(self.save_dir.glob("labels/*.txt")))  # number of labels
             s = f"\n{nl} label{'s' * (nl > 1)} saved to {self.save_dir / 'labels'}" if self.args.save_txt else ""
             LOGGER.info(f"Results saved to {colorstr('bold', self.save_dir)}{s}")
+       
         self.run_callbacks("on_predict_end")
+    
 
-    def write_results(self, i, p, im, s)->str:
+    def translate_data(self, frame_index, video_path, images, results, orig_images)->None:
+        names = self.model.names 
+        orig_img = orig_images[frame_index]
+        [height, width, _]= orig_img.shape
+        shape = len(results.shape)
+        rectBoxes,class_ids = self.iteration_rows(results, frame_index, shape, height, width)
+        return Results(
+            orig_img=orig_img,
+            path=video_path, 
+            names=names,
+            boxes=rectBoxes,
+            speed=self.speed,
+            probs=class_ids
+        )
+
+      
+    def write_results(self, i, p, im, original_images, s)->str:
         """Write inference results to a file or directory."""
+        
         string = ""  # print string
+
         if len(im.shape) == 3:
             im = im[None]  # expand for batch dim
+
         if self.source_type.stream or self.source_type.from_img or self.source_type.tensor:  # batch_size >= 1
             string += f"{i}: "
             frame = self.dataset.count
@@ -270,9 +278,16 @@ class Yolov8Streamer(YOLOStreamer):
 
         self.txt_path = self.save_dir / "labels" / (p.stem + ("" if self.dataset.mode == "image" else f"_{frame}"))
         string += "%gx%g " % im.shape[2:]
-        result = self.results[i]
+        result = self.results[i] #Get the batch size pictures 
+
+        if isinstance(result, torch.Tensor):
+            result = self.translate_data(i, p, im, result, original_images)
+
+        if not result: 
+            return ""
+        
         result.save_dir = self.save_dir.__str__()  # used in other locations
-        string += f"{result.verbose()}{result.speed['inference']:.1f}ms"
+        string += f"{result.verbose()}{result.speed['inference']:.1f}ms" 
 
         # Add predictions to image
         if self.args.save or self.args.show:
@@ -287,10 +302,13 @@ class Yolov8Streamer(YOLOStreamer):
         # Save results
         if self.args.save_txt:
             result.save_txt(f"{self.txt_path}.txt", save_conf=self.args.save_conf)
+        
         if self.args.save_crop:
             result.save_crop(save_dir=self.save_dir / "crops", file_name=self.txt_path.stem)
+        
         if self.args.show:
             self.show(str(p))
+        
         if self.args.save:
             self.save_predicted_images(str(self.save_dir / p.name), frame)
 
@@ -313,16 +331,78 @@ class Yolov8Streamer(YOLOStreamer):
         return super().add_callback(event, func)
 
 
+    def calculate_padding(self, original_height, original_width, target_dimension):
+        # Calculate the scale needed to fit the width and height into the target dimension
+        scale_for_width = target_dimension / original_width
+        scale_for_height = target_dimension / original_height
+
+        # Determine which scale to use (the one that fits the image entirely within the target box)
+        scale_used = min(scale_for_width, scale_for_height)
+
+        # Calculate the effective width and height after scaling
+        effective_width = original_width * scale_used
+        effective_height = original_height * scale_used
+
+        # Calculate padding by subtracting the effective dimensions from the target dimension
+        pad_x = target_dimension - effective_width
+        pad_y = target_dimension - effective_height
+
+        return pad_x, pad_y, scale_used
+    
+
+    def box_creation(self, results, i, r, shape): 
+        if shape == 3: 
+            return [results[i, 0, r] - results[i, 2, r]/2,
+                    results[i, 1, r] - results[i, 3, r]/2,
+                    results[i, 0, r] + results[i, 2, r],
+                    results[i, 1, r] + results[i, 3, r]]
+        
+        return [results[0, r] - results[2, r]/2,
+                results[1, r] - results[3, r]/2,
+                results[0, r] + results[2, r],
+                results[1, r] + results[3, r]]
 
 
+    def scale_boxes(self, boxes, pad_x, pad_y, scale): 
+        boxes[:, 0] = (boxes[:, 0] - pad_x // 2) / scale
+        boxes[:, 2] = (boxes[:, 2] - pad_x // 2) / scale
+        boxes[:, 1] = (boxes[:, 1] - pad_y // 2) / scale
+        boxes[:, 3] = (boxes[:, 3] - pad_y // 2) / scale
+        return boxes
 
 
+    def data_to_tensor_filter(self, boxes, scores, class_ids): 
+        boxes = torch.FloatTensor(boxes).to(self.device)
+        scores = torch.FloatTensor(scores).to(self.device)
+        class_ids = torch.LongTensor(class_ids).to(self.device)
+        result_boxes = self.non_max_suppression(opt=None, detections=boxes,scores=scores, conf=0.25, iou=0.45, thr=0.5)
+        if len(result_boxes)==0 or len(boxes)==0: 
+                return []  
+        return boxes[result_boxes], scores[result_boxes], class_ids[result_boxes]
 
 
+    def class_scores_creation(self, results, i, r, shape): 
+        if shape == 3:
+            return results[i, 4:, r]
+        return results[4:, r]
 
 
+    def iteration_rows(self, results, frame_index, shape, height, width, conf_thr=0.4): 
+        rows =  results.shape[-1]
+        boxes = []
+        class_ids = []
+        scores = []
+        pad_x,pad_y,scale = self.calculate_padding(height,width,640)
 
-
-
-
-
+        for r in range(rows):
+            classes_scores = self.class_scores_creation(results, frame_index, r, shape)
+            (minScore, maxScore, minClassLoc, (x, maxClassIndex)) = cv2.minMaxLoc(classes_scores.cpu().numpy()) 
+            if maxScore >= conf_thr:
+               boxes.append(self.box_creation(results, frame_index, r, shape))
+               class_ids.append(maxClassIndex)
+               scores.append(maxScore)
+        
+        boxes, scores, class_ids = self.data_to_tensor_filter(boxes=boxes, scores=scores, class_ids=class_ids)
+        boxes = self.scale_boxes(boxes, pad_x=pad_x, pad_y=pad_y, scale=scale)
+        return torch.stack((boxes[:,0],boxes[:,1],boxes[:,2],boxes[:,3],scores, class_ids), axis=-1), class_ids
+        

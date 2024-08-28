@@ -1,6 +1,7 @@
 from obs_system.camera_module.dummy_impl.video_consumer import DummyConsumer
 from obs_system.detection_module.dummy_predictor.dummy_yolo import DummyPredictor
 from obs_system.detection_module.dummy_predictor.stream_yolov5 import Yolov5Streamer
+from obs_system.detection_module.dummy_predictor.stream_yolov8 import Yolov8Streamer
 
 from obs_system.logic_module.dummy_logic.overlap_detection import BoundingBoxOverlapDetector
 from obs_system.communication_module.mqtt_com.message_transmitter import RealMQTT
@@ -8,7 +9,7 @@ from obs_system.conversion_module.dummy_convertor.frame_convertor import FrameCo
 # from obs_system.detection_module.interface.config import Camera360Config
 from obs_system.application_module.dummy_application.onnx_workflow.dummy_compression.compression import Compression
 # from obs_system.application_module.dummy_application.dummy_app import MainWindow
-
+from ultralytics.utils import DEFAULT_CFG
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  #suppress warnings. 
 from silence_tensorflow import silence_tensorflow
@@ -80,7 +81,7 @@ def main():
     config = args.op
     model_name = args.model
 
-    if model_name == "Yolo" or model_name=="YOLO": 
+    if model_name == "yolov5" or model_name=="YOLO5" or model_name=="Yolo5": 
         model_weights = os.path.join(parent_path,'yolov5s.pt')
 
         if config == "streaming":
@@ -96,7 +97,20 @@ def main():
              exit(0)
 
     elif model_name == "yolov8" or model_name == "Yolo8" or model_name == "YOLO8":
-        model_weights = 'yolov8s.pt'
+        model_weights = 'yolov8n.pt'
+        if config == "streaming":
+             
+            e = Yolov8Streamer(DEFAULT_CFG, {}, None)
+            e.predict_cli(source=test_video_path, model=model_weights)
+            statistics(process_memory, handle, start_time) 
+            #Close main process
+            process.terminate()
+            process.join()
+            #Close nvidia GPU process 
+            pynvml.nvmlShutdown()
+            exit(0)
+
+
 
     elif model_name == "maskrcnn" or model_name == "MaskRCNN":   
         model_weights = os.path.join(parent_path,'obs_system/Mask_RCNN/mask_rcnn_coco.h5')

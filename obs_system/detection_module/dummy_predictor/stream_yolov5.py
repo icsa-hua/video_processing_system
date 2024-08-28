@@ -1,4 +1,11 @@
-"Standalone Program. Run directly with python3"
+from ultralytics.data.build import load_inference_source
+from ultralytics.data.augment import LetterBox, classify_transforms
+from ultralytics.utils import DEFAULT_CFG, LOGGER, MACOS, WINDOWS, colorstr, ops
+from ultralytics.utils.checks import check_imgsz
+from ultralytics.utils.torch_utils import smart_inference_mode
+from obs_system.detection_module.interface.soft_nms import py_cpu_softnms
+from obs_system.detection_module.interface.streaming import YOLOStreamer
+
 import os
 import time
 import platform 
@@ -9,52 +16,14 @@ import glob
 import cv2  
 import numpy as np
 import torch 
-from ultralytics.cfg import get_cfg, get_save_dir
-from ultralytics.data.build import load_inference_source
-from ultralytics.data.augment import LetterBox, classify_transforms
-from ultralytics.nn.autobackend import AutoBackend
-from ultralytics.utils import DEFAULT_CFG, LOGGER, MACOS, WINDOWS, callbacks, colorstr, ops
-from ultralytics.utils.checks import check_imgsz, check_imshow
-from ultralytics.utils.files import increment_path
-from ultralytics.utils.torch_utils import select_device, smart_inference_mode
-# from soft_nms import py_cpu_softnms
-from obs_system.detection_module.interface.soft_nms import py_cpu_softnms
-from obs_system.detection_module.interface.streaming import YOLOStreamer
 import gc
-import psutil
-# import pynvml
 
 
-
-STREAM_WARNING = """
-WARNING ⚠️ inference results will accumulate in RAM unless `stream=True` is passed, causing potential out-of-memory
-errors for large sources or long-running streams and videos. See https://docs.ultralytics.com/modes/predict/ for help.
-
-Example:
-    results = model(source=..., stream=True)  # generator of Results objects
-    for r in results:
-        boxes = r.boxes  # Boxes object for bbox outputs
-        masks = r.masks  # Masks object for segment masks outputs
-        probs = r.probs  # Class probabilities for classification outputs
-"""
 
 class Yolov5Streamer(YOLOStreamer): 
 
     def __init__(self, cfg=DEFAULT_CFG, overrides=None, _callbacks=None): 
         super().__init__(cfg, overrides, _callbacks)
-        # self.args = get_cfg(cfg,overrides)
-        # self.save_dir = get_save_dir(self.args)
-
-        # self.process_memory = psutil.Process(os.getpid())
-        # pynvml.nvmlInit()
-        # self.handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-        
-        # if self.args.conf is None: 
-        #     self.args.conf = 0.25 
-        # self.done_warmup = False 
-        
-        # if self.args.show: 
-        #     self.args.show = check_imshow(warn=True)
         
         self.class_names = {0: u'person', 1: u'bicycle',2: u'car', 3: u'motorcycle', 
                     4: u'airplane', 5: u'bus', 6: u'train', 7: u'truck', 8: u'boat', 9: u'traffic light', 
@@ -71,28 +40,10 @@ class Yolov5Streamer(YOLOStreamer):
                     64: u'mouse', 65: u'remote', 66: u'keyboard', 67: u'cell phone', 68: u'microwave', 
                     69: u'oven', 70: u'toaster', 71: u'sink', 72: u'refrigerator', 73: u'book', 74: u'clock', 
                     75: u'vase', 76: u'scissors', 77: u'teddy bear', 78: u'hair drier', 79: u'toothbrush'}
-                
-        # self.model = None 
-        # self.data = self.args.data
-        # self.imgsz = None 
-        # self.device = None 
-        # self.dataset = None 
-        # self.vid_writer = {} 
-        # self.plotted_img = None
-        # self.source_type = None 
-        # self.seen = 0
-        # self.windows = [] 
-        # self.batch = None 
-        # self.results = None
-        # self.transforms = None 
-        # self.callbacks = _callbacks or callbacks.get_default_callbacks() 
-        # self.txt_path = None 
-        # self._lock = threading.Lock() 
-        # self.shape = None 
-        # callbacks.add_integration_callbacks(self)
+        
 
 
-    def _warmup(self, imgsz=(1, 3, 640, 640)):
+    def warmup(self, imgsz=(1, 3, 640, 640)):
         warmup_types = self.model.pt
         if warmup_types and self.device != 'cpu':
             im = torch.empty(*imgsz, dtype=torch.float, device=self.device)
@@ -130,7 +81,7 @@ class Yolov5Streamer(YOLOStreamer):
             
             im = im[..., ::-1].transpose((0,3,1,2))
             im = np.ascontiguousarray(im)
-            self.shape = im.shape
+            self.orig_shape = im.shape
         
             im = torch.from_numpy(im)
         
@@ -151,12 +102,11 @@ class Yolov5Streamer(YOLOStreamer):
 
 
     def postprocess(self, preds, img, orig_imgs):
-        return preds 
+        return super().postprocess(preds) 
 
 
     def predict_cli(self, source=None, model=None): 
         gen = self.stream_inference(source, model)
-
         for _ in gen: 
             pass #sourcery skip: remove-empty-nested-block noqa
 
@@ -174,7 +124,7 @@ class Yolov5Streamer(YOLOStreamer):
         if not getattr(self,"stream", True ) and \
            (self.source_type.stream or self.source_type.screenshot
             or len(self.dataset)>1000 or any(getattr(self.dataset, "video_flag", [False]))): 
-            LOGGER.warning(STREAM_WARNING)
+            LOGGER.warning(YOLOStreamer.STREAM_WARNING)
 
 
     @smart_inference_mode()
@@ -193,7 +143,7 @@ class Yolov5Streamer(YOLOStreamer):
                 (self.save_dir / "labels" if self.args.save_txt else self.save_dir).mkdir(parents=True, exist_ok=True)
             
             if not self.done_warmup:
-                self._warmup(imgsz=(1 if self.model.pt else self.dataset.bs, 3, *self.imgsz))
+                self.warmup(imgsz=(1 if self.model.pt else self.dataset.bs, 3, *self.imgsz))
                 self.done_warmup = True
 
             self.seen, self.windows, self.batch = 0, [], None 
@@ -285,24 +235,11 @@ class Yolov5Streamer(YOLOStreamer):
         self.model.multi_label = False
         self.model.max_det = 500
 
-        # self.model = AutoBackend(
-        #     weights=model or self.args.model, 
-        #     device=select_device(self.args.device,verbose=verbose), 
-        #     dnn=self.args.dnn, 
-        #     data=self.args.data, 
-        #     fp16=self.args.half, 
-        #     # batch=self.args.batch, 
-        #     fuse=True, 
-        #     verbose=verbose
-        # )
-        
-        # self.device =self.model.device 
-        # self.args.half=self.model.fp16
 
         self.model.eval()
 
 
-    def non_max_suppressions(self,predictions, iou_thres=0.5):
+    def non_max_suppression(self,predictions, iou_thres=0.5):
         import torchvision.ops as ops
         nms_detections = ops.nms(predictions[:,:4], predictions[:,4], iou_threshold=iou_thres)            
         return nms_detections 
@@ -319,7 +256,7 @@ class Yolov5Streamer(YOLOStreamer):
         return selected_predictions
 
 
-    def translate_results(self):  
+    def translate_data(self):  
         batch_size = self.results.shape[0]   
         confidence_threshold = 0.4
         nc = 80
@@ -442,92 +379,17 @@ class Yolov5Streamer(YOLOStreamer):
     
 
     def save_predicted_images(self, save_path="", frame=0):
-        im = self.plotted_img 
+        return super().save_predicted_images(save_path, frame)
 
-        if self.dataset.mode in {"strean","video"}: 
-            fps = self.dataset.fps if self.dataset.mode =="video" else 30
-            frames_path = f'{save_path.split(".",1)[0]}_frames/'
-            if save_path not in self.vid_writer: 
-                if self.args.save_frames:
-                    Path(frames_path).mkdir(parents=True, exist_ok=True)
-                suffix, fourcc = {".mp4","avc1"} if MACOS else (".avi","WMV2") if WINDOWS else (".avi", "MJPG")
-                self.vid_writer[save_path] = cv2.VideoWriter(
-                    filename=str(Path(save_path).with_suffix(suffix)),
-                    fourcc=cv2.VideoWriter_fourcc(*fourcc), 
-                    fps=fps, 
-                    frameSize=(im.shape[1], im.shape[0])   
-                )
-                
-            self.vid_writer[save_path].write(im)
-            if self.args.save_frames:
-                cv2.imwrite(f"{frames_path}{frame}.jpg", im) 
-
-        else:
-            cv2.imwrite(save_path, im)
     
-
     def show(self,p=""):
-        im = self.plotted_img
-        if platform.system() == "Linux" and p not in self.windows: 
-            self.windows.append(p)
-            cv2.namedWindow(p, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
-            cv2.resizeWindow(p, im.shape[1], im.shape[0])
-        cv2.imshow(p,im)
-        cv2.waitKey(300 if self.dataset.mode == 'image' else 1)
+        return super().show(p)
 
 
     def run_callbacks(self, event: str): 
-        for callback in self.callbacks.get(event, []): 
-            callback(self)
+        return super().run_callbacks(event)
 
 
     def add_callback(self, event: str, func): 
-        self.callbacks[event].append(func)
-
-
-# def get_video_path(start_path,video_name,  file_extension=".mp4"): 
-    
-#     for root, dirs, files in os.walk(start_path): 
-#         for file in files: 
-#             if video_name in file:
-#                 return os.path.join(root, file)
-       
-#     return None 
-
-
-# def find_directory(directory_name, search_path): 
-#     result = ""
-#     for root, dirs, files in os.walk(search_path):
-#         if directory_name in dirs:
-#             result = os.path.join(root, directory_name)
-#             break
-#     return result
-
-
-# def main(): 
-
-#     main_path_file = "Obstacle_Recognition_Edge_Ai-main"
-#     main_path = find_directory(main_path_file, "/home/icsa_jim/Jupyter Notebook")
-#     video_name = "10_DrivingWith.mp4"
-#     video_path = get_video_path(main_path,video_name)
-#     e = StreamPredictor()
-#     # source = cv2.VideoCapture(video_path)
-#     source = video_path
-#     model_path = get_video_path(main_path, "yolov5s.pt")
-
-#     e.predict_cli(source=source, model=model_path)
-
-
-# if __name__ == "__main__":
-#     main()
-
-
-
-
-
-
-
-
-
-
+        return super().add_callback(event, func)
 

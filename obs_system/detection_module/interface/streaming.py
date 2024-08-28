@@ -15,6 +15,8 @@ import numpy as np
 from typing import Union, List, Any
 from pathlib import Path 
 import pynvml
+import logging
+import pdb
 
 class YOLOStreamer(ABC): 
 
@@ -31,7 +33,7 @@ class YOLOStreamer(ABC):
     """
 
     @abstractmethod
-    def __init__(self, cfg:DEFAULT_CFG, overrides:dict, _callbacks:Any)->None:
+    def __init__(self, cfg:str, overrides:dict, _callbacks:Any)->None:
         
         
         self.args = get_cfg(cfg, overrides)
@@ -71,19 +73,20 @@ class YOLOStreamer(ABC):
         self.callbacks = _callbacks or callbacks.get_default_callbacks() 
         self.txt_path = None 
         self._lock = threading.Lock() 
-        self.shape = None 
+        self.orig_shape = None 
 
         callbacks.add_integration_callbacks(self)
         pynvml.nvmlInit()
         self.handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-
+        print("Initialization Completed for YOLO Streaming")
+        logging.info("Initialization Completed for YOLO Streaming")
 
     @abstractmethod 
     def warmup(self, imgsz:tuple)->torch.Tensor:
         pass  
 
 
-    @classmethod 
+    @abstractmethod 
     def from_numpy(self, x:np.ndarray)->torch.Tensor:
         pass 
 
@@ -104,8 +107,8 @@ class YOLOStreamer(ABC):
         Returns:
             (list): A list of transformed images.
         """
-        same_shapes =  len({x.shape for x in im}) == 1
-        letterbox = LetterBox(self.imgsz,auto=same_shapes and self.model.pt, stride=self.model.stride)
+        same_shapes =  len({x.shape for x in im}) == 1 #Ensure that all images have the same shape 
+        letterbox = LetterBox(self.imgsz,auto=same_shapes ^ self.model.pt, stride=self.model.stride)
         return [letterbox(image=x) for x in im]
     
     @abstractmethod
@@ -117,11 +120,25 @@ class YOLOStreamer(ABC):
         pass
 
     @abstractmethod
-    def postprocess(self, preds:Any)->Any : 
-        return preds 
+    def postprocess(self, preds:Any, img:Any, orig_imgs:Any)->Any : 
+        """Post-processes predictions for an image and returns them."""
+
+        return preds[0]
+    
     
     @abstractmethod
     def predict_cli(self, source:str, model:str)->None: 
+        """
+        Method used for Command Line Interface (CLI) prediction.
+
+        This function is designed to run predictions using the CLI. It sets up the source and model, then processes
+        the inputs in a streaming manner. This method ensures that no outputs accumulate in memory by consuming the
+        generator without storing results.
+
+        Note:
+            Do not modify this function or remove the generator. The generator ensures that no outputs are
+            accumulated in memory, which is critical for preventing memory issues during long-running predictions.
+        """
         gen = self.stream_inference(source, model)
         for _ in gen: 
             pass 
@@ -160,27 +177,31 @@ class YOLOStreamer(ABC):
     @abstractmethod
     def save_predicted_images(self, save_path:str, frame:int)->None: 
         im = self.plotted_img 
-
-        if self.dataset.mode in {"strean","video"}: 
-            fps = self.dataset.fps if self.dataset.mode =="video" else 30
-            frames_path = f'{save_path.split(".",1)[0]}_frames/'
-            if save_path not in self.vid_writer: 
+        
+        # Save videos and streams
+        if self.dataset.mode in {"stream", "video"}:
+            fps = self.dataset.fps if self.dataset.mode == "video" else 30
+            frames_path = f'{save_path.split(".", 1)[0]}_frames/'
+            if save_path not in self.vid_writer:  # new video
                 if self.args.save_frames:
                     Path(frames_path).mkdir(parents=True, exist_ok=True)
-                suffix, fourcc = {".mp4","avc1"} if MACOS else (".avi","WMV2") if WINDOWS else (".avi", "MJPG")
+                suffix, fourcc = (".mp4", "avc1") if MACOS else (".avi", "WMV2") if WINDOWS else (".avi", "MJPG")
                 self.vid_writer[save_path] = cv2.VideoWriter(
                     filename=str(Path(save_path).with_suffix(suffix)),
-                    fourcc=cv2.VideoWriter_fourcc(*fourcc), 
-                    fps=fps, 
-                    frameSize=(im.shape[1], im.shape[0])   
+                    fourcc=cv2.VideoWriter_fourcc(*fourcc),
+                    fps=fps,  # integer required, floats produce error in MP4 codec
+                    frameSize=(im.shape[1], im.shape[0]),  # (width, height)
                 )
-                
+
+            # Save video
             self.vid_writer[save_path].write(im)
             if self.args.save_frames:
-                cv2.imwrite(f"{frames_path}{frame}.jpg", im) 
+                cv2.imwrite(f"{frames_path}{frame}.jpg", im)
 
+        # Save images
         else:
             cv2.imwrite(save_path, im)
+
 
     @abstractmethod
     def show(self, p=str)->None:
@@ -193,11 +214,11 @@ class YOLOStreamer(ABC):
         cv2.waitKey(300 if self.dataset.mode == 'image' else 1)
 
 
-    @classmethod
+    @abstractmethod
     def run_callbacks(self, event:str)->None: 
         for cb in self.callbacks.get(event, []): 
             cb(self) 
 
-    @classmethod
+    @abstractmethod
     def add_callback(self, event: str, func:Any)->None: 
         self.callbacks[event].append(func)
