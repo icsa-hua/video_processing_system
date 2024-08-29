@@ -196,7 +196,7 @@ class YOLOStreamer(ABC):
         
         im = self.plotted_img 
         save_path += "_reviewed"
-       
+        pdb.set_trace()
         # Save videos and streams
         if self.dataset.mode in {"stream", "video"}:
             fps = self.dataset.fps if self.dataset.mode == "video" else 30

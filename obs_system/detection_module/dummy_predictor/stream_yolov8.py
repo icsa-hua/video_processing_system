@@ -27,6 +27,7 @@ class Yolov8Streamer(YOLOStreamer):
     def __init__(self, cfg=DEFAULT_CFG, overrides=None, _callbacks=None)->None: 
         super().__init__(cfg, overrides, _callbacks)
         self.speed = {} 
+        self.args.show = True
 
 
     def warmup(self, imgsz): 
@@ -177,7 +178,7 @@ class Yolov8Streamer(YOLOStreamer):
 
         # Setup model
         if not self.model:
-            self.setup_model(model, opt="onoe")
+            self.setup_model(model, opt="other")
 
         with self._lock:  # for thread-safe inference
             # Setup source every time predict is called
@@ -202,7 +203,9 @@ class Yolov8Streamer(YOLOStreamer):
                 ops.Profile(device=self.device),
                 ops.Profile(device=self.device),
             )
+
             self.run_callbacks("on_predict_start")
+
             for self.batch in self.dataset:
                 self.run_callbacks("on_predict_batch_start")
                 paths, im0s, s = self.batch
@@ -223,6 +226,9 @@ class Yolov8Streamer(YOLOStreamer):
                 # Postprocess
                 with profilers[2]:
                     self.results = self.postprocess(preds, images, im0s)
+
+                if not isinstance(self.results[0], Results):
+                    self.results = self.results[0]
 
                 self.run_callbacks("on_predict_postprocess_end")
 
@@ -279,15 +285,19 @@ class Yolov8Streamer(YOLOStreamer):
         orig_img = orig_images[frame_index]
         [height, width, _]= orig_img.shape
         shape = len(results.shape)
-        rectBoxes,class_ids = self.iteration_rows(results, frame_index, shape, height, width)
-        return Results(
-            orig_img=orig_img,
-            path=video_path, 
-            names=names,
-            boxes=rectBoxes,
-            speed=self.speed,
-            probs=class_ids
-        )
+        try: 
+            rectBoxes,class_ids = self.iteration_rows(results, frame_index, shape, height, width)
+        
+            return Results(
+                orig_img=orig_img,
+                path=video_path, 
+                names=names,
+                boxes=rectBoxes,
+                speed=self.speed,
+                probs=class_ids
+            )
+        except: 
+            return []
 
       
     def write_results(self, i, p, im, original_images, s)->str:
@@ -312,7 +322,7 @@ class Yolov8Streamer(YOLOStreamer):
         if isinstance(result, torch.Tensor):
             result = self.translate_data(i, p, im, result, original_images)
             if not result: 
-                return ""
+                return "(No Detection Found)"
         
         result.save_dir = self.save_dir.__str__()  # used in other locations
         string += f"{result.verbose()}{result.speed['inference']:.1f}ms" 
@@ -405,7 +415,7 @@ class Yolov8Streamer(YOLOStreamer):
         class_ids = torch.LongTensor(class_ids).to(self.device)
         result_boxes = self.non_max_suppression(opt=None, detections=boxes,scores=scores, conf=0.25, iou=0.45, thr=0.5)
         if len(result_boxes)==0 or len(boxes)==0: 
-                return []  
+                return [],[],[]
         return boxes[result_boxes], scores[result_boxes], class_ids[result_boxes]
 
 
@@ -429,10 +439,16 @@ class Yolov8Streamer(YOLOStreamer):
                boxes.append(self.box_creation(results, frame_index, r, shape))
                class_ids.append(maxClassIndex)
                scores.append(maxScore)
+        try: 
+
+            boxes, scores, class_ids = self.data_to_tensor_filter(boxes=boxes, scores=scores, class_ids=class_ids)
+            boxes = self.scale_boxes(boxes, pad_x=pad_x, pad_y=pad_y, scale=scale)
+            return torch.stack((boxes[:,0],boxes[:,1],boxes[:,2],boxes[:,3],scores, class_ids), axis=-1), class_ids
+
+        except:
+            boxes, scores,class_ids  = [],[],[]
+            return torch.empty()
         
-        boxes, scores, class_ids = self.data_to_tensor_filter(boxes=boxes, scores=scores, class_ids=class_ids)
-        boxes = self.scale_boxes(boxes, pad_x=pad_x, pad_y=pad_y, scale=scale)
-        return torch.stack((boxes[:,0],boxes[:,1],boxes[:,2],boxes[:,3],scores, class_ids), axis=-1), class_ids
         
 
     def warmup(self, imgsz=(1,3,640,640)): 

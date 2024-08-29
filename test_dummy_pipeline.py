@@ -111,7 +111,6 @@ def main():
             exit(0)
 
 
-
     elif model_name == "maskrcnn" or model_name == "MaskRCNN":   
         model_weights = os.path.join(parent_path,'obs_system/Mask_RCNN/mask_rcnn_coco.h5')
 
