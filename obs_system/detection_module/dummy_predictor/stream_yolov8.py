@@ -4,7 +4,7 @@ from obs_system.detection_module.interface.streaming import YOLOStreamer
 from ultralytics.utils.files import increment_path
 from ultralytics.utils.checks import check_imgsz
 from ultralytics.data import load_inference_source
-from ultralytics.utils import LOGGER, colorstr, ops
+from ultralytics.utils import DEFAULT_CFG,LOGGER, colorstr, ops
 from ultralytics.data.augment import classify_transforms
 from ultralytics.nn.autobackend import AutoBackend
 from ultralytics.utils.torch_utils import select_device, smart_inference_mode
@@ -24,7 +24,7 @@ class Yolov8Streamer(YOLOStreamer):
 
     # Ultralytics YOLO 🚀, AGPL-3.0 license
 
-    def __init__(self, cfg, overrides, _callbacks)->None: 
+    def __init__(self, cfg=DEFAULT_CFG, overrides=None, _callbacks=None)->None: 
         super().__init__(cfg, overrides, _callbacks)
         self.speed = {} 
 
@@ -66,7 +66,11 @@ class Yolov8Streamer(YOLOStreamer):
             im = torch.from_numpy(im)
 
         im = im.to(self.device)
-        im = im.half() if self.model.fp16 else im.float()  # uint8 to fp16/32
+        if not isinstance(self.model, YOLO): 
+            im = im.half() if self.model.fp16 else im.float()  # uint8 to fp16/32
+        else: 
+            im = im.float()  # uint8 to fp32
+
         if not_tensor:
             im = im.div(255.0)  # 0 - 255 to 0.0 - 1.0
         return im
@@ -74,12 +78,16 @@ class Yolov8Streamer(YOLOStreamer):
 
     def inference(self, im, *args, **kwargs):
         """Runs inference on a given image using the specified model and arguments."""
-        visualize = (
-            increment_path(self.save_dir / Path(self.batch[0][0]).stem, mkdir=True)
-            if self.args.visualize and (not self.source_type.tensor)
-            else False
-        )
-        return self.model(im, augment=self.args.augment, visualize=visualize, embed=self.args.embed, *args, **kwargs)
+        if isinstance(self.model, YOLO): 
+            return self.model.track(im, augment=self.args.augment, embed=self.args.embed, conf=0.3, iou=0.5, show=False, tracker="bytetrack.yaml", stream_buffer=True)
+        
+        else: 
+            visualize = (
+                increment_path(self.save_dir / Path(self.batch[0][0]).stem, mkdir=True)
+                if self.args.visualize and (not self.source_type.tensor)
+                else False
+            )
+            return self.model(im, augment=self.args.augment, visualize=visualize, embed=self.args.embed, *args, **kwargs)
 
 
     def postprocess(self, preds, img, orig_img): 
@@ -92,7 +100,8 @@ class Yolov8Streamer(YOLOStreamer):
 
     def setup_source(self, source=""): 
         """Sets up source and inference mode."""
-        self.imgsz = check_imgsz(self.args.imgsz, stride=self.model.stride, min_dim=2)  # check image size
+        self.imgsz = check_imgsz(self.args.imgsz, stride=self.model.stride if not isinstance(self.model, YOLO) else  self.stride, min_dim=2)  # check image size
+        
         self.transforms = (
             getattr(
                 self.model.model,
@@ -121,25 +130,34 @@ class Yolov8Streamer(YOLOStreamer):
         # self.vid_writer = {}
 
 
-    def setup_model(self, model, verbose=True):
+    def setup_model(self, model, verbose=True, opt='autobackbone'):
         """Initialize YOLO model with given parameters and set it to evaluation mode."""
 
-        self.model = AutoBackend(
-            weights=model or self.args.model,
-            device=select_device(self.args.device, verbose=verbose),
-            dnn=self.args.dnn,
-            data=self.args.data,
-            fp16=self.args.half,
-            batch=self.args.batch,
-            fuse=True,
-            verbose=verbose,
-        )
+        if opt == "autobackbone": 
 
-        # self.yolo = YOLO(model)
+            self.model = AutoBackend(
+                weights=model or self.args.model,
+                device=select_device(self.args.device, verbose=verbose),
+                dnn=self.args.dnn,
+                data=self.args.data,
+                fp16=self.args.half,
+                batch=self.args.batch,
+                fuse=True,
+                verbose=verbose,
+            )
 
-        self.device = self.model.device  # update device
-        self.args.half = self.model.fp16  # update half
-        self.model.eval()
+            self.device = self.model.device  # update device
+            self.args.half = self.model.fp16  # update half
+            self.model.eval()
+
+        else: 
+
+            cuda_use = torch.cuda.is_available()
+            device = torch.device("cuda" if cuda_use else "cpu")
+            self.model = YOLO(model)
+            self.model.to(device)
+            self.device = self.model.device
+            self.stride = 32 
 
 
     def non_max_suppression(self, opt, detections,scores, conf, iou, thr):
@@ -159,7 +177,7 @@ class Yolov8Streamer(YOLOStreamer):
 
         # Setup model
         if not self.model:
-            self.setup_model(model)
+            self.setup_model(model, opt="onoe")
 
         with self._lock:  # for thread-safe inference
             # Setup source every time predict is called
@@ -170,9 +188,13 @@ class Yolov8Streamer(YOLOStreamer):
                 (self.save_dir / "labels" if self.args.save_txt else self.save_dir).mkdir(parents=True, exist_ok=True)
 
             # Warmup model
-            if not self.done_warmup:
+            if not self.done_warmup and not isinstance(self.model, YOLO) :
                 self.model.warmup(imgsz=(1 if self.model.pt or self.model.triton else self.dataset.bs, 3, *self.imgsz))
                 self.done_warmup = True
+            else: 
+                self.warmup(imgsz=(1, 3, *self.imgsz))
+                self.done_warmup = True 
+        
 
             self.seen, self.windows, self.batch = 0, [], None
             profilers = (
@@ -196,6 +218,7 @@ class Yolov8Streamer(YOLOStreamer):
                     if self.args.embed:
                         yield from [preds] if isinstance(preds, torch.Tensor) else preds  # yield embedding tensors
                         continue
+                        
 
                 # Postprocess
                 with profilers[2]:
@@ -208,15 +231,21 @@ class Yolov8Streamer(YOLOStreamer):
 
                 for i in range(n):
                     self.seen += 1
-
-                    self.speed = {
-                        "preprocess": profilers[0].dt * 1e3 / n,
-                        "inference": profilers[1].dt * 1e3 / n,
-                        "postprocess": profilers[2].dt * 1e3 / n,
-                    }
+                    if isinstance(self.results[i], Results):
+                        self.results[i].speed = {
+                            "preprocess": profilers[0].dt * 1e3 / n,
+                            "inference": profilers[1].dt * 1e3 / n,
+                            "postprocess": profilers[2].dt * 1e3 / n,
+                        }
+                    else: 
+                        self.speed = {
+                            "preprocess": profilers[0].dt * 1e3 / n,
+                            "inference": profilers[1].dt * 1e3 / n,
+                            "postprocess": profilers[2].dt * 1e3 / n,
+                        }
 
                     if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
-                        s[i] += self.write_results(i, Path(paths[i]), images,im0s, s)
+                        s[i] += self.write_results(i, Path(paths[i]), images, im0s, s)
 
                 # Print batch results
                 if self.args.verbose:
@@ -282,9 +311,8 @@ class Yolov8Streamer(YOLOStreamer):
 
         if isinstance(result, torch.Tensor):
             result = self.translate_data(i, p, im, result, original_images)
-
-        if not result: 
-            return ""
+            if not result: 
+                return ""
         
         result.save_dir = self.save_dir.__str__()  # used in other locations
         string += f"{result.verbose()}{result.speed['inference']:.1f}ms" 
@@ -406,3 +434,17 @@ class Yolov8Streamer(YOLOStreamer):
         boxes = self.scale_boxes(boxes, pad_x=pad_x, pad_y=pad_y, scale=scale)
         return torch.stack((boxes[:,0],boxes[:,1],boxes[:,2],boxes[:,3],scores, class_ids), axis=-1), class_ids
         
+
+    def warmup(self, imgsz=(1,3,640,640)): 
+        if self.device != 'cpu': 
+            im = torch.empty(*imgsz, dtype=torch.float, device=self.device)
+            y = self.model(im)
+            if isinstance(y, (list,tuple)):
+                return self.from_numpy(y[0]) if len(y) == 1 else [self.from_numpy(z) for z in y]
+            else: 
+                return self.from_numpy(y)
+            
+
+    def from_numpy(self, x): 
+        return torch.tensor(x).to(self.device) if isinstance(x, np.ndarray) else x
+

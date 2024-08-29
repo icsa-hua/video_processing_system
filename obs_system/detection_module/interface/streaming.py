@@ -4,6 +4,7 @@ from ultralytics.utils import DEFAULT_CFG,MACOS, WINDOWS,callbacks
 from ultralytics.data.augment import LetterBox
 from ultralytics.utils.torch_utils import smart_inference_mode
 from ultralytics.utils.checks import check_imshow
+from ultralytics import YOLO 
 
 import platform 
 import psutil 
@@ -17,6 +18,7 @@ from pathlib import Path
 import pynvml
 import logging
 import pdb
+
 
 class YOLOStreamer(ABC): 
 
@@ -34,7 +36,6 @@ class YOLOStreamer(ABC):
 
     @abstractmethod
     def __init__(self, cfg:str, overrides:dict, _callbacks:Any)->None:
-        
         
         self.args = get_cfg(cfg, overrides)
         self.save_dir = get_save_dir(self.args)
@@ -81,6 +82,7 @@ class YOLOStreamer(ABC):
         print("Initialization Completed for YOLO Streaming")
         logging.info("Initialization Completed for YOLO Streaming")
 
+
     @abstractmethod 
     def warmup(self, imgsz:tuple)->torch.Tensor:
         pass  
@@ -107,23 +109,36 @@ class YOLOStreamer(ABC):
         Returns:
             (list): A list of transformed images.
         """
+        pt = None 
+        stride=None
+
+        if isinstance(self.model, YOLO): 
+            pt = True 
+            stride = 32 
+        else: 
+            pt = self.model.pt 
+            stride = self.model.stride
+
         same_shapes =  len({x.shape for x in im}) == 1 #Ensure that all images have the same shape 
-        letterbox = LetterBox(self.imgsz,auto=same_shapes ^ self.model.pt, stride=self.model.stride)
+        letterbox = LetterBox(self.imgsz,auto=same_shapes ^ pt, stride=stride)
         return [letterbox(image=x) for x in im]
     
+
     @abstractmethod
     def preprocess(self, im: Union[torch.Tensor, List[np.ndarray]])-> torch.Tensor | List[np.ndarray]:
         pass
+
     
     @abstractmethod
     def inference(self, im: torch.Tensor | List[np.ndarray], *args, **kwargs)->Any:
         pass
 
+
     @abstractmethod
     def postprocess(self, preds:Any, img:Any, orig_imgs:Any)->Any : 
         """Post-processes predictions for an image and returns them."""
 
-        return preds[0]
+        return preds
     
     
     @abstractmethod
@@ -154,9 +169,11 @@ class YOLOStreamer(ABC):
     def setup_model(self, model:str, verbose:bool)->None:
         pass 
 
+
     @abstractmethod
     def non_max_suppression(self, opt:str, detections:Any, iou_thres:float)->Any:
         pass 
+
 
     @abstractmethod
     def translate_data(self)->None:
@@ -169,23 +186,29 @@ class YOLOStreamer(ABC):
         pass
 
 
-
     @abstractmethod
     def write_results(self, i:Any, p:Any, im:Any, s:Any)->str:
         pass 
 
+
     @abstractmethod
     def save_predicted_images(self, save_path:str, frame:int)->None: 
-        im = self.plotted_img 
         
+        im = self.plotted_img 
+        save_path += "_reviewed"
+       
         # Save videos and streams
         if self.dataset.mode in {"stream", "video"}:
             fps = self.dataset.fps if self.dataset.mode == "video" else 30
             frames_path = f'{save_path.split(".", 1)[0]}_frames/'
+            
             if save_path not in self.vid_writer:  # new video
+                
                 if self.args.save_frames:
                     Path(frames_path).mkdir(parents=True, exist_ok=True)
+                
                 suffix, fourcc = (".mp4", "avc1") if MACOS else (".avi", "WMV2") if WINDOWS else (".avi", "MJPG")
+                
                 self.vid_writer[save_path] = cv2.VideoWriter(
                     filename=str(Path(save_path).with_suffix(suffix)),
                     fourcc=cv2.VideoWriter_fourcc(*fourcc),
@@ -218,6 +241,7 @@ class YOLOStreamer(ABC):
     def run_callbacks(self, event:str)->None: 
         for cb in self.callbacks.get(event, []): 
             cb(self) 
+
 
     @abstractmethod
     def add_callback(self, event: str, func:Any)->None: 
