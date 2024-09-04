@@ -56,3 +56,6 @@ python3 test_dummy_pipeline.py  --type  "tracking"
 export PYTHONPATH="/path to project:${PYTHONPATH}"
 ```
 
+## Example Result
+[!Alt](https://drive.google.com/file/d/17MbK2pg84HQpuVNPFEPp-I8l5wc7liXi/view?usp=drive_link)
+
