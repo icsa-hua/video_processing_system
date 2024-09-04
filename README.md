@@ -1,30 +1,31 @@
 # Obstacle_Recognition_Edge_Ai
 Obstacle Recognition 
-![Version](https://img.shields.io/badge/version-1.0.0-brightgreen.svg)
+![Version](https://img.shields.io/badge/version-1.1.0-brightgreen.svg)
 
-# Dummy Example: Video Processing System
 
 ## Overview
-This Dummy Video Processing System is a Python-based application designed for handling video feeds from cameras, performing object detection, identifying bounding box overlaps, and communicating results via MQTT. It's a prototype suitable for understanding the flow of video processing systems.
+This Dummy Video Processing System is a Python-based application designed for handling video feeds from cameras, performing object detection, identifying bounding box overlaps, and communicating results via MQTT. It's a prototype suitable for understanding the flow of video processing systems. Currently utilizes batching of a video, inferencing it with yolov8 and keeping track of the objects with Bytetracker. It also creates the publisher and subscriber of the MQTT broker at the same script while transmitting correctly the performance results for each batch. This system also saves the results, constructing the new view (with detections) in the runs/det/ directory. Current GPU usage is at 1.7GB with yolov8n. Without the MQTT communication schema, performance is increased. To disable it comment the lines with self.mqtt_interface. 
 
 ## Components
-- **Camera Module (`DummyConsumer`)**: Handles the video feed from cameras.
-- **Detection Module (`DummyPredictor`)**: Simulates object detection in video frames using a dummy YOLO model.
+- **Camera Module (`DummyConsumer`)**: Handles the source feed by passing frames through a multiprocessing pipe, with one process catching the frame and the other one processing it.  
+- **Detection Module (`DummyPredictor`)**: Inference the source with Object detection model. Supports individual frame decomposition into patches for concurrent inference and reconstruction to include detections (better accuracy for overlapping) or streaming approach, where batching of a video is leveraged for higher performance. 
 - **Logic Module (`BoundingBoxOverlapDetector`)**: Detects overlaps among the bounding boxes of detected objects.
-- **Communication Module (`DummyMQTT`)**: Sends the results to a specified MQTT topic.
+- **Communication Module (`DummyMQTT`)**: Creates the publisher and subscriber for an MQTT communication and transmits the performance results. 
+- **Application Module (`app`)**: Connects the distinct application components, creating the main process, mqtt broker, seting up the object detection model and using the corresponding video processing operation 
 
 ## Technologies
 The main technologies used for this project are: 
-* Python
-* Keras
+* Python3.10
 * Tensorflow
 * Pytorch
-* Yolov5
+* Yolov5/Yolov8 (Ultralytics)
+* paho-mqtt
+  
 
 ## SetUp
 1. Clone the repository:
 ```sh
-git clone -b developer https://github.com/icsa-hua/Obstacle_Recognition_Edge_Ai.git
+git clone -b feature/yolov8-tracking https://github.com/icsa-hua/Obstacle_Recognition_Edge_Ai.git
 ```
 2. Navigate to the project directory:
 ```sh
@@ -34,20 +35,23 @@ cd Obstacle_Recognition_Edge_Ai
 ```sh
 pip install -r requirements.txt
 ```
-4. To execute a program, from the project directory:
+4. To execute the streaming choice (recommended), from the project directory:
 ```sh
-python3 test_dummy_pipeline.py
+python3 test_dummy_pipeline.py --stream 
 ```
-5. You can opt to use another model (MaskRCNN needs separate installation and is really heavy so it does not run in my machine. ONNX models produce some errors, currently working on a fix
+5. You can opt to use another model. Models supported yolov5 (all), yolov8(all) (MaskRCNN needs separate installation and is really heavy so it does not run in my machine. ONNX models produce some errors, currently working on a fix
 ```sh
-python3 test_dummy_pipeline.py --model='Yolo' 
+python3 test_dummy_pipeline.py --name='Yolo' 
 ```
-6. You can also opt to use one of two processing methods, a multithreading decomposition methods that takes every separate frame and processes it, or a streaming process which creates a batch of frames and collectively process them:
+6. You can also opt either video file or webcam source. 
 ```sh
-python3 test_dummy_pipeline.py  --op='streaming'
+python3 test_dummy_pipeline.py  --s "source/video/file" 
 ```
-
-7. If you encounter any problem with the modules, setting the PYTHONPATH can be a solution:
+7. You can also change the tracking setting to improve performance by calling a no configuration model. Tracking is enabled by default. 
+```sh
+python3 test_dummy_pipeline.py  --type  "tracking"  
+```
+8. If you encounter any problem with the modules, setting the PYTHONPATH can be a solution:
 ```sh
 export PYTHONPATH="/path to project:${PYTHONPATH}"
 ```
