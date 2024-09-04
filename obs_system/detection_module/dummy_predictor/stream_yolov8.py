@@ -18,6 +18,8 @@ import re
 import pdb
 import torchvision.ops as operation
 import warnings 
+import os
+import time
 
 
 class Yolov8Streamer(YOLOStreamer):
@@ -38,11 +40,13 @@ class Yolov8Streamer(YOLOStreamer):
         pass 
 
 
-    def __call__(self, source=None, model=None, stream=False, *args, **kwargs):
+    def __call__(self, source=None, model=None, stream=False, mqtt_broker=None,  *args, **kwargs):
         """Performs inference on an image or stream."""
-        self.stream = stream
+        self.mqtt_interface = mqtt_broker
         if stream:
-            return self.stream_inference(source, model, *args, **kwargs)
+            # self.args.stream_buffer = True
+            self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if len(source)!=1 else source, model=model)
+            # return self.stream_inference(source, model, *args, **kwargs)
         else:
             return list(self.stream_inference(source, model, *args, **kwargs))  # merge list of Result into one
 
@@ -58,8 +62,10 @@ class Yolov8Streamer(YOLOStreamer):
         Args:
             im (torch.Tensor | List(np.ndarray)): BCHW for tensor, [(HWC) x B] for list.
         """
+        
         not_tensor = not isinstance(im, torch.Tensor)
         self.orig_shape = im[0].shape if isinstance(im, list) else im.shape
+        
         if not_tensor:
             im = np.stack(self.pre_transform(im))
             im = im[..., ::-1].transpose((0, 3, 1, 2))  # BGR to RGB, BHWC to BCHW, (n, 3, h, w)
@@ -67,6 +73,7 @@ class Yolov8Streamer(YOLOStreamer):
             im = torch.from_numpy(im)
 
         im = im.to(self.device)
+        
         if not isinstance(self.model, YOLO): 
             im = im.half() if self.model.fp16 else im.float()  # uint8 to fp16/32
         else: 
@@ -79,30 +86,30 @@ class Yolov8Streamer(YOLOStreamer):
 
     def inference(self, im, *args, **kwargs):
         """Runs inference on a given image using the specified model and arguments."""
-        if isinstance(self.model, YOLO): 
-            return self.model.track(im, augment=self.args.augment, embed=self.args.embed, conf=0.3, iou=0.5, show=False, tracker="bytetrack.yaml", stream_buffer=True)
-        
-        else: 
-            visualize = (
-                increment_path(self.save_dir / Path(self.batch[0][0]).stem, mkdir=True)
-                if self.args.visualize and (not self.source_type.tensor)
-                else False
-            )
-            return self.model(im, augment=self.args.augment, visualize=visualize, embed=self.args.embed, *args, **kwargs)
+        visualize = (
+            increment_path(self.save_dir / Path(self.batch[0][0]).stem, mkdir=True)
+            if self.args.visualize and (not self.source_type.tensor)
+            else False
+        )
 
+        if isinstance(self.model, YOLO): 
+            return self.model.track(im, augment=self.args.augment, visualize=visualize,embed=self.args.embed, conf=0.3, iou=0.5, show=False, tracker="bytetrack.yaml", stream_buffer=True)
+        else: 
+            return self.model(im, augment=self.args.augment, visualize=visualize, embed=self.args.embed, *args, **kwargs)
+    
 
     def postprocess(self, preds, img, orig_img): 
         return super().postprocess(preds, img, orig_img)
     
-     
+    
     def predict_cli(self, source, model): 
         return super().predict_cli(source, model)
 
 
     def setup_source(self, source=""): 
+
         """Sets up source and inference mode."""
         self.imgsz = check_imgsz(self.args.imgsz, stride=self.model.stride if not isinstance(self.model, YOLO) else  self.stride, min_dim=2)  # check image size
-        
         self.transforms = (
             getattr(
                 self.model.model,
@@ -133,6 +140,8 @@ class Yolov8Streamer(YOLOStreamer):
 
     def setup_model(self, model, verbose=True, opt='autobackbone'):
         """Initialize YOLO model with given parameters and set it to evaluation mode."""
+        if self.model: 
+            return self.model
 
         if opt == "autobackbone": 
 
@@ -151,7 +160,7 @@ class Yolov8Streamer(YOLOStreamer):
             self.args.half = self.model.fp16  # update half
             self.model.eval()
 
-        else: 
+        elif opt=="tracking": 
 
             cuda_use = torch.cuda.is_available()
             device = torch.device("cuda" if cuda_use else "cpu")
@@ -162,6 +171,7 @@ class Yolov8Streamer(YOLOStreamer):
 
 
     def non_max_suppression(self, opt, detections,scores, conf, iou, thr):
+        
         if len(detections)==0:
             warnings.warn("No Detections were applicable from the model...")
             return[]
@@ -176,9 +186,11 @@ class Yolov8Streamer(YOLOStreamer):
         if self.args.verbose:
             LOGGER.info("")
 
+
         # Setup model
-        if not self.model:
-            self.setup_model(model, opt="other")
+        # if not self.model:
+        #     self.setup_model(model, opt="other")
+            
 
         with self._lock:  # for thread-safe inference
             # Setup source every time predict is called
@@ -192,11 +204,11 @@ class Yolov8Streamer(YOLOStreamer):
             if not self.done_warmup and not isinstance(self.model, YOLO) :
                 self.model.warmup(imgsz=(1 if self.model.pt or self.model.triton else self.dataset.bs, 3, *self.imgsz))
                 self.done_warmup = True
+            
             else: 
                 self.warmup(imgsz=(1, 3, *self.imgsz))
                 self.done_warmup = True 
         
-
             self.seen, self.windows, self.batch = 0, [], None
             profilers = (
                 ops.Profile(device=self.device),
@@ -213,6 +225,7 @@ class Yolov8Streamer(YOLOStreamer):
                 # Preprocess
                 with profilers[0]:
                     images = self.preprocess(im0s)
+
 
                 # Inference
                 with profilers[1]:
@@ -318,6 +331,9 @@ class Yolov8Streamer(YOLOStreamer):
         self.txt_path = self.save_dir / "labels" / (p.stem + ("" if self.dataset.mode == "image" else f"_{frame}"))
         string += "%gx%g " % im.shape[2:]
         result = self.results[i] #Get the batch size pictures 
+
+        self.mqtt_interface.publish(self.mqtt_interface.topic, str(result.speed))
+        time.sleep(0.01)
 
         if isinstance(result, torch.Tensor):
             result = self.translate_data(i, p, im, result, original_images)

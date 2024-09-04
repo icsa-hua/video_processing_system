@@ -42,9 +42,12 @@ class FrameConvertor(CameraProcessor):
         
     def get_native_size(self, model_name: str)->int: 
         native_dict = {
-            "yolo": 640,
-            "Yolo": 640,
-            "YOLO": 640,
+            "yolov5": 640,
+            "Yolo5": 640,
+            "YOLO5": 640,
+            "yolov8": 640,
+            "Yolo8": 640,
+            "YOLO8": 640,
             "maskrcnn": 1024,
             "MaskRCNN": 1024,
             "Mask R-CNN": 1024

@@ -157,6 +157,7 @@ class YOLOStreamer(ABC):
         gen = self.stream_inference(source, model)
         for _ in gen: 
             pass 
+        
         #Sourcery skip: remove empty nested block noqa 
 
 
@@ -195,8 +196,6 @@ class YOLOStreamer(ABC):
     def save_predicted_images(self, save_path:str, frame:int)->None: 
         
         im = self.plotted_img 
-        save_path += "_reviewed"
-        pdb.set_trace()
         # Save videos and streams
         if self.dataset.mode in {"stream", "video"}:
             fps = self.dataset.fps if self.dataset.mode == "video" else 30

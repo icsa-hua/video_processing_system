@@ -1,16 +1,18 @@
 from obs_system.camera_module.interface.consumer import Consumer
 
 import cv2
+import os 
 import numpy as np
 from multiprocessing import connection
+import warnings
+from typing import Any
 
 
 class DummyConsumer(Consumer):
     
-    def __init__(self, conn: connection, camera_id: int, dummy_path: str) -> None:
+    def __init__(self, conn: connection, source:Any) -> None:
         super().__init__(conn)
-        self.camera_id = camera_id
-        self.dummy_path = dummy_path
+        self.source = source
         self.cap = None
 
     
@@ -18,13 +20,19 @@ class DummyConsumer(Consumer):
         pass
     
     
-    def get_last_frame(self, camera_id: int) -> np.ndarray:
+    def get_last_frame(self) -> np.ndarray:
     
         ret, frame = self.cap.read()
+
+        if not ret and not self.cap.grab():
+            # If the video is not found, return None
+            return None
+
         if not ret:
             # Restart the video if it ends
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             ret, frame = self.cap.read()
+        
         return frame
 
  
@@ -46,11 +54,15 @@ class DummyConsumer(Consumer):
     def run(self):
         
         self.connect()
-        self.cap = cv2.VideoCapture(self.dummy_path)
-        
+        self.cap = cv2.VideoCapture(self.source)
+
+        if self.cap is None : 
+            warnings.warn("No video source found.")
+            return 
+
         while True:
             
-            frame = self.get_last_frame(0)
+            frame = self.get_last_frame()
             
             if frame is not None and self.conn is not None:
                 
