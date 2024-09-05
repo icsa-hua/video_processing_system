@@ -9,3 +9,4 @@ class DummyMQTT(MQTTInterface):
 
     def subscribe(self, topic):
         print(f"Subscribing to topic '{topic}' (Dummy)")
+ 

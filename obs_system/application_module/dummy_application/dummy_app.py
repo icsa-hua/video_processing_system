@@ -210,6 +210,7 @@ class Application:
         if isinstance(self.source, str) and (self.source.endswith(".mp4") or self.source.endswith(".avi")):
             # length_of_film = self.get_length_of_film(self.source)
             #Streaming the video as before 
+            print("Process Streaming operation")
             self.streamer(source=self.source, model=model, stream=self.stream, mqtt_broker=self.mqtt_interface) # e(source=0, model=model_weights, stream=True)                
             return self.streamer.results
         

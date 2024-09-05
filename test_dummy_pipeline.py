@@ -37,7 +37,19 @@ def main():
          'stream':args.stream, 
          'model_type':args.type
     }
-    
+
+    model_validation ={
+        'yolov5': ('autoshape', 'y5'),
+        'yolov8': ('autobackbone', 'y8'),
+        'yolo5': ('autoshape', 'y5'),
+        'yolo8': ('autobackbone', 'y8')
+    }
+
+    model_key = config['model_name'].lower()
+
+    if model_key in model_validation and config['model_type']!="tracking":
+        config['model_type'] = model_validation[model_key][0]
+  
     logger.info("Initial Configuration Complete...\nStarting Application...")
     
     #Initialize application object

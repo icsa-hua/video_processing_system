@@ -232,6 +232,7 @@ class YOLOStreamer(ABC):
             self.windows.append(p)
             cv2.namedWindow(p, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
             cv2.resizeWindow(p, im.shape[1], im.shape[0])
+        im = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
         cv2.imshow(p,im)
         cv2.waitKey(300 if self.dataset.mode == 'image' else 1)
 
