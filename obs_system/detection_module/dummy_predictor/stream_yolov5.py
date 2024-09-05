@@ -461,9 +461,7 @@ class Yolov5Streamer(YOLOStreamer):
 
         try: 
             # boxes, scores, class_ids = self.data_to_tensor_filter(boxes=boxes, scores=scores, class_ids=class_ids)
-            pdb.set_trace()
             boxes = self.scale_boxes(boxes, pad_x=pad_x, pad_y=pad_y, scale=scale)
-            
             return torch.stack((torch.tensor(boxes[0]),torch.tensor(boxes[1]),torch.tensor(boxes[2]),torch.tensor(boxes[3]),scores, class_ids), axis=-1), class_ids
 
         except:
