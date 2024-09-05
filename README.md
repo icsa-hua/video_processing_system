@@ -41,7 +41,7 @@ python3 test_dummy_pipeline.py --stream
 ```
 5. You can opt to use another model. Models supported yolov5 (all), yolov8(all) (MaskRCNN needs separate installation and is really heavy so it does not run in my machine. ONNX models produce some errors, currently working on a fix
 ```sh
-python3 test_dummy_pipeline.py --name='Yolo' 
+python3 test_dummy_pipeline.py --name='yolov8' 
 ```
 6. You can also opt either video file or webcam source. 
 ```sh
