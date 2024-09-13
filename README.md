@@ -1,6 +1,6 @@
 # Obstacle_Recognition_Edge_Ai
 Obstacle Recognition 
-![Version](https://img.shields.io/badge/version-1.1.0-brightgreen.svg)
+![Version](https://img.shields.io/badge/version-0.1.0-brightgreen.svg)
 
 
 ## Overview
