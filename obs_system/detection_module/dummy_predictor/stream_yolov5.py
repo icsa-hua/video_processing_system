@@ -23,10 +23,11 @@ import gc
 
 class Yolov5Streamer(YOLOStreamer): 
 
+    # Ultralytics YOLO 🚀, AGPL-3.0 license
+
     def __init__(self, cfg=DEFAULT_CFG, overrides=None, _callbacks=None): 
         super().__init__(cfg, overrides, _callbacks)
         self.speed = {} 
-        self.args.show = True
 
     def warmup(self, imgsz=(1, 3, 640, 640)):
         warmup_types = self.model.pt if not isinstance(self.model, YOLO) else self.model.model_name.split('.')[-1]
@@ -45,9 +46,19 @@ class Yolov5Streamer(YOLOStreamer):
 
 
     def __call__(self, source=None, model=None, stream=False, mqtt_broker=None,  *args, **kwargs):
+        
+        """Performs inference on an image, video or stream."""
         self.mqtt_interface = mqtt_broker
         if stream: 
-            self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if len(source)!=1 else source, model=model)
+            # self.args.show = True if os.path.isfile(source) else False
+            self.args.show = True
+            self.args.stream_buffer = True 
+            try: 
+                self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if os.path.isfile(source) else source, model=model)
+            except: 
+                warnings.warn('Error in streaming')
+                exit(1)
+        
         else: 
             return list(self.stream_inference(source, model, *args, **kwargs))
 
@@ -69,8 +80,8 @@ class Yolov5Streamer(YOLOStreamer):
 
         if not_tensor: 
             im = np.stack(self.pre_transform(im))
-            im = im[..., ::-1].transpose((0, 3, 1, 2))
-            im = np.ascontiguousarray(im)        
+            im = im[..., ::-1].transpose((0, 3, 1, 2))  # BGR to RGB, BHWC to BCHW, (n, 3, h, w)
+            im = np.ascontiguousarray(im) # contiguous      
             im = torch.from_numpy(im)
         
         im = im.to(self.device)
@@ -128,7 +139,7 @@ class Yolov5Streamer(YOLOStreamer):
         if not getattr(self,"stream", True ) and (
             self.source_type.stream
             or self.source_type.screenshot
-            or len(self.dataset) > 1000
+            or len(self.dataset) > 1000 # many images
             or any(getattr(self.dataset, "video_flag", [False]))
         ): 
             LOGGER.warning(YOLOStreamer.STREAM_WARNING)
@@ -166,7 +177,6 @@ class Yolov5Streamer(YOLOStreamer):
             warnings.warn("No Detections were applicable from the model...")
             return [] 
         
-        # nms_detections = ops.nms(predictions[:,:4], predictions[:,4], iou_threshold=iou_thres)            
         return operation.nms(detections,scores,iou_threshold=iou) 
 
 
@@ -367,6 +377,7 @@ class Yolov5Streamer(YOLOStreamer):
             result.save_crop(save_dir=self.save_dir / "crops", file_name=self.txt_path.stem)
         
         if self.args.show: 
+            print("P string is ", str(p))
             self.show(str(p))
         
         if self.args.save:

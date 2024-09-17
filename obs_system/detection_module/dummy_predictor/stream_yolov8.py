@@ -1,7 +1,7 @@
 from obs_system.detection_module.interface.streaming import YOLOStreamer
 from ultralytics.utils.files import increment_path
 from ultralytics.utils.checks import check_imgsz
-from ultralytics.data import load_inference_source
+from ultralytics.data.build import load_inference_source
 from ultralytics.utils import DEFAULT_CFG,LOGGER, colorstr, ops
 from ultralytics.data.augment import classify_transforms
 from ultralytics.nn.autobackend import AutoBackend
@@ -27,7 +27,7 @@ class Yolov8Streamer(YOLOStreamer):
     def __init__(self, cfg=DEFAULT_CFG, overrides=None, _callbacks=None)->None: 
         super().__init__(cfg, overrides, _callbacks)
         self.speed = {} 
-        self.args.show = True
+
 
 
     def warmup(self, imgsz=(1,3,640,640)): 
@@ -46,12 +46,19 @@ class Yolov8Streamer(YOLOStreamer):
 
 
     def __call__(self, source=None, model=None, stream=False, mqtt_broker=None,  *args, **kwargs):
-        """Performs inference on an image or stream."""
+        
+        """Performs inference on an image, video or stream."""
         self.mqtt_interface = mqtt_broker
         if stream:
-            # self.args.stream_buffer = True
-            self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if len(source)!=1 else source, model=model)
-            # return self.stream_inference(source, model, *args, **kwargs)
+            # self.args.show = True if os.path.isfile(source) else False
+            self.args.show=True
+            self.args.stream_buffer = True
+            try: 
+                self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if  os.path.isfile(source)  else source, model=model)
+            except: 
+                warnings.warn('Error in streaming')
+                exit(1)
+            
         else:
             return list(self.stream_inference(source, model, *args, **kwargs))  # merge list of Result into one
 
@@ -108,11 +115,11 @@ class Yolov8Streamer(YOLOStreamer):
     
     
     def predict_cli(self, source, model): 
-        return super().predict_cli(source, model)
+        return super().predict_cli(source, model) #sourcery skip: remove-empty-nested-block noqa
 
 
     def setup_source(self, source=""): 
-
+        
         """Sets up source and inference mode."""
         self.imgsz = check_imgsz(self.args.imgsz, stride=self.model.stride if not isinstance(self.model, YOLO) else  self.stride, min_dim=2)  # check image size
         self.transforms = (
@@ -131,7 +138,7 @@ class Yolov8Streamer(YOLOStreamer):
             vid_stride=self.args.vid_stride,
             buffer=self.args.stream_buffer,
         )
-
+        
         self.source_type = self.dataset.source_type
 
         if not getattr(self, "stream", True) and (
@@ -240,7 +247,7 @@ class Yolov8Streamer(YOLOStreamer):
                     if self.args.embed:
                         yield from [preds] if isinstance(preds, torch.Tensor) else preds  # yield embedding tensors
                         continue
-                        
+
                 # Postprocess
                 with profilers[2]:
                     self.results = self.postprocess(preds, images, im0s)
@@ -343,7 +350,7 @@ class Yolov8Streamer(YOLOStreamer):
                 return "(No Detection Found)"
         
         self.mqtt_interface.publish(self.mqtt_interface.topic, str(result.speed))
-        time.sleep(0.01)
+        time.sleep(0.001)
 
         result.save_dir = self.save_dir.__str__()  # used in other locations
         string += f"{result.verbose()}{result.speed['inference']:.1f}ms" 

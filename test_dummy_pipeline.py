@@ -21,7 +21,7 @@ def main():
     argparser = argparse.ArgumentParser(description=__doc__)
     argparser.add_argument('--name', metavar='M', default='yolov8', help='Model to use (Yolov5, Yolov8 (Default), MaskRCNN, ONNX (yolov5, yolov8))')
     argparser.add_argument('--stream', metavar='W', action=argparse.BooleanOptionalAction, help='Operation to perform (streaming, inference, compression, detection)')
-    argparser.add_argument('--s', metavar='S', default='0', help='Video Source to use - Local video path (.mp4) or webcam index (0, 1, 2, etc.)')
+    argparser.add_argument('--source', metavar='S', default='0', help='Video Source to use - Local video path (.mp4) or webcam index (0, 1, 2, etc.)')
     argparser.add_argument('--type', metavar='T', default='tracking', help='Type of model to use (yolov5, yolov8)')
 
     if len(sys.argv) < 1:
@@ -30,9 +30,16 @@ def main():
     
     args = argparser.parse_args()
     
-    # source = args.s
+    if args.source == "webcam":
+        args.source = "http://192.168.1.5:8080/live"
+    elif args.source == "video": 
+        args.source = 'samples/10_DrivingWith.mp4'
+    else: 
+        logger.error("Invalid video source. Please enter a valid video source.")
+        exit(1)
+
     config = {
-         'source':'samples/10_DrivingWith.mp4', 
+         'source':args.source, 
          'model_name':args.name, 
          'stream':args.stream, 
          'model_type':args.type
@@ -66,10 +73,13 @@ def main():
     test_video_path = app.source
     converted_video_path = os.path.join(app.parent_path, 'converted_mp4/converted_video_1.mp4')
     
+    length_of_film = 0
     if os.path.isfile(config['source']): 
         data = cv2.VideoCapture(test_video_path)
         length_of_film = data.get(cv2.CAP_PROP_FRAME_COUNT)
-    
+        data.release()
+        cv2.destroyAllWindows()
+
     if app.model is None: 
         raise Exception("Model not initialized")
     

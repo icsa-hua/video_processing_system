@@ -167,7 +167,6 @@ class Application:
 
         parent_conn, child_conn = multiprocessing.Pipe()    
         self.source = os.path.join(self.parent_path, source) if os.path.isfile(source) else source
-        
         #Create the data acquisition from video source 
         consumer = DummyConsumer(child_conn, self.source)
         self.process = multiprocessing.Process(target=consumer.run, args=())
@@ -207,13 +206,17 @@ class Application:
 
     def process_stream(self, parent_conn, output_path, save, model, length_of_film=0):
         
-        if isinstance(self.source, str) and (self.source.endswith(".mp4") or self.source.endswith(".avi")):
+        if isinstance(self.source, str):
             # length_of_film = self.get_length_of_film(self.source)
             #Streaming the video as before 
             print("Process Streaming operation")
+            
             self.streamer(source=self.source, model=model, stream=self.stream, mqtt_broker=self.mqtt_interface) # e(source=0, model=model_weights, stream=True)                
             return self.streamer.results
         
+
+
+
         #Batching the video source. 
         return []
 
