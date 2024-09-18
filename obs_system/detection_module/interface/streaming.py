@@ -1,10 +1,12 @@
 from abc import ABC, abstractmethod
 from ultralytics.cfg import get_cfg, get_save_dir
-from ultralytics.utils import DEFAULT_CFG,MACOS, WINDOWS,callbacks
+from ultralytics.utils import DEFAULT_CFG, MACOS, WINDOWS,callbacks
 from ultralytics.data.augment import LetterBox
 from ultralytics.utils.torch_utils import smart_inference_mode
 from ultralytics.utils.checks import check_imshow
 from ultralytics import YOLO 
+from shapely.geometry import Polygon
+from shapely.geometry.point import Point
 
 import platform 
 import psutil 
@@ -75,6 +77,10 @@ class YOLOStreamer(ABC):
         self.txt_path = None 
         self._lock = threading.Lock() 
         self.orig_shape = None 
+
+        #Counting Regions
+        self.regions = self.count_regions()
+        self.current_region = None
 
         callbacks.add_integration_callbacks(self)
         pynvml.nvmlInit()
@@ -215,6 +221,7 @@ class YOLOStreamer(ABC):
                     frameSize=(im.shape[1], im.shape[0]),  # (width, height)
                 )
 
+            im = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
             # Save video
             self.vid_writer[save_path].write(im)
             if self.args.save_frames:
@@ -228,10 +235,30 @@ class YOLOStreamer(ABC):
     @abstractmethod
     def show(self, p=str)->None:
         im = self.plotted_img
+        for region in self.regions:
+            region_label = str(region["counts"])
+            region_color = region["region_color"]
+            region_text_color = region["text_color"]
+
+            polygon_coords = np.array(region["polygon"].exterior.coords, dtype=np.int32)
+            centroid_x, centroid_y = int(region["polygon"].centroid.x), int(region["polygon"].centroid.y)
+
+            text_size, _ = cv2.getTextSize(
+                region_label, cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.7, thickness=2
+            )
+            text_x = centroid_x - text_size[0] // 2
+            text_y = centroid_y + text_size[1] // 2
+
+            cv2.rectangle(im,(text_x - 5, text_y - text_size[1] - 5),(text_x + text_size[0] + 5, text_y + 5),region_color,-1,)
+            cv2.putText(im, region_label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, region_text_color, 2)
+            cv2.polylines(im, [polygon_coords], isClosed=True, color=region_color, thickness=2)
+
         if platform.system() == "Linux" and p not in self.windows: 
             self.windows.append(p)
             cv2.namedWindow(p, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
+            cv2.setMouseCallback(p, self.mouse_callback)
             cv2.resizeWindow(p, im.shape[1], im.shape[0])
+
         im = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
         cv2.imshow(p,im)
         cv2.waitKey(300 if self.dataset.mode == 'image' else 1)
@@ -246,3 +273,54 @@ class YOLOStreamer(ABC):
     @abstractmethod
     def add_callback(self, event: str, func:Any)->None: 
         self.callbacks[event].append(func)
+
+
+    @abstractmethod
+    def count_regions(self) -> list: 
+        return [{
+            "name": "YOLOv8 Polygon Region",
+            "polygon": Polygon([(100, 150), (340, 150), (340, 450), (100, 450)]),  # Polygon points
+            "counts": 0,
+            "dragging": False,
+            "region_color": (255, 42, 4),  # BGR Value
+            "text_color": (255, 255, 255),  # Region Text Color
+        },
+        {
+            "name": "YOLOv8 Rectangle Region",
+            "polygon": Polygon([(300, 150), (540, 150), (540, 450), (300, 450)]),  # Polygon points
+            "counts": 0,
+            "dragging": False,
+            "region_color": (37, 255, 225),  # BGR Value
+            "text_color": (0, 0, 0),  # Region Text Color
+        }]
+
+
+    @abstractmethod
+    def mouse_callback(self, event:int, x:int, y:int, flags:int, param:Any)->None:
+            self.regions 
+            # Mouse left button down event
+            if event == cv2.EVENT_LBUTTONDOWN:
+                for region in self.regions:
+                    if region["polygon"].contains(Point((x, y))):
+                        self.current_region = region
+                        self.current_region["dragging"] = True
+                        self.current_region["offset_x"] = x
+                        self.current_region["offset_y"] = y
+
+            # Mouse move event
+            elif event == cv2.EVENT_MOUSEMOVE:
+                if self.current_region is not None and self.current_region["dragging"]:
+                    dx = x - self.current_region["offset_x"]
+                    dy = y - self.current_region["offset_y"]
+                    self.current_region["polygon"] = Polygon(
+                        [(p[0] + dx, p[1] + dy) for p in self.current_region["polygon"].exterior.coords]
+                    )
+                    self.current_region["offset_x"] = x
+                    self.current_region["offset_y"] = y
+
+            # Mouse left button up event
+            elif event == cv2.EVENT_LBUTTONUP:
+                if self.current_region is not None and self.current_region["dragging"]:
+                    self.current_region["dragging"] = False
+
+            

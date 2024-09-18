@@ -8,7 +8,9 @@ from ultralytics.nn.autobackend import AutoBackend
 from ultralytics.utils.torch_utils import select_device, smart_inference_mode
 from ultralytics import YOLO 
 from ultralytics.engine.results import Results
+from ultralytics.utils.plotting import colors
 from pathlib import Path 
+from collections import defaultdict
 import torch 
 import numpy as np
 import cv2 
@@ -18,6 +20,7 @@ import torchvision.ops as operation
 import warnings 
 import os
 import time
+from shapely.geometry.point import Point
 
 
 class Yolov8Streamer(YOLOStreamer):
@@ -27,8 +30,8 @@ class Yolov8Streamer(YOLOStreamer):
     def __init__(self, cfg=DEFAULT_CFG, overrides=None, _callbacks=None)->None: 
         super().__init__(cfg, overrides, _callbacks)
         self.speed = {} 
-
-
+        self.track_history = None
+        
 
     def warmup(self, imgsz=(1,3,640,640)): 
         if self.device != 'cpu': 
@@ -42,7 +45,6 @@ class Yolov8Streamer(YOLOStreamer):
 
     def from_numpy(self, x): 
         return torch.tensor(x).to(self.device) if isinstance(x, np.ndarray) else x
-
 
 
     def __call__(self, source=None, model=None, stream=False, mqtt_broker=None,  *args, **kwargs):
@@ -158,7 +160,7 @@ class Yolov8Streamer(YOLOStreamer):
             return self.model
 
         if opt == "autobackbone": 
-
+            
             self.model = AutoBackend(
                 weights=model or self.args.model,
                 device=select_device(self.args.device, verbose=verbose),
@@ -175,7 +177,7 @@ class Yolov8Streamer(YOLOStreamer):
             self.model.eval()
 
         elif opt=="tracking": 
-
+            self.track_history = defaultdict(list)
             cuda_use = torch.cuda.is_available()
             device = torch.device("cuda" if cuda_use else "cpu")
             self.model = YOLO(model)
@@ -207,6 +209,7 @@ class Yolov8Streamer(YOLOStreamer):
             
 
         with self._lock:  # for thread-safe inference
+           
             # Setup source every time predict is called
             self.setup_source(source if source is not None else self.args.source)
 
@@ -218,7 +221,6 @@ class Yolov8Streamer(YOLOStreamer):
             if not self.done_warmup and not isinstance(self.model, YOLO) :
                 self.model.warmup(imgsz=(1 if self.model.pt or self.model.triton else self.dataset.bs, 3, *self.imgsz))
                 self.done_warmup = True
-            
             else: 
                 self.warmup(imgsz=(1, 3, *self.imgsz))
                 self.done_warmup = True 
@@ -251,6 +253,7 @@ class Yolov8Streamer(YOLOStreamer):
                 # Postprocess
                 with profilers[2]:
                     self.results = self.postprocess(preds, images, im0s)
+
                 if not isinstance(self.results[0], Results):
                     self.results = self.results[0]
 
@@ -305,6 +308,12 @@ class Yolov8Streamer(YOLOStreamer):
     
 
     def translate_data(self, frame_index, video_path, images, results, orig_images)->None:
+        
+        """
+        This function will only be needed in the case results are not of Type Results, 
+        either use of AutoShape or AutoBackbone. 
+        """
+        
         names = self.model.names 
         orig_img = orig_images[frame_index]
         [height, width, _]= orig_img.shape
@@ -350,10 +359,27 @@ class Yolov8Streamer(YOLOStreamer):
                 return "(No Detection Found)"
         
         self.mqtt_interface.publish(self.mqtt_interface.topic, str(result.speed))
-        time.sleep(0.001)
+        time.sleep(0.01)
 
         result.save_dir = self.save_dir.__str__()  # used in other locations
         string += f"{result.verbose()}{result.speed['inference']:.1f}ms" 
+
+        if result.boxes.id is not None and self.track_history is not None: 
+            boxes = result.boxes.xyxy.cpu()
+            track_ids = result.boxes.id.int().cpu().tolist() 
+            clss = result.boxes.cls.cpu().tolist()
+            for box, track_id, cls in zip(boxes, track_ids,  clss):
+                bbox_center = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2 
+                track = self.track_history[track_id]
+                track.append((float(bbox_center[0]), float(bbox_center[1])))
+                if len(track) > 30:
+                    track.pop(0)
+                points = np.hstack(track).astype(np.int32).reshape((-1,1,2))
+                cv2.polylines(original_images[i], [points], isClosed=False, color=colors(cls, True), thickness=2)
+
+            for region in self.regions:
+                if region["polygon"].contains(Point((bbox_center[0], bbox_center[1]))):
+                    region["counts"] += 1
 
         # Add predictions to image
         if self.args.save or self.args.show:
@@ -469,6 +495,13 @@ class Yolov8Streamer(YOLOStreamer):
         except:
             boxes, scores,class_ids  = [],[],[]
             return torch.empty((0,6)),class_ids
+        
+
+    def count_regions(self) -> list:
+        return super().count_regions()
+    
+    def mouse_callback(self, event, x, y, flags, param) -> None:
+        return super().mouse_callback(event, x, y, flags, param)
         
         
 

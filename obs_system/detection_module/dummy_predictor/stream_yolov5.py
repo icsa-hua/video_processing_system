@@ -7,8 +7,9 @@ from ultralytics.data.augment import classify_transforms
 from ultralytics.utils.torch_utils import smart_inference_mode
 from ultralytics import YOLO 
 from ultralytics.engine.results import Results
-
+from ultralytics.utils.plotting import colors
 from pathlib import Path 
+from collections import defaultdict
 import torch 
 import numpy as np
 import cv2  
@@ -19,15 +20,17 @@ import warnings
 import os
 import time
 import gc
+from shapely.geometry.point import Point
 
 
 class Yolov5Streamer(YOLOStreamer): 
 
     # Ultralytics YOLO 🚀, AGPL-3.0 license
 
-    def __init__(self, cfg=DEFAULT_CFG, overrides=None, _callbacks=None): 
+    def __init__(self, cfg=DEFAULT_CFG, overrides=None, _callbacks=None)->None: 
         super().__init__(cfg, overrides, _callbacks)
         self.speed = {} 
+        self.track_history = None
 
     def warmup(self, imgsz=(1, 3, 640, 640)):
         warmup_types = self.model.pt if not isinstance(self.model, YOLO) else self.model.model_name.split('.')[-1]
@@ -164,6 +167,7 @@ class Yolov5Streamer(YOLOStreamer):
             self.model.eval()
         
         elif opt == "tracking":
+            self.track_history = defaultdict(list)
             self.model = YOLO(model)
             self.model = self.model.to(device)
             self.device = self.model.device
@@ -201,7 +205,6 @@ class Yolov5Streamer(YOLOStreamer):
             if self.args.save or self.args.save_txt: 
                 (self.save_dir / "labels" if self.args.save_txt else self.save_dir).mkdir(parents=True, exist_ok=True)
             
-
             #Warmup model 
             if not self.done_warmup and not isinstance(self.model, YOLO):
                 self.warmup(imgsz=(1 if self.model.pt else self.dataset.bs, 3, *self.imgsz))
@@ -288,18 +291,6 @@ class Yolov5Streamer(YOLOStreamer):
         self.run_callbacks("on_predict_end")
         
 
-    # def soft_nms_detections(self,predictions,method=2): 
-    #     from keras import backend as K
-    #     from obs_system.detection_module.interface.soft_nms import py_cpu_softnms
-    #     import tensorflow as tf
-    #     array = predictions
-    #     with tf.compat.v1.Session() as sess:
-    #         index = py_cpu_softnms(array[:,:4], array[:,4], method=method)
-    #         selected_predictions = sess.run(tf.gather(array, index))
-        
-    #     return selected_predictions
-
-
     def translate_data(self, frame_index, video_path, images, results, orig_images)->None:  
 
         """
@@ -324,8 +315,8 @@ class Yolov5Streamer(YOLOStreamer):
                 probs=class_ids
             )
         
-        except:
-            return []
+        except KeyboardInterrupt as e:
+            exit(1)
 
 
     def write_results(self, i, p, im, original_images, s)->str:
@@ -359,7 +350,24 @@ class Yolov5Streamer(YOLOStreamer):
         result.save_dir = self.save_dir.__str__()
         string += f"{result.verbose()}{result.speed['inference']:.1f}ms"
 
+        if result.boxes.id is not None and self.track_history is not None: 
+            boxes = result.boxes.xyxy.cpu()
+            track_ids = result.boxes.id.int().cpu().tolist() 
+            clss = result.boxes.cls.cpu().tolist()
+            for box, track_id, cls in zip(boxes, track_ids,  clss):
+                bbox_center = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2 
+                track = self.track_history[track_id]
+                track.append((float(bbox_center[0]), float(bbox_center[1])))
+                if len(track) > 30:
+                    track.pop(0)
+                points = np.hstack(track).astype(np.int32).reshape((-1,1,2))
+                cv2.polylines(original_images[i], [points], isClosed=False, color=colors(cls, True), thickness=2)
 
+            for region in self.regions:
+                if region["polygon"].contains(Point((bbox_center[0], bbox_center[1]))):
+                    region["counts"] += 1
+
+        # Add predictions to image
         if self.args.save or self.args.show:
             self.plotted_img = result.plot(
                 line_width=self.args.line_width, 
@@ -377,7 +385,6 @@ class Yolov5Streamer(YOLOStreamer):
             result.save_crop(save_dir=self.save_dir / "crops", file_name=self.txt_path.stem)
         
         if self.args.show: 
-            print("P string is ", str(p))
             self.show(str(p))
         
         if self.args.save:
@@ -478,3 +485,10 @@ class Yolov5Streamer(YOLOStreamer):
         except:
             boxes, scores,class_ids  = [],[],[]
             return torch.empty((0,6)),class_ids
+        
+
+    def count_regions(self) -> list:
+        return super().count_regions()
+    
+    def mouse_callback(self, event, x, y, flags, param) -> None:
+        return super().mouse_callback(event, x, y, flags, param)   
