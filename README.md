@@ -25,7 +25,7 @@ The main technologies used for this project are:
 ## SetUp
 1. Clone the repository:
 ```sh
-git clone -b feature/yolov8-tracking https://github.com/icsa-hua/Obstacle_Recognition_Edge_Ai.git
+git clone -b feature/streaming-ROI https://github.com/icsa-hua/Obstacle_Recognition_Edge_Ai.git
 ```
 2. Navigate to the project directory:
 ```sh
@@ -37,21 +37,17 @@ pip install -r requirements.txt
 ```
 4. To execute the streaming choice (recommended), from the project directory:
 ```sh
-python3 test_dummy_pipeline.py --stream 
+python3 test_dummy_pipeline.py --stream --source=(path/to/video or streaming key)
 ```
-5. You can opt to use another model. Models supported yolov5 (all), yolov8(all) (MaskRCNN needs separate installation and is really heavy so it does not run in my machine. ONNX models produce some errors, currently working on a fix
+5. You can opt to use another model. Models supported yolov5 (all), yolov8(all)(default) and yolov5(all)
 ```sh
 python3 test_dummy_pipeline.py --name='yolov8' 
 ```
-6. You can also opt either video file or webcam source. 
-```sh
-python3 test_dummy_pipeline.py  --s "source/video/file" 
+6. Can opt to use a very basic GUI for a more friendly experience.
 ```
-7. You can also change the tracking setting to improve performance by calling a no configuration model. Tracking is enabled by default. 
-```sh
-python3 test_dummy_pipeline.py  --type  "tracking"  
+python3 test_dummy_pipeline.py --gui
 ```
-8. If you encounter any problem with the modules, setting the PYTHONPATH can be a solution:
+7. If you encounter any problem with the modules, setting the PYTHONPATH can be a potential solution:
 ```sh
 export PYTHONPATH="/path to project:${PYTHONPATH}"
 ```
