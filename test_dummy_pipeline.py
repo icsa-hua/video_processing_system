@@ -1,5 +1,5 @@
 from obs_system.application_module.dummy_application.dummy_app import Application
-
+from obs_system.application_module.dummy_application.worker import MainWindow
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  #suppress warnings. 
 from silence_tensorflow import silence_tensorflow
@@ -18,36 +18,49 @@ logger = logging.getLogger(__name__)
 
 def main():
     logger.info("Getting Initial Configuration...")
+    
     argparser = argparse.ArgumentParser(description=__doc__)
     argparser.add_argument('--name', metavar='M', default='yolov8', help='Model to use (Yolov5, Yolov8 (Default), MaskRCNN, ONNX (yolov5, yolov8))')
     argparser.add_argument('--stream', metavar='W', action=argparse.BooleanOptionalAction, help='Operation to perform (streaming, inference, compression, detection)')
-    argparser.add_argument('--source', metavar='S', default='0', help='Video Source to use - Local video path (.mp4) or webcam index (0, 1, 2, etc.)')
-    argparser.add_argument('--type', metavar='T', default='tracking', help='Type of model to use (yolov5, yolov8)')
+    argparser.add_argument('--source', metavar='S', default=None, help='Source to use - Local video path (.mp4) or stream index (key needs to be provided)')
+    argparser.add_argument('--type', metavar='T', default='tracking', help='Use tracking with bytetracker or simple detection (recommended to leave default value)')
+    argparser.add_argument('--gui', metavar='G', action=argparse.BooleanOptionalAction, help='Use GUI to select video source and model')
 
     if len(sys.argv) < 1:
          argparser.print_help()
          return
     
     args = argparser.parse_args()
-    
-    if args.source == "webcam":
-        args.source = "http://192.168.1.5:8080/live"
-    elif args.source == "video": 
-        args.source = 'samples/10_DrivingWith.mp4'
+
+    if args.gui:
+        gui = MainWindow()
+        config = gui.get_configuration()
+        if config['stream'] is not None: 
+            config['stream'] = True
+        if config['source'] is None:
+            raise ValueError("Invalid video source. Please enter a valid video source.")
+        config['model_type'] = args.type
+        
     else: 
-        logger.error("Invalid video source. Please enter a valid video source.")
-        exit(1)
+        if args.source == None:
+            logger.error("Invalid video source. Please enter a valid video source.")
+            exit(1)
+            # args.source = "https://s44.ipcamlive.com/streams/2clt4h31sxwevfx5v/stream.m3u8"
+        
+        config = {
+            'model_name':args.name,
+            'stream':args.stream, 
+            'source':args.source, 
+            'model_type':args.type
+        }
 
-    config = {
-         'source':args.source, 
-         'model_name':args.name, 
-         'stream':args.stream, 
-         'model_type':args.type
-    }
-
-    model_validation ={
+    model_validation = {
         'yolov5': ('autoshape', 'y5'),
         'yolov8': ('autobackbone', 'y8'),
+        'yolov5s': ('autoshape', 'y5'),
+        'yolov8s': ('autobackbone', 'y8'),
+        'yolov5n': ('autoshape', 'y5'),
+        'yolov8n': ('autobackbone', 'y8'),
         'yolo5': ('autoshape', 'y5'),
         'yolo8': ('autobackbone', 'y8')
     }
@@ -65,7 +78,7 @@ def main():
 
     if parent_conn is None:
         raise Exception("Parent process connection not initialized")
-    
+
     app.setup_model(model_name=config['model_name'], 
                     stream=config['stream'],
                     opt=config['model_type'])

@@ -237,7 +237,7 @@ class Yolov8Streamer(YOLOStreamer):
             for self.batch in self.dataset:
                 self.run_callbacks("on_predict_batch_start")
                 paths, im0s, s = self.batch
-
+                
                 # Preprocess
                 with profilers[0]:
                     images = self.preprocess(im0s)
@@ -245,6 +245,8 @@ class Yolov8Streamer(YOLOStreamer):
                 # Inference
                 with profilers[1]:
                     preds = self.inference(images, *args, **kwargs)
+                    
+                    pdb.set_trace()
 
                     if self.args.embed:
                         yield from [preds] if isinstance(preds, torch.Tensor) else preds  # yield embedding tensors
@@ -299,11 +301,12 @@ class Yolov8Streamer(YOLOStreamer):
                 f"Speed: %.1fms preprocess, %.1fms inference, %.1fms postprocess per image at shape "
                 f"{(min(self.args.batch, self.seen), 3, *images.shape[2:])}" % t
             )
+            
         if self.args.save or self.args.save_txt or self.args.save_crop:
             nl = len(list(self.save_dir.glob("labels/*.txt")))  # number of labels
             s = f"\n{nl} label{'s' * (nl > 1)} saved to {self.save_dir / 'labels'}" if self.args.save_txt else ""
             LOGGER.info(f"Results saved to {colorstr('bold', self.save_dir)}{s}")
-       
+        
         self.run_callbacks("on_predict_end")
     
 
@@ -375,7 +378,7 @@ class Yolov8Streamer(YOLOStreamer):
                 if len(track) > 30:
                     track.pop(0)
                 points = np.hstack(track).astype(np.int32).reshape((-1,1,2))
-                cv2.polylines(original_images[i], [points], isClosed=False, color=colors(cls, True), thickness=2)
+                # cv2.polylines(original_images[i], [points], isClosed=False, color=colors(cls, True), thickness=2)
 
             for region in self.regions:
                 if region["polygon"].contains(Point((bbox_center[0], bbox_center[1]))):

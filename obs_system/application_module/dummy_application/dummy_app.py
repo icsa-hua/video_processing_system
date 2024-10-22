@@ -1,6 +1,3 @@
-from PyQt5.QtWidgets import QMainWindow, QLabel, QVBoxLayout, QWidget
-from PyQt5.QtCore import pyqtSignal, pyqtSlot, QObject, QThread
-from PyQt5.QtGui import QPixmap, QImage
 from obs_system.conversion_module.dummy_convertor.frame_convertor import FrameConvertor
 from obs_system.logic_module.dummy_logic.overlap_detection import BoundingBoxOverlapDetector
 from obs_system.detection_module.dummy_predictor.dummy_yolo import DummyPredictor
@@ -8,9 +5,8 @@ from obs_system.detection_module.dummy_predictor.stream_yolov5 import Yolov5Stre
 from obs_system.detection_module.dummy_predictor.stream_yolov8 import Yolov8Streamer
 from obs_system.communication_module.mqtt_com.message_transmitter import RealMQTT
 from obs_system.camera_module.dummy_impl.video_consumer import DummyConsumer
+from ultralytics.utils import DEFAULT_CFG
 
-
-from obs_system.application_module.dummy_application.worker import ImageUpdateSignal
 import numpy as np 
 import warnings
 import cv2
@@ -21,68 +17,14 @@ import time
 import multiprocessing
 import pdb
 
-class MainWindow(QMainWindow):
-    """
-    The `MainWindow` class is the main window of the application,
-    which displays the image with bounding boxes detected by the object detector.
-    
-    ***Under Construction***
-    
-    """
-        
-    def __init__(self, object_detector):
-        super().__init__()
-        self.initUI()
-        self.object_detector = object_detector
-        self.imageUpdateSignal = ImageUpdateSignal()
-        self.imageUpdateSignal.signal.connect(self.updateImageDisplay)
-    
-    def initUI(self):
-        # Set up the main window
-        self.setWindowTitle('YOLO Bounding Boxes Viewer')
-        self.setGeometry(100, 100, 800, 600)
-        self.label = QLabel("Image will be shown here")
-        layout = QVBoxLayout()
-        layout.addWidget(self.label)
-        centralWidget = QWidget()
-        centralWidget.setLayout(layout)
-        self.setCentralWidget(centralWidget)
-
-        # Set up layout and widgets
-        self.label = QLabel("Image will be shown here")
-        layout = QVBoxLayout()
-        layout.addWidget(self.label)
-
-        centralWidget = QWidget()
-        centralWidget.setLayout(layout)
-        self.setCentralWidget(centralWidget)
-
-    def start_detection(self, patches) -> np.ndarray:
-        predictions = self.object_detector.concurrent_prediction(patches)
-        processed_patches = [self.object_detector.draw_boxes(patch, pred) for patch, pred in zip(patches, predictions)]
-        for processed_patch in processed_patches:
-            self.imageUpdateSignal.signal.emit(processed_patch)
-
-    @pyqtSlot(np.ndarray)
-    def updateImageDisplay(self, image:np.ndarray):
-        height, width, channel = image.shape
-        bytesPerLine = 3 * width
-        qImg = QImage(image.data, width, height, bytesPerLine, QImage.Format_RGB888)
-        pixmap = QPixmap.fromImage(qImg)
-        self.label.setPixmap(pixmap)
-
-    
 class Application: 
-   
    
     def __init__(self):
         self.object_detector = None
         self.frame_counter = 0 
         self.model = None
         self.parent_path =  os.getcwd()
-        
-        # main_window = MainWindow(model_predictor)
-        # main_window.show()
+        self.model_name = None
 
 
     def get_object_detector(self, model_name):
@@ -93,11 +35,13 @@ class Application:
             "Yolo5":self.yolov5_object_detector, 
             "Yolov5":self.yolov5_object_detector,
             "yolov5s":self.yolov5_object_detector,
+            "yolov5n":self.yolov5_object_detector,
             "yolov8":self.yolov8_object_detector, 
             "YOLO8":self.yolov8_object_detector,
             "Yolo8":self.yolov8_object_detector, 
             "Yolov8":self.yolov8_object_detector,
             "yolov8s":self.yolov8_object_detector,
+            "yolov8n":self.yolov8_object_detector,
             "maskrcnn" :self.maskrcnn_object_detector,
             "MaskRCNN":self.maskrcnn_object_detector,
             "onnx":self.onnx_object_detector,
@@ -114,47 +58,64 @@ class Application:
             "Yolo5":self.yolov5_streaming,
             "Yolov5":self.yolov5_streaming,
             "yolov5s":self.yolov5_streaming,
+            "yolov5n":self.yolov5_streaming,
             "yolov8":self.yolov8_streaming,
             "YOLO8":self.yolov8_streaming,
             "Yolo8":self.yolov8_streaming,
             "Yolov8":self.yolov8_streaming,
             "yolov8s":self.yolov8_streaming,
+            "yolov8n":self.yolov8_streaming,
         }
 
         return set_object_detector_func.get(model_name, lambda *args:None)
 
 
     def yolov5_object_detector(self, model_name):
-        model_weights = os.path.join(self.parent_path,'yolov5s.pt')
+        if model_name != "yolov5n" and model_name != "yolov5s":
+            weights = "yolov5n" + ".pt"
+        else:
+            weights = model_name + ".pt"
+        model_weights = os.path.join(self.parent_path,weights)
         self.model =  DummyPredictor(model_path=model_weights, model_name=model_name)
 
 
     def yolov8_object_detector(self, model_name):
-        model_weights = os.path.join(self.parent_path,'yolov8n.pt')
+        if model_name != "yolov8n" and model_name != "yolov8s":
+            weights = "yolov8n" + ".pt"
+        else:
+            weights = model_name + ".pt"
+
+        model_weights = os.path.join(self.parent_path,weights)
         self.model =  DummyPredictor(model_path=model_weights, model_name=model_name)
 
 
     def maskrcnn_object_detector(self, model_name):
-        model_weights = os.path.join(self.parent_path,'obs_system/Mask_RCNN/mask_rcnn_coco.h5')
-        self.model =  DummyPredictor(model_path=model_weights, model_name=model_name)
+        raise NotImplementedError("Mask RCNN is not implemented yet")
+        # model_weights = os.path.join(self.parent_path,'obs_system/Mask_RCNN/mask_rcnn_coco.h5')
+        # self.model =  DummyPredictor(model_path=model_weights, model_name=model_name)
 
 
     def onnx_object_detector(self, model_name):
-        model_weights = os.path.join(self.parent_path,'obs_system/application_module/dummy_application/onnx_workflow/dummy_compression/yolov5s.onnx')
-        self.model =  DummyPredictor(model_path=model_weights, model_name=model_name)
+        raise NotImplementedError("ONNX is not implemented yet")
+        # model_weights = os.path.join(self.parent_path,'obs_system/application_module/dummy_application/onnx_workflow/dummy_compression/yolov5s.onnx')
+        # self.model =  DummyPredictor(model_path=model_weights, model_name=model_name)
 
 
     def yolov5_streaming(self, opt):
-        from ultralytics.utils import DEFAULT_CFG
-        model_weights = 'yolov5s.pt'
+        if self.model_name != "yolov5n" and self.model_name != "yolov5s":
+            model_weights = "yolov5n" + ".pt"
+        else:
+            model_weights = self.model_name + ".pt"
         self.streamer = Yolov5Streamer(DEFAULT_CFG, {}, None)
         self.streamer.setup_model(model=model_weights, verbose=False, opt=opt)
         self.model = self.streamer.model
 
 
     def yolov8_streaming(self, opt):
-        from ultralytics.utils import DEFAULT_CFG
-        model_weights = 'yolov8n.pt'
+        if self.model_name != "yolov8n" and self.model_name != "yolov8s":
+            model_weights = "yolov8n" + ".pt"
+        else:
+            model_weights = self.model_name + ".pt"
         self.streamer = Yolov8Streamer(DEFAULT_CFG, {}, None)
         self.streamer.setup_model(model=model_weights, verbose=False, opt=opt)
         self.model = self.streamer.model
@@ -164,19 +125,21 @@ class Application:
         self.process_memory = psutil.Process(os.getpid())
         pynvml.nvmlInit()
         self.handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-
         parent_conn, child_conn = multiprocessing.Pipe()    
         self.source = os.path.join(self.parent_path, source) if os.path.isfile(source) else source
+        
         #Create the data acquisition from video source 
         consumer = DummyConsumer(child_conn, self.source)
         self.process = multiprocessing.Process(target=consumer.run, args=())
         self.process.start()    
         self.start_time = time.time()
+
         return parent_conn
 
 
     def setup_model(self, model_name, stream, opt="tracking"):
         self.stream = stream
+        self.model_name = model_name
         if stream: 
             setup_func = self.get_streaming_detector(model_name)
             return setup_func(opt=opt)
@@ -200,27 +163,18 @@ class Application:
             return  self.process_stream
           
         return  self.process_video
-
- 
-    
+  
 
     def process_stream(self, parent_conn, output_path, save, model, length_of_film=0):
         
         if isinstance(self.source, str):
             # length_of_film = self.get_length_of_film(self.source)
-            #Streaming the video as before 
-            print("Process Streaming operation")
-            
+            #Streaming the video as before             
             self.streamer(source=self.source, model=model, stream=self.stream, mqtt_broker=self.mqtt_interface) # e(source=0, model=model_weights, stream=True)                
             return self.streamer.results
+
+        raise ValueError("Only string is supported as source")
         
-
-
-
-        #Batching the video source. 
-        return []
-
-
 
     def process_video(self, parent_conn, output_path, save, model, length_of_film=0):
         while True:   
@@ -278,8 +232,6 @@ class Application:
         
         raise KeyboardInterrupt("Mannually triggered exception")
 
-            
-            
 
     def get_image_from_process(self, process): 
         shape, dtype, data = process.recv()
