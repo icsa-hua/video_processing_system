@@ -8,7 +8,7 @@ from ultralytics.nn.autobackend import AutoBackend
 from ultralytics.utils.torch_utils import select_device, smart_inference_mode
 from ultralytics import YOLO 
 from ultralytics.engine.results import Results
-from ultralytics.utils.plotting import colors
+from torch.profiler import profile, record_function, ProfilerActivity
 from pathlib import Path 
 from collections import defaultdict
 import torch 
@@ -31,6 +31,7 @@ class Yolov8Streamer(YOLOStreamer):
         super().__init__(cfg, overrides, _callbacks)
         self.speed = {} 
         self.track_history = None
+        self.trackers = [] 
         
 
     def warmup(self, imgsz=(1,3,640,640)): 
@@ -51,9 +52,8 @@ class Yolov8Streamer(YOLOStreamer):
         
         """Performs inference on an image, video or stream."""
         self.mqtt_interface = mqtt_broker
+
         if stream:
-            # self.args.show = True if os.path.isfile(source) else False
-            self.args.show=True
             self.args.stream_buffer = True
             try: 
                 self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if  os.path.isfile(source)  else source, model=model)
@@ -107,7 +107,7 @@ class Yolov8Streamer(YOLOStreamer):
         )
 
         if isinstance(self.model, YOLO): 
-            return self.model.track(im, augment=self.args.augment, visualize=visualize,embed=self.args.embed, conf=0.4, iou=0.5, show=False, tracker="bytetrack.yaml", stream_buffer=True)
+            return self.model.track(im, augment=self.args.augment, visualize=visualize,embed=self.args.embed, conf=0.4, iou=0.5, verbose=False, show=False, persist=True, tracker="bytetrack.yaml", stream_buffer=self.args.stream_buffer)
         else: 
             return self.model(im, augment=self.args.augment, visualize=visualize, embed=self.args.embed, *args, **kwargs)
     
@@ -202,12 +202,6 @@ class Yolov8Streamer(YOLOStreamer):
         if self.args.verbose:
             LOGGER.info("")
 
-
-        # Setup model
-        # if not self.model:
-        #     self.setup_model(model, opt="other")
-            
-
         with self._lock:  # for thread-safe inference
            
             # Setup source every time predict is called
@@ -233,7 +227,7 @@ class Yolov8Streamer(YOLOStreamer):
             )
 
             self.run_callbacks("on_predict_start")
-
+            activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
             for self.batch in self.dataset:
                 self.run_callbacks("on_predict_batch_start")
                 paths, im0s, s = self.batch
@@ -244,9 +238,12 @@ class Yolov8Streamer(YOLOStreamer):
 
                 # Inference
                 with profilers[1]:
-                    preds = self.inference(images, *args, **kwargs)
-                    
-                    pdb.set_trace()
+                    if self.seen == 0:
+                        with profile(activities=activities) as prof: 
+                            preds = self.inference(images, *args, **kwargs)
+                        prof.export_chrome_trace("trace.json")
+                    else: 
+                        preds = self.inference(images, *args, **kwargs)
 
                     if self.args.embed:
                         yield from [preds] if isinstance(preds, torch.Tensor) else preds  # yield embedding tensors
@@ -279,7 +276,7 @@ class Yolov8Streamer(YOLOStreamer):
                             "postprocess": profilers[2].dt * 1e3 / n,
                         }
 
-                    if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
+                    if self.args.verbose or self.args.save or self.args.save_txt:
                         s[i] += self.write_results(i, Path(paths[i]), images, im0s, s)
 
                 # Print batch results
@@ -361,29 +358,50 @@ class Yolov8Streamer(YOLOStreamer):
             if not result: 
                 return "(No Detection Found)"
         
-        self.mqtt_interface.publish(self.mqtt_interface.topic, str(result.speed))
-        time.sleep(0.01)
+        if self.mqtt_interface is not None:
+            self.mqtt_interface.publish(self.mqtt_interface.topic, str(result.speed))
+            time.sleep(0.01)
+        
 
         result.save_dir = self.save_dir.__str__()  # used in other locations
         string += f"{result.verbose()}{result.speed['inference']:.1f}ms" 
-
+        self.points.clear()
+        
         if result.boxes.id is not None and self.track_history is not None: 
+            
             boxes = result.boxes.xyxy.cpu()
             track_ids = result.boxes.id.int().cpu().tolist() 
             clss = result.boxes.cls.cpu().tolist()
+
+            current_track_ids = set()
+            
             for box, track_id, cls in zip(boxes, track_ids,  clss):
                 bbox_center = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2 
-                track = self.track_history[track_id]
-                track.append((float(bbox_center[0]), float(bbox_center[1])))
-                if len(track) > 30:
-                    track.pop(0)
-                points = np.hstack(track).astype(np.int32).reshape((-1,1,2))
-                # cv2.polylines(original_images[i], [points], isClosed=False, color=colors(cls, True), thickness=2)
+                current_track_ids.add(track_id)
 
+
+                if track_id not in self.track_history or len(self.track_history[track_id])==0:
+                    self.track_history[track_id] = [bbox_center]
+                else:
+                    self.track_history[track_id].append(bbox_center)    
+                    if len(self.track_history) > 30:
+                        self.track_history.pop(list(self.track_history.keys())[0])
+                
+                track = self.track_history[track_id]
+                self.points[cls] = np.hstack(track).astype(np.int32).reshape((-1,1,2))
+                
+                # track.append((float(bbox_center[0]), float(bbox_center[1])))
+                
+            #Remove track IDs from track history that were not detected in the current frame 
+            lost_track_ids = set(self.track_history.keys()) - current_track_ids
+            for lost_track_id in lost_track_ids:
+                self.track_history.pop(lost_track_id, None)
+                self.points = {cls:pts for cls, pts in self.points.items() if cls not in lost_track_ids}
+                
             for region in self.regions:
                 if region["polygon"].contains(Point((bbox_center[0], bbox_center[1]))):
                     region["counts"] += 1
-
+        
         # Add predictions to image
         if self.args.save or self.args.show:
             self.plotted_img = result.plot(
@@ -402,6 +420,7 @@ class Yolov8Streamer(YOLOStreamer):
             result.save_crop(save_dir=self.save_dir / "crops", file_name=self.txt_path.stem)
         
         if self.args.show:
+            
             self.show(str(p))
         
         if self.args.save:

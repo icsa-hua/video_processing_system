@@ -23,7 +23,6 @@ class MainWindow():
         self.selected_stream = None
         self.ip_address = None
 
-
         # Model selection
         self.model_choice = tk.StringVar(value="Yolov8n")
         model_label = tk.Label(self.root, text="Select a Model")
@@ -129,6 +128,7 @@ class MainWindow():
             self.webcam_frame.pack_forget()
             self.network_frame.pack_forget()
             self.live_stream_frame.pack_forget()
+
 
     def get_configuration(self):
         if self.selected_model is None:

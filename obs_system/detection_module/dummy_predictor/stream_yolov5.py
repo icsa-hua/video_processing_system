@@ -15,7 +15,7 @@ import numpy as np
 import cv2  
 import re 
 import pdb
-import torchvision.ops as operation
+import torchvision
 import warnings
 import os
 import time
@@ -181,7 +181,7 @@ class Yolov5Streamer(YOLOStreamer):
             warnings.warn("No Detections were applicable from the model...")
             return [] 
         
-        return operation.nms(detections,scores,iou_threshold=iou) 
+        return torchvision.ops.nms(detections,scores,iou_threshold=iou) 
 
 
     @smart_inference_mode()

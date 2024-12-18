@@ -4,6 +4,7 @@ from ultralytics.utils import DEFAULT_CFG, MACOS, WINDOWS,callbacks
 from ultralytics.data.augment import LetterBox
 from ultralytics.utils.torch_utils import smart_inference_mode
 from ultralytics.utils.checks import check_imshow
+from ultralytics.utils.plotting import colors
 from ultralytics import YOLO 
 from shapely.geometry import Polygon
 from shapely.geometry.point import Point
@@ -52,13 +53,6 @@ class YOLOStreamer(ABC):
 
         self.process_memory = psutil.Process(os.getpid())
         self.callbacks = _callbacks or callbacks.get_default_callbacks() 
-        
-        if self.args.conf is None: 
-            self.args.conf = 0.25 
-        self.done_warmup = False 
-        
-        if self.args.show: 
-            self.args.show = check_imshow(warn=True)
 
         self.model = None 
         self.data = self.args.data
@@ -77,6 +71,7 @@ class YOLOStreamer(ABC):
         self.txt_path = None 
         self._lock = threading.Lock() 
         self.orig_shape = None 
+        self.points = dict() 
 
         #Counting Regions
         self.regions = self.count_regions()
@@ -252,6 +247,9 @@ class YOLOStreamer(ABC):
             cv2.rectangle(im,(text_x - 5, text_y - text_size[1] - 5),(text_x + text_size[0] + 5, text_y + 5),region_color,-1,)
             cv2.putText(im, region_label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, region_text_color, 2)
             cv2.polylines(im, [polygon_coords], isClosed=True, color=region_color, thickness=2)
+        
+        for cls in self.points.keys(): 
+            cv2.polylines(im, [self.points[cls]], isClosed=False, color=colors(cls, True), thickness=2)
 
         if platform.system() == "Linux" and p not in self.windows: 
             self.windows.append(p)
