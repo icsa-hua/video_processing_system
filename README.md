@@ -4,54 +4,108 @@ Obstacle Recognition
 
 
 ## Overview
-This Dummy Video Processing System is a Python-based application designed for handling video feeds from cameras, performing object detection, identifying bounding box overlaps, and communicating results via MQTT. It's a prototype suitable for understanding the flow of video processing systems. Currently utilizes batching of a video, inferencing it with yolov8 and keeping track of the objects with Bytetracker. It also creates the publisher and subscriber of the MQTT broker at the same script while transmitting correctly the performance results for each batch. This system also saves the results, constructing the new view (with detections) in the runs/det/ directory. Current GPU usage is at 1.7GB with yolov8n. Without the MQTT communication schema, performance is increased. To disable it comment the lines with self.mqtt_interface. 
+This Video Processing System is a Python-based application designed for handling video/streaming feeds performing object detection and tracking for Road Side Perception Units (RSPUs) that remain motionless while monitoring an intersection or a highway. Detection results are transferred through MQTT to a server from a client that in later stages will be used to transmit the detection results if an abnormality is discovered. 
 
-## Components
-- **Camera Module (`DummyConsumer`)**: Handles the source feed by passing frames through a multiprocessing pipe, with one process catching the frame and the other one processing it.  
-- **Detection Module (`DummyPredictor`)**: Inference the source with Object detection model. Supports individual frame decomposition into patches for concurrent inference and reconstruction to include detections (better accuracy for overlapping) or streaming approach, where batching of a video is leveraged for higher performance. 
-- **Logic Module (`BoundingBoxOverlapDetector`)**: Detects overlaps among the bounding boxes of detected objects.
-- **Communication Module (`DummyMQTT`)**: Creates the publisher and subscriber for an MQTT communication and transmits the performance results. 
-- **Application Module (`app`)**: Connects the distinct application components, creating the main process, mqtt broker, seting up the object detection model and using the corresponding video processing operation 
+This uses the pretrained **You Only Look Once (YOLO)** models, for their great performance in regarsd to multiobject detection while maintaining a low GPU and memory utilization. Tracking of the objects is done with the **Bytetracker** algorithm included in the ultralytics package. 
 
-## Technologies
-The main technologies used for this project are: 
-* Python3.10
-* Tensorflow
-* Pytorch
-* Yolov5/Yolov8 (Ultralytics)
-* paho-mqtt
+This system saves the results, constructing the new view (with detections) in the runs/det/ directory. 
+
+
+## Prerequisites
+
+### Required software 
+* Python3
+* Torch (with cuda for better performance)
+* Ultralytics (python package)
+* paho_mqtt (python package)
+* Shapely (python package)
   
+Works on WSL and Linux. 
+## Installation Instructions 
 
-## SetUp
-1. Clone the repository:
+Clone the repository from the default branch:
 ```sh
 git clone -b feature/streaming-ROI https://github.com/icsa-hua/Obstacle_Recognition_Edge_Ai.git
 ```
-2. Navigate to the project directory:
+Navigate to the project directory:
 ```sh
 cd Obstacle_Recognition_Edge_Ai
 ```
-3. Install the dependencies:
+> NOTE: You should consider using a virtual environment. [Miniconda](https://docs.anaconda.com/miniconda/) is a great and easy way to handle the venv. 
+
+Install the dependencies:
 ```sh
 pip install -r requirements.txt
 ```
-4. To execute the streaming choice (recommended), from the project directory:
+
+## Usage Instructions 
+To execute a simple program execution which is recommended to test everything is functional:
 ```sh
-python3 test_dummy_pipeline.py --stream --source=(path/to/video or streaming key)
+python3 obs_pipeline.py --source=(path/to/video or streaming key)
 ```
-5. You can opt to use another model. Models supported yolov5 (all), yolov8(all)(default) and yolov5(all)
+
+> You can copy the following example:
 ```sh
-python3 test_dummy_pipeline.py --name='yolov8' 
+python3 obs_pipeline.py --source=samples/sample_video.mp4 --show --verbose --mqtt
 ```
-6. Can opt to use a very basic GUI for a more friendly experience.
+
+You can opt to use another model by changing the ```--name``` argument.  Models supported are YOLOv5 (all) and YOLOv8 (all). 
+
+```sh
+python3 obs_pipeline.py --source=(path/to/video) --name='yolov8s' 
 ```
-python3 test_dummy_pipeline.py --gui
+
+You can opt to use a very simplistic GUI for easier visualization of inputs. 
+```sh
+python3 obs_pipeline.py --gui
 ```
-7. If you encounter any problem with the modules, setting the PYTHONPATH can be a potential solution:
+
+You can opt to not use the MQTT broker to get better performance from the model. Just do not include the ```--mqtt``` argument on execution. 
+For the same reasoning you can opt to not show the results during inference, or print out the performance from the inference of batches. Simply do not include the ```--show``` or ```--verbose``` arguments. 
+
+Finally there is the option to use tracking which is the default program execution ```--type=tracking``` (recommended to not change). 
+
+
+
+If you encounter any problem with the modules, setting the PYTHONPATH can be a potential solution:
 ```sh
 export PYTHONPATH="/path to project:${PYTHONPATH}"
 ```
 
+## API Documentation
+The main classes of the API can be found inside the obs_system directory. Almost every sub-directory includes an interface with the generalized class and the scripts to use it. 
+
+> Detection Module
+
+This module is responsible for processing the video source and using batches of frames to inference them altogether, thus improving the time of execution without mitigating the accuracy. 
+Includes the YOLOStreamer interface which is used to create YOLO5Streamer/YOLO8Streamer that sets up the model, with pytorch, calls the data loader based on the type of source and finally inferences batches of images. 
+
+> Communication Module
+
+This module creates the publisher and subscriber for an MQTT communication and transmits the performance results. This will in later stages be used to transfer batches of predictions to another server for further processing. The main class here is the RealMQTT which uses the MQTTInterface interface for 4 basic methods, connect, publish, subscribe and on_connect. 
+
+> Application Module
+
+This is the initial execution script to deploy the necessary resources and pipelines for the intended scenario as provided by the user. Takes the input arguments and deploys the detection model, creates the mqtt broker and configures the process. It also provides some statistics mostly for debugging and performance benchmarking. The class Application is the main object during execution that is used based on the configuration provided by the user. There is also a worker class that creates the optional simplistic GUI. 
+
+> Logic Module
+
+This will be used to store the ROI implementation with lane detection. At the moment this module is not utilized but can be used to detect overlaps among Bounding boxes of detected objects. 
+
+## Examples 
 ## Example Result
-[!https://drive.google.com/file/d/17MbK2pg84HQpuVNPFEPp-I8l5wc7liXi/view?usp=drive_link](https://drive.google.com/file/d/17MbK2pg84HQpuVNPFEPp-I8l5wc7liXi/view?usp=drive_link)
+
+![Streaming-ROI-cleaned](https://drive.google.com/file/d/18OKldQJ1qnvZTyHh47TX0JdCDPhtYtNr/view?usp=drive_link)
+
+!https://drive.google.com/file/d/17MbK2pg84HQpuVNPFEPp-I8l5wc7liXi/view?usp=drive_link]
+
+
+## FAQ and Troubleshooting 
+1. Streaming approach is provided by the Ultralytics implementation which can be found in the documentation [here](https://docs.ultralytics.com/reference/engine/predictor/?h=stream#ultralytics.engine.predictor.BasePredictor.setup_model). This was tailored to yolov8 but we transformed it to work for yolov5 as well.
+2. Why use both model architectures? 
+> Having the option to interchange models and benchmark their performance is critical for applications that are aiming towards embedded AI platforms. 
+
+3. Why have a GUI? 
+> Because sometimes it is more clear for what to do?! 
+
 
