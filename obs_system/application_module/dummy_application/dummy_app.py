@@ -1,18 +1,15 @@
-from obs_system.conversion_module.dummy_convertor.frame_convertor import FrameConvertor
 from obs_system.logic_module.dummy_logic.overlap_detection import BoundingBoxOverlapDetector
-from obs_system.detection_module.dummy_predictor.dummy_yolo import DummyPredictor
 from obs_system.detection_module.dummy_predictor.stream_yolov5 import Yolov5Streamer
 from obs_system.detection_module.dummy_predictor.stream_yolov8 import Yolov8Streamer
 from obs_system.communication_module.mqtt_com.message_transmitter import RealMQTT
-from obs_system.camera_module.dummy_impl.video_consumer import DummyConsumer
 from ultralytics.utils import DEFAULT_CFG
 
 import numpy as np 
 import warnings
-import cv2
 import os 
 import psutil 
 import pynvml
+import tracemalloc 
 import time 
 import multiprocessing
 import pdb
@@ -25,87 +22,35 @@ class Application:
         self.model = None
         self.parent_path =  os.getcwd()
         self.model_name = None
-
-
-    def get_object_detector(self, model_name):
-    
-        set_object_detector_func = {
-            "yolov5":self.yolov5_object_detector, 
-            "YOLO5":self.yolov5_object_detector,
-            "Yolo5":self.yolov5_object_detector, 
-            "Yolov5":self.yolov5_object_detector,
-            "yolov5s":self.yolov5_object_detector,
-            "yolov5n":self.yolov5_object_detector,
-            "yolov8":self.yolov8_object_detector, 
-            "YOLO8":self.yolov8_object_detector,
-            "Yolo8":self.yolov8_object_detector, 
-            "Yolov8":self.yolov8_object_detector,
-            "yolov8s":self.yolov8_object_detector,
-            "yolov8n":self.yolov8_object_detector,
-            "maskrcnn" :self.maskrcnn_object_detector,
-            "MaskRCNN":self.maskrcnn_object_detector,
-            "onnx":self.onnx_object_detector,
-            "ONNX":self.onnx_object_detector
-        } 
-        return set_object_detector_func.get(model_name, lambda *args:None)
+        self.show = False 
+        self.mqtt = False
 
 
     def get_streaming_detector(self, model_name):
         
         set_object_detector_func = {
+            "yolo":self.yolov5_streaming,
+            "yolo5":self.yolov5_streaming,
             "yolov5":self.yolov5_streaming,
-            "YOLO5":self.yolov5_streaming,
-            "Yolo5":self.yolov5_streaming,
-            "Yolov5":self.yolov5_streaming,
             "yolov5s":self.yolov5_streaming,
             "yolov5n":self.yolov5_streaming,
+            "yolov5m":self.yolov5_streaming,
+            "yolo8":self.yolov8_streaming,
             "yolov8":self.yolov8_streaming,
-            "YOLO8":self.yolov8_streaming,
-            "Yolo8":self.yolov8_streaming,
-            "Yolov8":self.yolov8_streaming,
             "yolov8s":self.yolov8_streaming,
             "yolov8n":self.yolov8_streaming,
+            "yolov8m":self.yolov8_streaming
         }
 
         return set_object_detector_func.get(model_name, lambda *args:None)
-
-
-    def yolov5_object_detector(self, model_name):
-        if model_name != "yolov5n" and model_name != "yolov5s":
-            weights = "yolov5n" + ".pt"
-        else:
-            weights = model_name + ".pt"
-        model_weights = os.path.join(self.parent_path,weights)
-        self.model =  DummyPredictor(model_path=model_weights, model_name=model_name)
-
-
-    def yolov8_object_detector(self, model_name):
-        if model_name != "yolov8n" and model_name != "yolov8s":
-            weights = "yolov8n" + ".pt"
-        else:
-            weights = model_name + ".pt"
-
-        model_weights = os.path.join(self.parent_path,weights)
-        self.model =  DummyPredictor(model_path=model_weights, model_name=model_name)
-
-
-    def maskrcnn_object_detector(self, model_name):
-        raise NotImplementedError("Mask RCNN is not implemented yet")
-        # model_weights = os.path.join(self.parent_path,'obs_system/Mask_RCNN/mask_rcnn_coco.h5')
-        # self.model =  DummyPredictor(model_path=model_weights, model_name=model_name)
-
-
-    def onnx_object_detector(self, model_name):
-        raise NotImplementedError("ONNX is not implemented yet")
-        # model_weights = os.path.join(self.parent_path,'obs_system/application_module/dummy_application/onnx_workflow/dummy_compression/yolov5s.onnx')
-        # self.model =  DummyPredictor(model_path=model_weights, model_name=model_name)
-
+    
 
     def yolov5_streaming(self, opt):
         if self.model_name != "yolov5n" and self.model_name != "yolov5s":
             model_weights = "yolov5n" + ".pt"
         else:
             model_weights = self.model_name + ".pt"
+        
         self.streamer = Yolov5Streamer(DEFAULT_CFG, {}, None)
         self.streamer.setup_model(model=model_weights, verbose=False, opt=opt)
         self.model = self.streamer.model
@@ -121,52 +66,43 @@ class Application:
         self.model = self.streamer.model
 
 
-    def setup_process(self, source): 
+    def setup_process(self, source, args): 
         self.process_memory = psutil.Process(os.getpid())
         pynvml.nvmlInit()
         self.handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-        parent_conn, child_conn = multiprocessing.Pipe()    
         self.source = os.path.join(self.parent_path, source) if os.path.isfile(source) else source
-        
-        #Create the data acquisition from video source 
-        consumer = DummyConsumer(child_conn, self.source)
-        self.process = multiprocessing.Process(target=consumer.run, args=())
-        self.process.start()    
+        DEFAULT_CFG.show = args.show if args.show is not None else False
+        DEFAULT_CFG.verbose = args.verbose if args.verbose is not None else False
+        self.mqtt = args.mqtt if args.mqtt is not None else False 
         self.start_time = time.time()
 
-        return parent_conn
+        tracemalloc.start()
+        return 
 
 
     def setup_model(self, model_name, stream, opt="tracking"):
+        
         self.stream = stream
-        self.model_name = model_name
-        if stream: 
-            setup_func = self.get_streaming_detector(model_name)
-            return setup_func(opt=opt)
-        else:
-            setup_func = self.get_object_detector(model_name)
-            return setup_func(model_name=model_name)
-
+        self.model_name = model_name        
+        setup_func = self.get_streaming_detector(model_name)
+        return setup_func(opt=opt)
+        
 
     def setup_logic_module(self): 
         self.logic_module = BoundingBoxOverlapDetector()
 
 
-    def run_app(self, parent_conn, output_path, save, model, length_of_film=0 ): 
+    def run_app(self, output_path, save, model, length_of_film=0): 
         process_video_func = self.get_process_video()
-        return process_video_func(parent_conn=parent_conn, output_path=output_path, save=save, model=model, length_of_film=length_of_film)
+        return process_video_func(model=model)
 
 
     def get_process_video(self): 
-        
-        if self.stream :
-            return  self.process_stream
+        return  self.process_stream
           
-        return  self.process_video
-  
 
-    def process_stream(self, parent_conn, output_path, save, model, length_of_film=0):
-        
+    def process_stream(self, model):
+        self.statistics()
         if isinstance(self.source, str):
             # length_of_film = self.get_length_of_film(self.source)
             #Streaming the video as before             
@@ -174,74 +110,12 @@ class Application:
             return self.streamer.results
 
         raise ValueError("Only string is supported as source")
-        
-
-    def process_video(self, parent_conn, output_path, save, model, length_of_film=0):
-        while True:   
-            if parent_conn.poll():
-                try : 
-
-                    try: 
-                        frame, shape = self.get_image_from_process(parent_conn)
-                    except:
-                            warnings.warn("No frame received from the video_source.")
-                            break 
-                    
-                    if self.frame_counter > length_of_film and length_of_film!=0: 
-                        break
-
-                    convertor = FrameConvertor(frame=frame, shape=shape, output_path=output_path, save_conversion=save, model_name=model)
-                    patches, positions = convertor.decomposition()
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore", RuntimeWarning)
-                        results = [] 
-                        if patches is not None:
-                            predictions = self.object_detector.concurrent_prediction(patches)
-                            full_image = convertor.reconstruct_image(patches, positions)
-                            stride = convertor.get_stride() 
-
-                            predictions = self.object_detector.draw_boxes(full_image, patches, positions, predictions, shape, stride)
-                            full_image = cv2.cvtColor(full_image, cv2.COLOR_RGB2BGR) 
-                            # cv2.imshow('Detections on large image', full_image)
-                            # cv2.waitKey(100)    
-
-                            # #Detect overlapping boxes 
-                            results = self.logic_module.detect(predictions)
-                            overlap_frame = self.logic_module.draw_overlaps(full_image, np.asarray(results))
-
-                            #Show image 
-                            cv2.imshow("Overlap frame", overlap_frame)
-                            cv2.waitKey(1)
-
-                            if self.frame_counter<=20: 
-                                
-                                directory = r'obs_system/converted_mp4/det/images/'
-                                os.chdir(directory)
-                                filename = f"obs_frame_{self.frame_counter}.png"
-                                cv2.imwrite(filename,full_image)
-                        
-                            self.frame_counter+=1
-
-                        if not results: 
-                            self.publish_mqtt("No object detected")
-                        else: 
-                            self.publish_mqtt(str(results))           
-                        
-                except Exception as e:
-                    print("Error while receiving/processing frame:", e)
-        
-        raise KeyboardInterrupt("Mannually triggered exception")
-
-
-    def get_image_from_process(self, process): 
-        shape, dtype, data = process.recv()
-        frame = np.frombuffer(data, dtype=dtype)
-        frame = frame.reshape(shape)
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        return frame, shape
-
+    
 
     def setup_mqtt(self, topic, broker_address, port):
+        if not self.mqtt: 
+            self.mqtt_interface = None 
+            return
         self.mqtt_topic = topic
         self.mqtt_interface = RealMQTT(broker_address, self.mqtt_topic)
         self.mqtt_interface.connect(port=port, keepalive=60)
@@ -258,9 +132,12 @@ class Application:
         total_gpu_mem = mem_info.total / (1024 ** 2)  # Convert bytes to MB
         used_gpu_mem = mem_info.used / (1024 ** 2)
         free_gpu_mem = mem_info.free / (1024 ** 2)
+        current, peak = tracemalloc.get_traced_memory()
         print(f"-------------------------------------")
         print(f"|  Total Inference time: {end_time - self.start_time} seconds ")
-        print(f"|  Current RAM usage: {self.process_memory.memory_info().rss / (1024**2)} MB.")
+        print(f"|  Current Environment RAM usage (Psutil): {self.process_memory.memory_info().rss / (1024**2)} MB.")
+        print(f"|  Current memory usage (Tracemalloc): {current / (1024 ** 2):.2f} MB.")
+        print(f"|  Peak memory usage (Tracemalloc): {peak / (1024 ** 2):.2f} MB.")
         print(f"|  Total GPU memory: {total_gpu_mem:.2f} MB")
         print(f"|  Used GPU memory: {used_gpu_mem:.2f} MB")
         print(f"|  Free GPU memory: {free_gpu_mem:.2f} MB")
@@ -273,11 +150,10 @@ class Application:
         self.statistics()
 
         # #Close MQTT connection with server
-        self.mqtt_interface.client.loop_stop()
-        self.mqtt_interface.client.disconnect()
+        if self.mqtt_interface is not None:
+            self.mqtt_interface.client.loop_stop()
+            self.mqtt_interface.client.disconnect()
 
-        self.process.terminate()
-        self.process.join()
 
         pynvml.nvmlShutdown()
 
