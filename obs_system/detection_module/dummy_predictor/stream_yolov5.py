@@ -40,7 +40,7 @@ class Yolov5Streamer(YOLOStreamer):
         warmup_types = self.model.pt if not isinstance(self.model, YOLO) else self.model.model_name.split('.')[-1]
         if warmup_types and self.device != 'cpu':
             im = torch.empty(*imgsz, dtype=torch.float, device=self.device)
-            y = self.model(im)
+            y = self.model(im, show=False)
             
             if isinstance(y, (list,tuple)): 
                 return self.from_numpy(y[0]) if len(y) == 1 else [self.from_numpy(x) for x in y]

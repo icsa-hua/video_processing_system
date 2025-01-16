@@ -1,7 +1,6 @@
 from obs_system.logic_module.interface.event_extractor import EventExtractorInterface
 import numpy as np
 import cv2
-import time 
 
 class BoundingBoxOverlapDetector(EventExtractorInterface):
 

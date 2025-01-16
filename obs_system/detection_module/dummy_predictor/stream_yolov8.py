@@ -39,7 +39,7 @@ class Yolov8Streamer(YOLOStreamer):
 
         if self.device != 'cpu': 
             im = torch.empty(*imgsz, dtype=torch.float, device=self.device)
-            y = self.model(im)
+            y = self.model(im, show=False)
             if isinstance(y, (list,tuple)):
                 return self.from_numpy(y[0]) if len(y) == 1 else [self.from_numpy(z) for z in y]
             else: 
@@ -208,7 +208,7 @@ class Yolov8Streamer(YOLOStreamer):
             # Check if save_dir/ label file exists
             if self.args.save or self.args.save_txt:
                 (self.save_dir / "labels" if self.args.save_txt else self.save_dir).mkdir(parents=True, exist_ok=True)
-
+            
             # Warmup model
             if not self.done_warmup and not isinstance(self.model, YOLO) :
                 self.model.warmup(imgsz=(1 if self.model.pt or self.model.triton else self.dataset.bs, 3, *self.imgsz))
@@ -246,7 +246,7 @@ class Yolov8Streamer(YOLOStreamer):
                     if self.args.embed:
                         yield from [preds] if isinstance(preds, torch.Tensor) else preds  # yield embedding tensors
                         continue
-
+               
                 # Postprocess
                 with profilers[2]:
                     self.results = self.postprocess(preds, images, im0s)
@@ -273,7 +273,6 @@ class Yolov8Streamer(YOLOStreamer):
                             "inference": profilers[1].dt * 1e3 / n,
                             "postprocess": profilers[2].dt * 1e3 / n,
                         }
-
                     if self.args.verbose or self.args.save or self.args.save_txt:
                         s[i] += self.write_results(i, Path(paths[i]), images, im0s, s)
 
