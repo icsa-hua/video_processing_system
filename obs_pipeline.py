@@ -6,7 +6,6 @@ from silence_tensorflow import silence_tensorflow
 silence_tensorflow()
 
 import cv2
-import warnings
 import sys
 import argparse
 import logging
@@ -77,12 +76,18 @@ def main():
     logger.info("Initial Configuration Complete...\nStarting Application...")
     
     #Initialize application object
-    app = Application()
+    app = Application(logger)
     app.setup_process(config['source'], args)
 
-    app.setup_model(model_name=model_key, 
-                    stream=config['stream'],
-                    opt=config['model_type'])
+    try: 
+        app.setup_model(model_name=model_key, 
+                        stream=config['stream'],
+                        opt=config['model_type'])
+        logger.info("Model Initialized...") 
+
+    except Exception as e:
+        logger.error(e)
+        exit(1)
 
     test_video_path = app.source
     converted_video_path = os.path.join(app.parent_path, 'converted_mp4/converted_video_1.mp4')
@@ -97,16 +102,18 @@ def main():
     if app.model is None: 
         raise Exception("Model not initialized")
     
-    logger.info("Model Initialized...") 
 
     app.setup_logic_module()
     
-    app.setup_mqtt(topic="test/topic",
-                   broker_address="test.mosquitto.org",
-                   port=1883)
+    try:
+        app.setup_mqtt(topic="test/topic",
+                    broker_address="test.mosquitto.org",
+                    port=1883)
+        logger.info("MQTT interface connected...")
+    except Exception as e:
+        logger.error(f"Error setting up MQTT: {e}")
+        exit(1)
     
-    logger.info("MQTT interface connected...")
-
     # Simulate publishing messages in intervals
     try:
         app.run_app(output_path=converted_video_path, 
@@ -114,10 +121,10 @@ def main():
                     model=config['model_name'], 
                     length_of_film=length_of_film)
         app.close_app()
+
     except KeyboardInterrupt as e:
-        
-        print(f"Exception caught: {e}")
-        print("Terminating application...")
+        logger.error(f"Exception caught: {e}")
+        logger.error("Terminating application...")
         app.close_app()
        
 

@@ -35,6 +35,8 @@ class Yolov8Streamer(YOLOStreamer):
         
 
     def warmup(self, imgsz=(1,3,640,640)): 
+        """Pytorch uses graph optimizations that are triggered with the first inference."""
+
         if self.device != 'cpu': 
             im = torch.empty(*imgsz, dtype=torch.float, device=self.device)
             y = self.model(im)
@@ -52,17 +54,13 @@ class Yolov8Streamer(YOLOStreamer):
         
         """Performs inference on an image, video or stream."""
         self.mqtt_interface = mqtt_broker
-
-        if stream:
-            self.args.stream_buffer = True
-            try: 
-                self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if  os.path.isfile(source)  else source, model=model)
-            except: 
-                warnings.warn('Error in streaming')
-                exit(1)
-            
-        else:
-            return list(self.stream_inference(source, model, *args, **kwargs))  # merge list of Result into one
+        self.args.stream_buffer = True
+        try: 
+            self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if  os.path.isfile(source)  else source, model=model)
+        except KeyboardInterrupt as ke: 
+            warnings.warn(KeyboardInterrupt.__doc__)
+            return 
+        # return list(self.stream_inference(source, model, *args, **kwargs))  # merge list of Result into one
 
 
     def pre_transform(self, im): 
@@ -241,7 +239,7 @@ class Yolov8Streamer(YOLOStreamer):
                     if self.seen == 0:
                         with profile(activities=activities) as prof: 
                             preds = self.inference(images, *args, **kwargs)
-                        prof.export_chrome_trace("trace.json")
+                        prof.export_chrome_trace("trace_yolov8.json")
                     else: 
                         preds = self.inference(images, *args, **kwargs)
 
@@ -361,7 +359,6 @@ class Yolov8Streamer(YOLOStreamer):
         if self.mqtt_interface is not None:
             self.mqtt_interface.publish(self.mqtt_interface.topic, str(result.speed))
             time.sleep(0.01)
-        
 
         result.save_dir = self.save_dir.__str__()  # used in other locations
         string += f"{result.verbose()}{result.speed['inference']:.1f}ms" 
@@ -379,13 +376,13 @@ class Yolov8Streamer(YOLOStreamer):
                 bbox_center = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2 
                 current_track_ids.add(track_id)
 
-
                 if track_id not in self.track_history or len(self.track_history[track_id])==0:
                     self.track_history[track_id] = [bbox_center]
                 else:
                     self.track_history[track_id].append(bbox_center)    
-                    if len(self.track_history) > 30:
-                        self.track_history.pop(list(self.track_history.keys())[0])
+                
+                if len(self.track_history) > 30:
+                    self.track_history.pop(list(self.track_history.keys())[0])
                 
                 track = self.track_history[track_id]
                 self.points[cls] = np.hstack(track).astype(np.int32).reshape((-1,1,2))
@@ -420,7 +417,6 @@ class Yolov8Streamer(YOLOStreamer):
             result.save_crop(save_dir=self.save_dir / "crops", file_name=self.txt_path.stem)
         
         if self.args.show:
-            
             self.show(str(p))
         
         if self.args.save:

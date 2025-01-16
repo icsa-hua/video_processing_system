@@ -1,7 +1,9 @@
 import tkinter as tk
 from tkinter import ttk
 
+
 class MainWindow():
+
     """
     The `MainWindow` class is the main window of the application,
     which displays the configuration interface for picking the model , 
@@ -23,7 +25,6 @@ class MainWindow():
         self.selected_stream = None
         self.ip_address = None
 
-
         # Model selection
         self.model_choice = tk.StringVar(value="Yolov8n")
         model_label = tk.Label(self.root, text="Select a Model")
@@ -32,21 +33,14 @@ class MainWindow():
         model_options = ["Yolov5s", "Yolov5n", "Yolov8s", "Yolov8n"]
         model_menu = ttk.Combobox(self.root, textvariable=self.model_choice, values=model_options, state="readonly")
         model_menu.pack(pady=10)
-
-        # Batching selection
-        self.batching_choice = tk.StringVar(value="No")
-        batching_label = tk.Label(self.root, text="Use performance optimizer?")
-        batching_label.pack(pady=10)
-
-        batching_menu = ttk.Combobox(self.root, textvariable=self.batching_choice, values=["Yes", "No"], state="readonly")
-        batching_menu.pack(pady=10)
-        batching_menu.bind("<<ComboboxSelected>>", self.on_batching_select)
         
         # Stream selection (appears only when batching is selected)
         self.stream_label = tk.Label(self.root, text="Select the Input Stream")
         self.stream_choice = tk.StringVar(value="Video")
         self.stream_choice_menu = ttk.Combobox(self.root, textvariable=self.stream_choice, values=["Video", "Local Network Streaming", "Live Streaming"], state="readonly")
         self.stream_choice_menu.bind("<<ComboboxSelected>>", self.on_stream_select)
+        self.stream_label.pack(pady=10)
+        self.stream_choice_menu.pack(pady=10)
 
         # Webcam Frame
         self.webcam_frame = tk.Frame(self.root)
@@ -79,27 +73,25 @@ class MainWindow():
         # Start the Tkinter event loop
         self.root.mainloop()
 
+
     # Function to be executed when the apply button is pressed
     def apply_settings(self):
-        self.selected_model = self.model_choice.get()
-        self.use_batching = self.batching_choice.get()
+        self.selected_model = self.model_choice.get()        
+    
+        self.selected_stream = self.stream_choice.get()
+        if self.selected_stream == "Video":
+            self.camera_id = self.camera_id_entry.get()
+            print(f"Model: {self.selected_model}, Batching: {self.use_batching}, Stream: {self.selected_stream}, Video Path: {self.camera_id}")
+        elif self.selected_stream == "Local Network Streaming": 
+            self.ip_address = self.ip_entry.get()
+            print(f"Model: {self.selected_model}, Batching: {self.use_batching}, Stream: {self.selected_stream}, Address: {self.ip_address}")
+        elif self.selected_stream == "Live Streaming":
+            self.stream_key = self.stream_key_entry.get()
+            print(f"Model: {self.selected_model}, Batching: {self.use_batching}, Stream: {self.selected_stream}, Streaming Key: {self.stream_key}")
         
-        if self.use_batching == "Yes":
-            self.selected_stream = self.stream_choice.get()
-            if self.selected_stream == "Video":
-                self.camera_id = self.camera_id_entry.get()
-                print(f"Model: {self.selected_model}, Batching: {self.use_batching}, Stream: {self.selected_stream}, Video Path: {self.camera_id}")
-            elif self.selected_stream == "Local Network Streaming":
-                self.ip_address = self.ip_entry.get()
-                print(f"Model: {self.selected_model}, Batching: {self.use_batching}, Stream: {self.selected_stream}, Address: {self.ip_address}")
-            elif self.selected_stream == "Live Streaming":
-                self.stream_key = self.stream_key_entry.get()
-                print(f"Model: {self.selected_model}, Batching: {self.use_batching}, Stream: {self.selected_stream}, Streaming Key: {self.stream_key}")
-        else:
-            print(f"Model: {self.selected_model}, Batching: {self.use_batching}. No stream selection is not implemented.")
-            quit()
         # Close the application window
         self.root.destroy()
+
 
     # Callback for showing/hiding options based on selected stream
     def on_stream_select(self,event):
@@ -118,18 +110,6 @@ class MainWindow():
             self.live_stream_frame.pack(pady=10)
 
 
-    # Callback for showing/hiding batching-dependent options
-    def on_batching_select(self,event):
-        if self.batching_choice.get() == "Yes":
-            self.stream_label.pack(pady=10)
-            self.stream_choice_menu.pack(pady=10)
-        else:
-            self.stream_label.pack_forget()
-            self.stream_choice_menu.pack_forget()
-            self.webcam_frame.pack_forget()
-            self.network_frame.pack_forget()
-            self.live_stream_frame.pack_forget()
-
     def get_configuration(self):
         if self.selected_model is None:
             raise ValueError("No model selected.")
@@ -146,12 +126,4 @@ class MainWindow():
             config['source'] = self.stream_key
         
         return config
-
-
-
-
-
-
-
-
 
