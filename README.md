@@ -14,7 +14,7 @@ This system saves the results, constructing the new view (with detections) in th
 ## Prerequisites
 
 ### Required software 
-* Python3
+* Python --> 3.10
 * Torch (with cuda for better performance)
 * Ultralytics (python package)
 * paho_mqtt (python package)
@@ -75,7 +75,7 @@ If you encounter any problem with the modules, setting the PYTHONPATH can be a p
 export PYTHONPATH="/path to project:${PYTHONPATH}"
 ```
 
-## API Documentation
+## Documentation
 The main classes of the API can be found inside the obs_system directory. Almost every sub-directory includes an interface with the generalized class and the scripts to use it. 
 
 > Detection Module
