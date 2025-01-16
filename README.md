@@ -1,6 +1,6 @@
 # Obstacle_Recognition_Edge_Ai
 Obstacle Recognition 
-![Version](https://img.shields.io/badge/version-0.1.0-brightgreen.svg)
+![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)
 
 
 ## Overview
@@ -37,6 +37,10 @@ Install the dependencies:
 ```sh
 pip install -r requirements.txt
 ```
+
+After installing the dependencies, the ultralytics package should be installed. 
+You should inlcude the loaders.py from the repository file in the ultralytics/data/
+directory. More information can be found below. 
 
 ## Usage Instructions 
 To execute a simple program execution which is recommended to test everything is functional:
@@ -102,10 +106,20 @@ This will be used to store the ROI implementation with lane detection. At the mo
 
 ## FAQ and Troubleshooting 
 1. Streaming approach is provided by the Ultralytics implementation which can be found in the documentation [here](https://docs.ultralytics.com/reference/engine/predictor/?h=stream#ultralytics.engine.predictor.BasePredictor.setup_model). This was tailored to yolov8 but we transformed it to work for yolov5 as well.
+
 2. Why use both model architectures? 
 > Having the option to interchange models and benchmark their performance is critical for applications that are aiming towards embedded AI platforms. 
 
-3. Why have a GUI? 
-> Because sometimes it is more clear for what to do?! 
+3. Execution failed with loaders.py not containing the required methods. 
+> We have modified the loaders.py file to include cropping & zooming in so that unnecessary data is not included 
+making the perofmance of the model better. We include the modified file in the repo. To use it, you must copy the file 
+to the ultralytics directory in your environment. Specifically, you need to copy the file to the ultralytics/data/ directory. 
+Overwrite the previouus file with this new one. 
 
-
+4. We can view the inference performance of the model based on profiling using pytorch Profiler. 
+> We have included the profiling results in the repo in the trace_ json file. To view the results we utilize the 
+viztracer package. It is included in the requirements.txt file. To use it: 
+```sh
+vizviewer trace_yolov8.json
+```
+Then open it in the browser.

@@ -14,9 +14,16 @@ import time
 import multiprocessing
 import pdb
 
+
 class Application: 
-   
-    def __init__(self):
+
+    """
+    This class is responsible for the application logic. It creates the detection class instances, 
+    initiates the broker, and starts the detection process. It also provides metrics that show
+    the hardware utilization and the memory usage.
+    """
+
+    def __init__(self, logger):
         self.object_detector = None
         self.frame_counter = 0 
         self.model = None
@@ -24,6 +31,7 @@ class Application:
         self.model_name = None
         self.show = False 
         self.mqtt = False
+        self.logger = logger 
 
 
     def get_streaming_detector(self, model_name):
@@ -46,10 +54,11 @@ class Application:
     
 
     def yolov5_streaming(self, opt):
-        if self.model_name != "yolov5n" and self.model_name != "yolov5s":
-            model_weights = "yolov5n" + ".pt"
+        # If the model chosen is over the medium model, the model weights are changed to the smallest model.
+        if self.model_name != "yolov5n" and self.model_name != "yolov5s" and self.model_name != "yolov5m":
+            model_weights = "yolov5n" + ".pt" 
         else:
-            model_weights = self.model_name + ".pt"
+            model_weights = self.model_name + ".pt" 
         
         self.streamer = Yolov5Streamer(DEFAULT_CFG, {}, None)
         self.streamer.setup_model(model=model_weights, verbose=False, opt=opt)
@@ -57,25 +66,26 @@ class Application:
 
 
     def yolov8_streaming(self, opt):
-        if self.model_name != "yolov8n" and self.model_name != "yolov8s":
+        # If the model chosen is over the medium model, the model weights are changed to the smallest model.
+        if self.model_name != "yolov8n" and self.model_name != "yolov8s" and self.model_name != "yolov8m":
             model_weights = "yolov8n" + ".pt"
         else:
             model_weights = self.model_name + ".pt"
+
         self.streamer = Yolov8Streamer(DEFAULT_CFG, {}, None)
         self.streamer.setup_model(model=model_weights, verbose=False, opt=opt)
         self.model = self.streamer.model
 
 
     def setup_process(self, source, args): 
-        self.process_memory = psutil.Process(os.getpid())
         pynvml.nvmlInit()
+        self.process_memory = psutil.Process(os.getpid())
         self.handle = pynvml.nvmlDeviceGetHandleByIndex(0)
         self.source = os.path.join(self.parent_path, source) if os.path.isfile(source) else source
         DEFAULT_CFG.show = args.show if args.show is not None else False
         DEFAULT_CFG.verbose = args.verbose if args.verbose is not None else False
         self.mqtt = args.mqtt if args.mqtt is not None else False 
         self.start_time = time.time()
-
         tracemalloc.start()
         return 
 
@@ -105,10 +115,10 @@ class Application:
         self.statistics()
         if isinstance(self.source, str):
             # length_of_film = self.get_length_of_film(self.source)
-            #Streaming the video as before             
+            # Streaming the video as before             
             self.streamer(source=self.source, model=model, stream=self.stream, mqtt_broker=self.mqtt_interface) # e(source=0, model=model_weights, stream=True)                
             return self.streamer.results
-
+        
         raise ValueError("Only string is supported as source")
     
 
@@ -127,13 +137,14 @@ class Application:
 
 
     def statistics(self):
+        self.logger.info(" Performance metrics ")
         end_time = time.time()
         mem_info = pynvml.nvmlDeviceGetMemoryInfo(self.handle)
         total_gpu_mem = mem_info.total / (1024 ** 2)  # Convert bytes to MB
         used_gpu_mem = mem_info.used / (1024 ** 2)
         free_gpu_mem = mem_info.free / (1024 ** 2)
         current, peak = tracemalloc.get_traced_memory()
-        print(f"-------------------------------------")
+        print(f"------------------------------------------------------------------------------------")
         print(f"|  Total Inference time: {end_time - self.start_time} seconds ")
         print(f"|  Current Environment RAM usage (Psutil): {self.process_memory.memory_info().rss / (1024**2)} MB.")
         print(f"|  Current memory usage (Tracemalloc): {current / (1024 ** 2):.2f} MB.")
@@ -141,11 +152,11 @@ class Application:
         print(f"|  Total GPU memory: {total_gpu_mem:.2f} MB")
         print(f"|  Used GPU memory: {used_gpu_mem:.2f} MB")
         print(f"|  Free GPU memory: {free_gpu_mem:.2f} MB")
-        print(f"-------------------------------------")
+        print(f"------------------------------------------------------------------------------------")
 
 
     def close_app(self): 
-
+        self.logger.info("Terminating the application...")
         #Display GPU usage after execution
         self.statistics()
 
@@ -154,7 +165,7 @@ class Application:
             self.mqtt_interface.client.loop_stop()
             self.mqtt_interface.client.disconnect()
 
-
         pynvml.nvmlShutdown()
+        tracemalloc.stop()
 
 
