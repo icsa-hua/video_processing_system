@@ -25,11 +25,11 @@ Works on WSL and Linux.
 
 Clone the repository from the default branch:
 ```sh
-git clone -b feature/streaming-ROI https://github.com/icsa-hua/Obstacle_Recognition_Edge_Ai.git
+git clone -b feature/streaming-ROI https://github.com/icsa-hua/video_processing_system.git
 ```
 Navigate to the project directory:
 ```sh
-cd Obstacle_Recognition_Edge_Ai
+cd video_processing_system
 ```
 > NOTE: You should consider using a virtual environment. [Miniconda](https://docs.anaconda.com/miniconda/) is a great and easy way to handle the venv. 
 
@@ -68,7 +68,6 @@ You can opt to not use the MQTT broker to get better performance from the model.
 For the same reasoning you can opt to not show the results during inference, or print out the performance from the inference of batches. Simply do not include the ```--show``` or ```--verbose``` arguments. 
 
 Finally there is the option to use tracking which is the default program execution ```--type=tracking``` (recommended to not change). 
-
 
 
 If you encounter any problem with the modules, setting the PYTHONPATH can be a potential solution:
