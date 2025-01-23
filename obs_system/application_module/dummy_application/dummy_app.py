@@ -170,10 +170,3 @@ class Application:
         pynvml.nvmlShutdown()
         tracemalloc.stop()
 
-
-    def launch_streamlit_app(self, model): 
-        
-
-        import subprocess, json 
-        os.environ[""]
-        subprocess.run(["streamlit", "run", "web_interface.py", "--app",self,"--model",model], check=True)
