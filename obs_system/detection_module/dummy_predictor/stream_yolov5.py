@@ -15,12 +15,10 @@ import torch
 import numpy as np
 import cv2  
 import re 
-import pdb
-import torchvision
+import torchvision.ops as operation
 import warnings
 import os
 import time
-import gc
 from shapely.geometry.point import Point
 
 
@@ -52,20 +50,21 @@ class Yolov5Streamer(YOLOStreamer):
         return torch.tensor(x).to(self.device) if isinstance(x, np.ndarray) else x
 
 
-    def __call__(self, source=None, model=None, stream=False, mqtt_broker=None,  *args, **kwargs):
+    def __call__(self, source=None, model=None, stream=False, mqtt_broker=None, producer_flag=None, queue=None, *args, **kwargs):
         """Performs inference on an image, video or stream."""
         self.mqtt_interface = mqtt_broker
-        
-        # self.args.show = True if os.path.isfile(source) else False
-        self.args.show = True
         self.args.stream_buffer = True 
         try: 
-            self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if os.path.isfile(source) else source, model=model)
+            self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if os.path.isfile(source) else source,
+                             model=model,
+                             producer_flag=producer_flag,
+                             queue=queue)
         except KeyboardInterrupt as ke: 
             warnings.warn(KeyboardInterrupt.__doc__)
+            if producer_flag is not None: 
+                producer_flag.value=False
+            cv2.destroyAllWindows()
             return 
-
-        # return list(self.stream_inference(source, model, *args, **kwargs)) # Old way of inferencing
 
 
     def pre_transform(self, im): 
@@ -106,7 +105,7 @@ class Yolov5Streamer(YOLOStreamer):
                     if self.args.visualize and (not self.source_type.tensor)
                     else False
                     )
-            return self.model.track(im, augment=self.args.augment, visualize=visualize,embed=self.args.embed, conf=0.3, iou=0.5, show=False, tracker="bytetrack.yaml", stream_buffer=True)
+            return self.model.track(im, augment=self.args.augment, visualize=visualize,embed=self.args.embed, conf=0.4, iou=0.5, verbose=False, show=False,persist=True, tracker="bytetrack.yaml", stream_buffer=self.args.stream_buffer)
 
         else: #Autoshape
             return [self.model(im,augment=self.args.augment)]
@@ -116,8 +115,8 @@ class Yolov5Streamer(YOLOStreamer):
         return super().postprocess(preds, img, orig_imgs) 
 
 
-    def predict_cli(self, source=None, model=None): 
-        return super().predict_cli(source,model) #sourcery skip: remove-empty-nested-block noqa
+    def predict_cli(self, source=None, model=None, producer_flag=None, queue=None): 
+        return super().predict_cli(source, model, producer_flag, queue) #sourcery skip: remove-empty-nested-block noqa
 
 
     def setup_source(self,source=""):
@@ -125,7 +124,8 @@ class Yolov5Streamer(YOLOStreamer):
         """Sets up source and inference mode."""
         self.imgsz = check_imgsz(self.args.imgsz, stride=self.model.stride if not isinstance(self.model, YOLO) else  self.stride, min_dim=2)  # check image size
         self.transform = (
-            getattr(self.model.model,
+            getattr(
+                self.model.model,
                 "transforms",
                 classify_transforms(self.imgsz[0], crop_fraction=self.args.crop_fraction)
             )
@@ -185,15 +185,15 @@ class Yolov5Streamer(YOLOStreamer):
             warnings.warn("No Detections were applicable from the model...")
             return [] 
         
-        return torchvision.ops.nms(detections,scores,iou_threshold=iou) 
+        return operation.nms(detections,scores,iou_threshold=iou) 
 
 
     @smart_inference_mode()
-    def stream_inference(self, source=None, model=None, *args, **kwargs):
+    def stream_inference(self, source, model, producer_flag, queue, *args, **kwargs):
         
         """Streams real-time inference on camera feed and saves results to file."""
         if self.args.verbose:
-            LOGGER.info("WARNING")
+            LOGGER.info("")
 
         with self._lock: #for thread-safe inference
 
@@ -213,7 +213,11 @@ class Yolov5Streamer(YOLOStreamer):
                 self.done_warmup = True 
 
             self.seen, self.windows, self.batch = 0, [], None 
-            profilers = [ops.Profile(device=self.device) for _ in range(3)]
+            profilers = (
+                ops.Profile(device=self.device),
+                ops.Profile(device=self.device),
+                ops.Profile(device=self.device),
+            )
 
             self.run_callbacks("on_predict_start")
             activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
@@ -221,11 +225,11 @@ class Yolov5Streamer(YOLOStreamer):
                 self.run_callbacks("on_predict_batch_start")
                 paths, im0s, s = self.batch
                 
-                #Preprocess
+                # Preprocess 
                 with profilers[0]: 
                     images = self.preprocess(im0s)
 
-                #inference 
+                # Inference 
                 with profilers[1]: 
                     if self.seen == 0: 
                         with profile(activities=activities) as prof: 
@@ -238,7 +242,7 @@ class Yolov5Streamer(YOLOStreamer):
                         yield from [preds] if isinstance(preds, torch.Tensor) else preds # yield embedding tensors 
                         continue 
 
-                #postprocess 
+                # Postprocess 
                 with profilers[2]: 
                     self.results = self.postprocess(preds, images, im0s)
 
@@ -252,23 +256,31 @@ class Yolov5Streamer(YOLOStreamer):
                 n = len(im0s)
 
                 for i in range(n): 
-                    self.seen +=1 
+                    self.seen += 1 
                     if isinstance(self.results[i], Results):
                         self.results[i].speed = {
-                            "preprocess":profilers[0].dt * 1e3 /n, 
-                            "inference": profilers[1].dt *1e3 / n, 
-                            "postprocess":profilers[2].dt * 1e3 /n
+                            "preprocess": profilers[0].dt * 1e3 / n, 
+                            "inference": profilers[1].dt * 1e3 / n, 
+                            "postprocess": profilers[2].dt * 1e3 / n
                         }
                     else: 
                         self.speed = {
-                            "preprocess":profilers[0].dt * 1e3 /n, 
-                            "inference": profilers[1].dt *1e3 / n, 
-                            "postprocess":profilers[2].dt * 1e3 /n
+                            "preprocess": profilers[0].dt * 1e3 / n, 
+                            "inference": profilers[1].dt * 1e3 / n, 
+                            "postprocess": profilers[2].dt * 1e3 / n
                         }
 
                     if self.args.verbose or self.args.save or self.args.save_txt or self.args.show: 
                         s[i] += self.write_results(i, Path(paths[i]), images, im0s, s)
-                
+                        if producer_flag is not None: 
+                            producer_flag.value = True
+                        if self.proc_image is not None and queue is not None:
+                            queue.put(self.proc_image)
+                        elif self.proc_image is None and queue is not None: 
+                            queue.put(None)    
+                        time.sleep(0.01)
+
+
                 # Print batch results 
                 if self.args.verbose: 
                     LOGGER.info("\n".join(s))
@@ -374,9 +386,9 @@ class Yolov5Streamer(YOLOStreamer):
                 else: 
                     self.track_history[track_id].append(bbox_center)
 
-                if len(self.track_history[track_id]) > 30:
-                    self.track_history[track_id].pop(list(self.track_history.keys())[0])
-
+                if len(self.track_history) > 30:
+                    self.track_history.pop(list(self.track_history.keys())[0])
+                
                 track = self.track_history[track_id]
                 self.points[cls] = np.hstack(track).astype(np.int32).reshape((-1,1,2))  
 
@@ -423,31 +435,27 @@ class Yolov5Streamer(YOLOStreamer):
         return super().show(p)
 
 
-    def run_callbacks(self, event: str): 
+    def run_callbacks(self, event): 
         return super().run_callbacks(event)
 
 
-    def add_callback(self, event: str, func): 
+    def add_callback(self, event, func): 
         return super().add_callback(event, func)
     
 
     def calculate_padding(self, original_height, original_width, target_dimension):
-        # Calculate the scale needed to fit the width and height into the target dimension
-        scale_for_width = target_dimension / original_width
-        scale_for_height = target_dimension / original_height
 
+        # Calculate the scale needed to fit the width and height into the target dimension
         # Determine which scale to use (the one that fits the image entirely within the target box)
-        scale_used = min(scale_for_width, scale_for_height)
+        scale_used = min(target_dimension / original_width, target_dimension / original_height)
 
         # Calculate the effective width and height after scaling
+        # Calculate padding by subtracting the effective dimensions from the target dimension
         effective_width = original_width * scale_used
         effective_height = original_height * scale_used
 
-        # Calculate padding by subtracting the effective dimensions from the target dimension
-        pad_x = target_dimension - effective_width
-        pad_y = target_dimension - effective_height
+        return target_dimension - effective_width, target_dimension - effective_height, scale_used
 
-        return pad_x, pad_y, scale_used
     
 
     def box_creation(self, results, i, r, shape): 
@@ -458,10 +466,10 @@ class Yolov5Streamer(YOLOStreamer):
                     results[i, 0, r] + results[i, 2, r],
                     results[i, 1, r] + results[i, 3, r]]
         
-        return [results[0, :] - results[2, :]/2,
-                results[1, :] - results[3, :]/2,
-                results[0, :] + results[2, :],
-                results[1, :] + results[3, :]]
+        return [results[0, r] - results[2, r]/2,
+                results[1, r] - results[3, r]/2,
+                results[0, r] + results[2, r],
+                results[1, r] + results[3, r]]
 
 
     def scale_boxes(self, boxes, pad_x, pad_y, scale): 
@@ -475,7 +483,7 @@ class Yolov5Streamer(YOLOStreamer):
         boxes = torch.FloatTensor(boxes)
         scores = torch.FloatTensor(scores)
         class_ids = torch.LongTensor(class_ids)
-        result_boxes = self.non_max_suppression(opt=None, detections=boxes,scores=scores, conf=0.4, iou=0.45, thr=0.5)
+        result_boxes = self.non_max_suppression(opt=None, detections=boxes,scores=scores, conf=0.4, iou=0.25, thr=0.5)
         if len(result_boxes)==0 or len(boxes)==0: 
                 return [],[],[]
         return boxes[result_boxes], scores[result_boxes], class_ids[result_boxes]
@@ -486,26 +494,6 @@ class Yolov5Streamer(YOLOStreamer):
             return results[i, 5:, r]
         return torch.argmax(results, axis=0)
     
-
-    # def iteration_rows(self, results, frame_index, shape, height, width, conf_thr=0.4): 
-        
-    #     high_conf_mask = results[4,:] > conf_thr 
-    #     results = results[:, high_conf_mask]
-    #     class_probs=results[5:,:]
-    #     pad_x,pad_y,scale = self.calculate_padding(height,width,640)
-    #     boxes = self.box_creation(results, frame_index, 0, shape)
-    #     class_ids = self.class_scores_creation(class_probs, frame_index, 0, shape)
-    #     class_confs = class_probs[class_ids, torch.arange(results.shape[1])]
-    #     scores = results[4,:]
-
-    #     try: 
-    #         # boxes, scores, class_ids = self.data_to_tensor_filter(boxes=boxes, scores=scores, class_ids=class_ids)
-    #         boxes = self.scale_boxes(boxes, pad_x=pad_x, pad_y=pad_y, scale=scale)
-    #         return torch.stack((torch.tensor(boxes[0]),torch.tensor(boxes[1]),torch.tensor(boxes[2]),torch.tensor(boxes[3]),scores, class_ids), axis=-1), class_ids
-
-    #     except:
-    #         boxes, scores,class_ids  = [],[],[]
-    #         return torch.empty((0,6)),class_ids
         
     def iteration_rows(self, results, frame_index, shape, height, width, conf_thr=0.4): 
         boxes, class_ids, scores = [],[],[]
@@ -533,5 +521,7 @@ class Yolov5Streamer(YOLOStreamer):
     def count_regions(self) -> list:
         return super().count_regions()
     
+    
     def mouse_callback(self, event, x, y, flags, param) -> None:
         return super().mouse_callback(event, x, y, flags, param)   
+    

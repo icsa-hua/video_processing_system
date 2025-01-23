@@ -20,7 +20,6 @@ from typing import Union, List, Any
 from pathlib import Path 
 import pynvml
 import logging
-import pdb
 
 
 class YOLOStreamer(ABC): 
@@ -48,8 +47,8 @@ class YOLOStreamer(ABC):
         
         self.done_warmup = False
         
-        if self.args.show:
-            self.args.show = check_imshow(warn=True)
+        # if self.args.show:
+        #     self.args.show = check_imshow(warn=True)
 
         self.process_memory = psutil.Process(os.getpid())
         self.callbacks = _callbacks or callbacks.get_default_callbacks() 
@@ -71,6 +70,7 @@ class YOLOStreamer(ABC):
         self.txt_path = None 
         self._lock = threading.Lock() 
         self.orig_shape = None 
+        self.proc_image = None
         self.points = dict() 
 
         #Counting Regions
@@ -143,7 +143,7 @@ class YOLOStreamer(ABC):
     
     
     @abstractmethod
-    def predict_cli(self, source:str, model:str)->None: 
+    def predict_cli(self, source:str, model:str, producer_flag:Any=None, queue:Any=None)->None: 
         """
         Method used for Command Line Interface (CLI) prediction.
 
@@ -155,7 +155,7 @@ class YOLOStreamer(ABC):
             Do not modify this function or remove the generator. The generator ensures that no outputs are
             accumulated in memory, which is critical for preventing memory issues during long-running predictions.
         """
-        gen = self.stream_inference(source, model)
+        gen = self.stream_inference(source, model, producer_flag, queue)
         for _ in gen: 
             pass 
         
@@ -184,7 +184,7 @@ class YOLOStreamer(ABC):
 
     @abstractmethod
     @smart_inference_mode()
-    def stream_inference(self, source:str, model:str, *args, **kwargs)->None:
+    def stream_inference(self, source:str, model:str,producer_flag:Any=None, queue:Any=None, *args, **kwargs)->None:
         pass
 
 
@@ -258,8 +258,12 @@ class YOLOStreamer(ABC):
             cv2.resizeWindow(p, im.shape[1], im.shape[0])
 
         im = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
-        cv2.imshow(p,im)
-        cv2.waitKey(300 if self.dataset.mode == 'image' else 1)
+        if DEFAULT_CFG.gui:
+            cv2.destroyAllWindows()
+            self.proc_image = im
+        else:
+            cv2.imshow(p,im)
+            cv2.waitKey(300 if self.dataset.mode == 'image' else 1)
 
 
     @abstractmethod
@@ -321,4 +325,3 @@ class YOLOStreamer(ABC):
                 if self.current_region is not None and self.current_region["dragging"]:
                     self.current_region["dragging"] = False
 
-            
