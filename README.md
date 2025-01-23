@@ -81,6 +81,8 @@ This will open a web interface to receive your inputs and
 view the processed video. An example can be seen below: 
 
 ![Screenshot 2025-01-23 104120](https://github.com/user-attachments/assets/ade0d614-d96b-4a41-b2cd-480b5755ae2f)
+
+
 The pipeline initiates both the fast api server and the streamlit interface. To use the program for a stream it is recommended to use the .m3u8 stream format. 
 
 Now if the interface was connected to the backend server, you should be able to see the results of the inference. 
