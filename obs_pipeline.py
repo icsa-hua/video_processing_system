@@ -1,6 +1,6 @@
 from obs_system.application_module.dummy_application.dummy_app import Application
-from obs_system.application_module.dummy_application.worker import MainWindow
 import os
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  #suppress warnings. 
 from silence_tensorflow import silence_tensorflow
 silence_tensorflow()
@@ -9,7 +9,6 @@ import cv2
 import sys
 import argparse
 import logging
-import pdb
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,7 +19,7 @@ def main():
     
     argparser = argparse.ArgumentParser(description=__doc__)
     argparser.add_argument('--name', metavar='M', default='yolov8', help='Model to use (Yolov5, Yolov8 (Default), MaskRCNN, ONNX (yolov5, yolov8))')
-    argparser.add_argument('--source', metavar='S', default=None, help='Source to use - Local video path (.mp4) or stream index (key needs to be provided)')
+    argparser.add_argument('--source', metavar='S', default='samples/sample_video.mp4', help='Source to use - Local video path (.mp4) or stream index (key needs to be provided)')
     argparser.add_argument('--type', metavar='T', default='tracking', help='Use tracking with bytetracker or simple detection (recommended to leave default value)')
     argparser.add_argument('--gui', metavar='G', action=argparse.BooleanOptionalAction, help='Use GUI to select video source and model')
     argparser.add_argument('--mqtt',metavar='M', action=argparse.BooleanOptionalAction, help='Use MQTT to send data to server')
@@ -33,26 +32,43 @@ def main():
     
     args = argparser.parse_args()
 
-    if args.gui:
-        gui = MainWindow()
-        config = gui.get_configuration()
-        if config['stream'] is not None: 
-            config['stream'] = True
-        if config['source'] is None:
-            raise ValueError("Invalid video source. Please enter a valid video source.")
-        config['model_type'] = args.type
-        
-    else: 
-        if args.source == None:
-            logger.error("Invalid video source. Please enter a valid video source.")
-            exit(1)
+    if args.gui: 
+        import subprocess
+        from multiprocessing import Process
+        def start_fastapi():
+            subprocess.run([
+                "fastapi",
+                "dev",
+                "backend.py", 
+                '--reload'
+            ])
 
-        config = {
-            'model_name':args.name,
-            'stream':True, 
-            'source':args.source, 
-            'model_type':args.type
-        }
+        def start_streamlit():
+            subprocess.run(["streamlit", "run", 'web_interface.py'])
+        
+        try:
+            fastapi_process = Process(target=start_fastapi)
+            streamlit_process = Process(target=start_streamlit)
+
+            # Start processes
+            fastapi_process.start()
+            streamlit_process.start()
+            logger.info("GUI is running...")
+            fastapi_process.join()
+            streamlit_process.join()   
+            logger.info("GUI terminated...")
+        except KeyboardInterrupt as keyboard_interrupt:
+            logger.info("KeyboardInterrupt: {}".format(keyboard_interrupt))
+            sys.exit(0)
+        
+        return 
+    
+    config = {
+        'model_name':args.name,
+        'stream':True, 
+        'source':args.source, 
+        'model_type':args.type
+    }
 
     model_validation = {
         'yolo': ('autoshape', 'y5'),
@@ -72,7 +88,7 @@ def main():
 
     if model_key in model_validation and config['model_type']!="tracking":
         config['model_type'] = model_validation[model_key][0]
-  
+
     logger.info("Initial Configuration Complete...\nStarting Application...")
     
     #Initialize application object
@@ -106,10 +122,14 @@ def main():
     app.setup_logic_module()
     
     try:
-        app.setup_mqtt(topic="test/topic",
-                    broker_address="test.mosquitto.org",
-                    port=1883)
-        logger.info("MQTT interface connected...")
+        if app.mqtt:
+            app.setup_mqtt(topic="test/topic",
+                        broker_address="test.mosquitto.org",
+                        port=1883)
+            logger.info("MQTT interface connected...")
+        else: 
+            logger.info("MQTT interface not enabled.")
+            
     except Exception as e:
         logger.error(f"Error setting up MQTT: {e}")
         exit(1)
@@ -126,7 +146,7 @@ def main():
         logger.error(f"Exception caught: {e}")
         logger.error("Terminating application...")
         app.close_app()
-       
+        
 
 if __name__ == "__main__":
     main()

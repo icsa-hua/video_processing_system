@@ -3,7 +3,6 @@ from obs_system.detection_module.dummy_predictor.stream_yolov5 import Yolov5Stre
 from obs_system.detection_module.dummy_predictor.stream_yolov8 import Yolov8Streamer
 from obs_system.communication_module.mqtt_com.message_transmitter import RealMQTT
 from ultralytics.utils import DEFAULT_CFG
-
 import numpy as np 
 import warnings
 import os 
@@ -29,6 +28,7 @@ class Application:
         self.model_name = None
         self.show = False 
         self.mqtt = False
+        self.mqtt_interface = None 
         self.logger = logger 
 
 
@@ -82,6 +82,7 @@ class Application:
         self.source = os.path.join(self.parent_path, source) if os.path.isfile(source) else source
         DEFAULT_CFG.show = args.show if args.show is not None else False
         DEFAULT_CFG.verbose = args.verbose if args.verbose is not None else False
+        DEFAULT_CFG.gui = args.gui if args.gui is not None else False
         self.mqtt = args.mqtt if args.mqtt is not None else False 
         self.start_time = time.time()
         tracemalloc.start()
@@ -95,26 +96,29 @@ class Application:
         setup_func = self.get_streaming_detector(model_name)
         return setup_func(opt=opt)
         
-
+ 
     def setup_logic_module(self): 
         self.logic_module = BoundingBoxOverlapDetector()
 
 
-    def run_app(self, output_path, save, model, length_of_film=0): 
-        process_video_func = self.get_process_video()
-        return process_video_func(model=model)
-
-
-    def get_process_video(self): 
-        return  self.process_stream
+    def run_app(self, output_path, save, model, length_of_film=0, producer_flag=None, queue=None): 
+        self.statistics()
+        process_video_func = self.process_stream
+        return process_video_func(model=model, producer_flag=producer_flag, queue=queue)
           
 
-    def process_stream(self, model):
-        self.statistics()
+    def process_stream(self, model, producer_flag=None, queue=None):
+        
         if isinstance(self.source, str):
             # length_of_film = self.get_length_of_film(self.source)
-            # Streaming the video as before             
-            self.streamer(source=self.source, model=model, stream=self.stream, mqtt_broker=self.mqtt_interface) # e(source=0, model=model_weights, stream=True)                
+            # Streaming the video as before
+            self.streamer(source=self.source,
+                          model=model,
+                          stream=self.stream,
+                          mqtt_broker=self.mqtt_interface,
+                          producer_flag=producer_flag, 
+                          queue=queue) 
+                            
             return self.streamer.results
         
         raise ValueError("Only string is supported as source")
@@ -165,5 +169,4 @@ class Application:
 
         pynvml.nvmlShutdown()
         tracemalloc.stop()
-
 

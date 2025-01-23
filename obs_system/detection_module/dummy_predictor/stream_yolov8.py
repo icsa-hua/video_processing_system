@@ -2,7 +2,7 @@ from obs_system.detection_module.interface.streaming import YOLOStreamer
 from ultralytics.utils.files import increment_path
 from ultralytics.utils.checks import check_imgsz
 from ultralytics.data.build import load_inference_source
-from ultralytics.utils import DEFAULT_CFG,LOGGER, colorstr, ops
+from ultralytics.utils import DEFAULT_CFG, LOGGER, colorstr, ops
 from ultralytics.data.augment import classify_transforms
 from ultralytics.nn.autobackend import AutoBackend
 from ultralytics.utils.torch_utils import select_device, smart_inference_mode
@@ -15,7 +15,6 @@ import torch
 import numpy as np
 import cv2 
 import re
-import pdb
 import torchvision.ops as operation
 import warnings 
 import os
@@ -34,14 +33,14 @@ class Yolov8Streamer(YOLOStreamer):
         self.trackers = [] 
         
 
-    def warmup(self, imgsz=(1,3,640,640)): 
+    def warmup(self, imgsz=(1, 3, 640, 640)): 
         """Pytorch uses graph optimizations that are triggered with the first inference."""
 
         if self.device != 'cpu': 
             im = torch.empty(*imgsz, dtype=torch.float, device=self.device)
             y = self.model(im, show=False)
             if isinstance(y, (list,tuple)):
-                return self.from_numpy(y[0]) if len(y) == 1 else [self.from_numpy(z) for z in y]
+                return self.from_numpy(y[0]) if len(y) == 1 else [self.from_numpy(x) for x in y]
             else: 
                 return self.from_numpy(y)
             
@@ -50,17 +49,22 @@ class Yolov8Streamer(YOLOStreamer):
         return torch.tensor(x).to(self.device) if isinstance(x, np.ndarray) else x
 
 
-    def __call__(self, source=None, model=None, stream=False, mqtt_broker=None,  *args, **kwargs):
+    def __call__(self, source=None, model=None, stream=False, mqtt_broker=None, producer_flag=None, queue=None, *args, **kwargs):
         
         """Performs inference on an image, video or stream."""
         self.mqtt_interface = mqtt_broker
         self.args.stream_buffer = True
         try: 
-            self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if  os.path.isfile(source)  else source, model=model)
+            self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if  os.path.isfile(source)  else source,
+                             model=model,
+                             producer_flag=producer_flag,
+                             queue=queue)
         except KeyboardInterrupt as ke: 
             warnings.warn(KeyboardInterrupt.__doc__)
+            if producer_flag is not None: 
+                producer_flag.value=False
+            cv2.destroyAllWindows()
             return 
-        # return list(self.stream_inference(source, model, *args, **kwargs))  # merge list of Result into one
 
 
     def pre_transform(self, im): 
@@ -114,8 +118,8 @@ class Yolov8Streamer(YOLOStreamer):
         return super().postprocess(preds, img, orig_img)
     
     
-    def predict_cli(self, source, model): 
-        return super().predict_cli(source, model) #sourcery skip: remove-empty-nested-block noqa
+    def predict_cli(self, source, model, producer_flag=None, queue=None): 
+        return super().predict_cli(source, model, producer_flag, queue) #sourcery skip: remove-empty-nested-block noqa
 
 
     def setup_source(self, source=""): 
@@ -136,7 +140,7 @@ class Yolov8Streamer(YOLOStreamer):
             source=source,
             batch=self.args.batch,
             vid_stride=self.args.vid_stride,
-            buffer=self.args.stream_buffer,
+            buffer=self.args.stream_buffer
         )
         
         self.source_type = self.dataset.source_type
@@ -148,7 +152,6 @@ class Yolov8Streamer(YOLOStreamer):
             or any(getattr(self.dataset, "video_flag", [False]))
         ):  # videos
             LOGGER.warning(YOLOStreamer.STREAM_WARNING)
-        # self.vid_writer = {}
 
 
     def setup_model(self, model, verbose=True, opt='autobackbone'):
@@ -194,7 +197,7 @@ class Yolov8Streamer(YOLOStreamer):
         
 
     @smart_inference_mode()
-    def stream_inference(self, source, model, *args, **kwargs):
+    def stream_inference(self, source, model, producer_flag, queue, *args, **kwargs):
         
         """Streams real-time inference on camera feed and saves results to file."""
         if self.args.verbose:
@@ -216,6 +219,7 @@ class Yolov8Streamer(YOLOStreamer):
             else: 
                 self.warmup(imgsz=(1, 3, *self.imgsz))
                 self.done_warmup = True 
+
         
             self.seen, self.windows, self.batch = 0, [], None
             profilers = (
@@ -273,8 +277,16 @@ class Yolov8Streamer(YOLOStreamer):
                             "inference": profilers[1].dt * 1e3 / n,
                             "postprocess": profilers[2].dt * 1e3 / n,
                         }
-                    if self.args.verbose or self.args.save or self.args.save_txt:
+                   
+                    if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
                         s[i] += self.write_results(i, Path(paths[i]), images, im0s, s)
+                        if producer_flag is not None: 
+                            producer_flag.value = True
+                        if self.proc_image is not None and queue is not None:
+                            queue.put(self.proc_image)
+                        elif self.proc_image is None and queue is not None: 
+                            queue.put(None)    
+                        time.sleep(0.01)
 
                 # Print batch results
                 if self.args.verbose:
@@ -424,11 +436,11 @@ class Yolov8Streamer(YOLOStreamer):
         return string
     
 
-    def save_predicted_images(self, save_path, frame):
+    def save_predicted_images(self, save_path="", frame=0):
         return super().save_predicted_images(save_path, frame)
     
 
-    def show(self, p): 
+    def show(self, p=""): 
         return super().show(p)
     
 
@@ -517,9 +529,11 @@ class Yolov8Streamer(YOLOStreamer):
     def count_regions(self) -> list:
         return super().count_regions()
     
+    
     def mouse_callback(self, event, x, y, flags, param) -> None:
         return super().mouse_callback(event, x, y, flags, param)
-        
+    
+
         
 
    

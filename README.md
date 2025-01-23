@@ -19,6 +19,8 @@ This system saves the results, constructing the new view (with detections) in th
 * Ultralytics (python package)
 * paho_mqtt (python package)
 * Shapely (python package)
+* FastAPI (python package)
+* Streamlit (python package)
   
 Works on WSL and Linux. 
 ## Installation Instructions 
@@ -45,35 +47,59 @@ directory. More information can be found below.
 ## Usage Instructions 
 To execute a simple program execution which is recommended to test everything is functional:
 ```sh
-python3 obs_pipeline.py --source=(path/to/video or streaming key)
+python3 obs_pipeline.py 
 ```
+This uses the default video located in /samples
 
-> You can copy the following example:
+> To pass your own source of video use the following command:
 ```sh
-python3 obs_pipeline.py --source=samples/sample_video.mp4 --show --verbose --mqtt
+python3 obs_pipeline.py --source=samples/sample_video.mp4
 ```
 
-You can opt to use another model by changing the ```--name``` argument.  Models supported are YOLOv5 (all) and YOLOv8 (all). 
+> To see the processed video in real time use the `---show` argument: 
+```sh
+python3 obs_pipeline.py --source=samples/sample_video.mp4 --show
+```
+
+> To see the logs and the detections returned from inference use the `---verbose` argument: 
+```sh
+python3 obs_pipeline.py --source=samples/sample_video.mp4 --verbose
+```
+
+> You can opt to use another model by changing the ```--name``` argument.  Models supported are YOLOv5 (all) and YOLOv8 (all). 
 
 ```sh
-python3 obs_pipeline.py --source=(path/to/video) --name='yolov8s' 
+python3 obs_pipeline.py --source=samples/sample_video.mp4 --name='yolov8s' 
 ```
 
-You can opt to use a very simplistic GUI for easier visualization of inputs. 
+You can opt to use a web interface created with Streamlit and backend with Fast API. 
 ```sh
 python3 obs_pipeline.py --gui
 ```
 
-You can opt to not use the MQTT broker to get better performance from the model. Just do not include the ```--mqtt``` argument on execution. 
-For the same reasoning you can opt to not show the results during inference, or print out the performance from the inference of batches. Simply do not include the ```--show``` or ```--verbose``` arguments. 
+This will open a web interface to receive your inputs and 
+view the processed video. An example can be seen below: 
 
-Finally there is the option to use tracking which is the default program execution ```--type=tracking``` (recommended to not change). 
+![Screenshot 2025-01-23 104120](https://github.com/user-attachments/assets/ade0d614-d96b-4a41-b2cd-480b5755ae2f)
+
+
+The pipeline initiates both the fast api server and the streamlit interface. To use the program for a stream it is recommended to use the .m3u8 stream format. 
+
+Now if the interface was connected to the backend server, you should be able to see the results of the inference. 
+![Screenshot 2025-01-23 110806](https://github.com/user-attachments/assets/03b99a2c-e4f2-4e42-910d-e2d7c57f86af)
+
+![Screenshot 2025-01-23 110818](https://github.com/user-attachments/assets/a9e19e4a-6423-4ecd-a630-a7f8c301ed7a)
+
+You can opt to not use the MQTT broker to get better performance from the model. Just do not include the ```--mqtt``` argument on execution. 
+
+For the same reasoning you can opt to not show the results during inference, or print out the performance from the inference of batches. Simply do not include the ```--show``` or ```--verbose``` arguments. 
 
 
 If you encounter any problem with the modules, setting the PYTHONPATH can be a potential solution:
 ```sh
 export PYTHONPATH="/path to project:${PYTHONPATH}"
 ```
+
 
 ## Documentation
 The main classes of the API can be found inside the obs_system directory. Almost every sub-directory includes an interface with the generalized class and the scripts to use it. 
@@ -95,13 +121,6 @@ This is the initial execution script to deploy the necessary resources and pipel
 
 This will be used to store the ROI implementation with lane detection. At the moment this module is not utilized but can be used to detect overlaps among Bounding boxes of detected objects. 
 
-## Examples 
-## Example Result
-
-![Streaming-ROI-cleaned](https://drive.google.com/file/d/18OKldQJ1qnvZTyHh47TX0JdCDPhtYtNr/view?usp=drive_link)
-
-!https://drive.google.com/file/d/17MbK2pg84HQpuVNPFEPp-I8l5wc7liXi/view?usp=drive_link]
-
 
 ## FAQ and Troubleshooting 
 1. Streaming approach is provided by the Ultralytics implementation which can be found in the documentation [here](https://docs.ultralytics.com/reference/engine/predictor/?h=stream#ultralytics.engine.predictor.BasePredictor.setup_model). This was tailored to yolov8 but we transformed it to work for yolov5 as well.
@@ -122,3 +141,6 @@ viztracer package. It is included in the requirements.txt file. To use it:
 vizviewer trace_yolov8.json
 ```
 Then open it in the browser.
+
+5. Connection Error 
+> In some cases the local host address or the port might already be in use. Make sure that no process is occupying the port. 
