@@ -80,7 +80,7 @@ python3 obs_pipeline.py --gui
 This will open a web interface to receive your inputs and 
 view the processed video. An example can be seen below: 
 
-![Alt text](https://drive.google.com/file/d/1Flc1I6948as4J1LJFaXYZ-YgIoXocdnE/view?usp=drive_link)
+![Alt text](https://drive.google.com/file/d/11lnqE_hWCUGLJ1nVRr34-3ptMzJJGfFd/view?usp=sharing)
 
 The pipeline initiates both the fast api server and the streamlit interface. To use the program for a stream it is recommended to use the .m3u8 stream format. 
 
