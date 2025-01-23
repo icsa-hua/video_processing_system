@@ -47,8 +47,8 @@ class YOLOStreamer(ABC):
         
         self.done_warmup = False
         
-        # if self.args.show:
-        #     self.args.show = check_imshow(warn=True)
+        if self.args.show:
+            self.args.show = check_imshow(warn=True)
 
         self.process_memory = psutil.Process(os.getpid())
         self.callbacks = _callbacks or callbacks.get_default_callbacks() 
