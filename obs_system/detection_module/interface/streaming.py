@@ -18,7 +18,6 @@ import torch
 import numpy as np
 from typing import Union, List, Any
 from pathlib import Path 
-import pynvml
 import logging
 
 
@@ -78,9 +77,6 @@ class YOLOStreamer(ABC):
         self.current_region = None
 
         callbacks.add_integration_callbacks(self)
-        pynvml.nvmlInit()
-        self.handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-        print("Initialization Completed for YOLO Streaming")
         logging.info("Initialization Completed for YOLO Streaming")
 
 
