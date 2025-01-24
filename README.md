@@ -31,8 +31,7 @@ The program was developed and executed on WSL
 (Linux system) but was tested also on MAC OS. 
 
 The UI is not compatible with MAC OS due to the 
-way python handles multiprocessing pipelines (no
-need for all objects/functions to be picklable). 
+way python handles multiprocessing pipelines (need for all objects/functions to be picklable). 
 
 Works on WSL and Linux. 
 ## Installation Instructions 
