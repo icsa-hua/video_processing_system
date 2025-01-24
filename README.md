@@ -21,7 +21,19 @@ This system saves the results, constructing the new view (with detections) in th
 * Shapely (python package)
 * FastAPI (python package)
 * Streamlit (python package)
-  
+
+### Required Hardware
+The program will execute with a CPU-only systems
+however it is recommended that there is an 
+NVIDIA GPU to significantly improve performance. 
+
+The program was developed and executed on WSL
+(Linux system) but was tested also on MAC OS. 
+
+The UI is not compatible with MAC OS due to the 
+way python handles multiprocessing pipelines (no
+need for all objects/functions to be picklable). 
+
 Works on WSL and Linux. 
 ## Installation Instructions 
 
