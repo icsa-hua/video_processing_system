@@ -1,0 +1,51 @@
+import logging 
+import datetime 
+import os, sys
+
+
+def jupyter_logger(level=logging.INFO)->logging.StreamHandler: 
+    jupyter_handler = logging.StreamHandler(sys.stdout)
+    jupyter_handler.setLevel(level)
+
+    jupyter_formatter = logging.Formatter(
+        fmt="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    ) 
+    jupyter_handler.setFormatter(jupyter_formatter)
+
+    return jupyter_handler
+
+
+parent_dir = os.getcwd()
+log_dir = parent_dir + "/logs"
+
+if not os.path.exists(log_dir):
+    os.mkdir(log_dir)
+
+log_file = os.path.join(log_dir, f"log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+
+logging.basicConfig(filename=log_file, filemode='w', format='[%(asctime)a][%(levelname)s]:%(message)s', encoding='utf-8', level=logging.DEBUG, datefmt='%m/%d/%Y %I:%M:%S %p')
+logger = logging.getLogger("obs_system")
+
+# Create console handler
+ch = logging.StreamHandler()
+ch.setLevel(logging.DEBUG)  # Default console level
+
+# Create formatter
+formatter = logging.Formatter(
+    fmt="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+
+# Add formatter to handler
+ch.setFormatter(formatter)
+
+# Add handler to logger if not already added (avoids duplicate logs)
+if not logger.hasHandlers():
+    logger.addHandler(ch)
+
+jupyter_handler = jupyter_logger(level=logging.INFO)
+
+if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
+    logger.addHandler(jupyter_handler) 
+

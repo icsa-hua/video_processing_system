@@ -1,0 +1,37 @@
+version: '3.10.10'
+
+services: 
+  edgeai_ui: 
+    build: . 
+    container_name: my_cuda_container
+    runtime: nvidia 
+    deploy: 
+      resources:
+        limits:
+            memory: 2g
+
+        reservations: 
+          devices: 
+            - driver: nvidia 
+              capabilities: [gpu] 
+
+    environment: 
+    - NVIDIA_VISIBLE_DEVICES=all 
+    - NVIDIA_DRIVER_CAPABILITIES=all 
+    - LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64
+    - PATH=/usr/local/cuda-12.8/bin 
+    - CUDA_HOME=/usr/local/cuda-12.8
+    - DEBIAND_FRONTEND=noninteractive 
+    
+    tty: True 
+    image: video_processing_system:latest
+    restart: always
+    entrypoint: /bin/bash 
+    command: python -c "import torch; print(torch.cuda.is_available())"
+    volumes:
+        - "./video_processing_system/app:/app"
+    working_dir: "/app/edgeai_ui"
+    ports: 
+         - "8503:8503"
+         - "8000:8000"
+    
