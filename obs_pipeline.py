@@ -23,7 +23,7 @@ def main():
     
     argparser = argparse.ArgumentParser(description=__doc__)
     argparser.add_argument('--model_name', metavar='M', default='yolov8', help='Model to use (Yolov5, Yolov8 (Default), MaskRCNN, ONNX (yolov5, yolov8))')
-    argparser.add_argument('--source', metavar='SO', default='samples/highway_attika.mp4', help='Source to use - Local video path (.mp4) or stream index (key needs to be provided)')
+    argparser.add_argument('--source', metavar='SO', default='samples/sample_video.mp4', help='Source to use - Local video path (.mp4) or stream index (key needs to be provided)')
     argparser.add_argument('--type', metavar='T', default='tracking', help='Use tracking with bytetracker or simple detection (recommended to leave default value)')
     argparser.add_argument('--gui', metavar='G', action=argparse.BooleanOptionalAction, help='Use GUI to select video source and model')
     argparser.add_argument('--mqtt',metavar='M', action=argparse.BooleanOptionalAction, help='Use MQTT to send data to server')

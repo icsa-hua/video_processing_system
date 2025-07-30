@@ -108,7 +108,6 @@ class Yolov8Streamer(YOLOStreamer):
         )
 
         if isinstance(self.model, YOLO): 
-            logger.info("Inference started")
             return self.model.track(im, augment=self.args.augment, visualize=visualize,embed=self.args.embed, conf=0.4, iou=0.5, verbose=False, show=False, persist=True, tracker="bytetrack.yaml", stream_buffer=self.args.stream_buffer)
         
         else: 

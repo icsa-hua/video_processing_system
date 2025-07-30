@@ -2,9 +2,9 @@
 *.pt
 *.ipynb
 *.json
-Depth_Anything_ONNX
-DepthAnythingV2
-ByteTrack
+Depth_Anything_ONNX/
+DepthAnythingV2/
+ByteTrack/
 runs
 video_processing_system
 __pycache__ 
@@ -18,4 +18,5 @@ samples/mask_background.mp4
 samples/output.mp4
 output.mp4
 mqtt_credentials
-
+assets/
+vps_env2

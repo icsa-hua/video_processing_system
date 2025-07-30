@@ -8,7 +8,7 @@ with open("requirements.txt", "r") as file:
 
 setuptools.setup(
     name="VIDPS",
-    version="0.1.0",
+    version="0.1.1",
     description="A package for a video processing system", 
     long_description=long_description,
     long_description_content_type="text/markdown",

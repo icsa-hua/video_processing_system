@@ -34,6 +34,7 @@ The UI is not compatible with MAC OS due to the
 way python handles multiprocessing pipelines (need for all objects/functions to be picklable). 
 
 Works on WSL and Linux. 
+
 ## Installation Instructions 
 
 Clone the repository from the default branch:
@@ -42,6 +43,7 @@ git clone -b feature/streaming-ROI https://github.com/icsa-hua/video_processing_
 ```
 Navigate to the project directory:
 ```sh
+
 cd video_processing_system
 ```
 > NOTE: You should consider using a virtual environment. [Miniconda](https://docs.anaconda.com/miniconda/) is a great and easy way to handle the venv. 

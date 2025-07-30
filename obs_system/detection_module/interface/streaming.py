@@ -94,7 +94,8 @@ class YOLOStreamer(ABC):
         self._lock = threading.Lock()
         self.mqtt_interface:Any = None
         self.callbacks = _callbacks or callbacks.get_default_callbacks() 
-        
+        self.cropped_image_dirname = f'cropped_trial_{np.random.randint(44)}'
+         
         #Counting Regions
         self.current_region = None
 
@@ -284,6 +285,7 @@ class YOLOStreamer(ABC):
                 paths = [paths[i] for i in filtered_indices]
                 s = [s[i] for i in filtered_indices]
                 tmp_im0s = [im0s[i] for i in filtered_indices]
+                
                 # Preprocess
                 with profilers[0]:
                     images = self.preprocess(tmp_im0s)
@@ -317,7 +319,6 @@ class YOLOStreamer(ABC):
                     fps = self.dataset.fps if self.dataset.mode == "video" else 30 
                     self.logic_module["DAV2"].detect(images, fps, "runs/detect/DI_results/dav2_detections" )
 
-
                 for i in range(n):
                     self.seen += 1
                     if isinstance(self.results[i], Results):
@@ -332,6 +333,8 @@ class YOLOStreamer(ABC):
                             "inference": profilers[1].dt * 1e3 / n,
                             "postprocess": profilers[2].dt * 1e3 / n,
                         }
+
+
                     if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
                         s[i] += self.write_results(i, Path(paths[i]), images, im0s, s)
                         if producer_flag is not None: 
@@ -342,7 +345,8 @@ class YOLOStreamer(ABC):
                             queue.put(None)    
                         time.sleep(0.08)
 
-                    # Print batch results
+                    self.capture_object_boxes(i, im0s[i], self.results[i], cropped_dirname=self.cropped_image_dirname) 
+                
                 if self.args.verbose:
                     logger.info("\n".join(s))
 
@@ -369,7 +373,7 @@ class YOLOStreamer(ABC):
         
         self.run_callbacks("on_predict_end")
 
-
+    
     @abstractmethod
     def write_results(self, i:Any, p:Any, im:Any, original_images:Any, s:Any)->str:
         """Write inference results to a file or directory."""
@@ -544,6 +548,51 @@ class YOLOStreamer(ABC):
     def add_callback(self, event: str, func:Any)->None: 
         self.callbacks[event].append(func)
 
+    
+    def capture_object_boxes(self,i, image,results, cropped_dirname): 
+
+        cropped_objects = [] 
+
+        mask = np.zeros_like(image)
+        orig_h, orig_w = image.shape[:2]
+        
+        input_shape = results.orig_shape 
+        infer_h, infer_w = input_shape 
+
+        # Calculate resize ratio and padding used in letterboxing
+        scale = min(infer_w / orig_w, infer_h / orig_h)
+        pad_w = (infer_w - orig_w * scale) / 2
+        pad_h = (infer_h - orig_h * scale) / 2
+
+        
+
+        cropped_objects = []
+        for i, box in enumerate(results.boxes):
+            x1, y1, x2, y2 = map(float, box.xyxy[0])
+
+        # Remove padding and rescale back to original image size
+            x1 = int((x1 - pad_w) / scale)
+            x2 = int((x2 - pad_w) / scale)
+            y1 = int((y1 - pad_h) / scale)
+            y2 = int((y2 - pad_h) / scale)
+
+        # Clip to original image boundaries
+            x1, x2 = max(0, x1), min(orig_w, x2)
+            y1, y2 = max(0, y1), min(orig_h, y2)
+
+            mask[y1:y2,x1:x2] = image[y1:y2,x1:x2]
+
+        cropped_image_dir = os.path.join(os.getcwd(), 'assets') 
+        if not os.path.exists(cropped_image_dir) : 
+            os.mkdir(cropped_image_dir) 
+
+        cropped_image_dir = os.path.join(cropped_image_dir, cropped_dirname) 
+        if not os.path.exists(cropped_image_dir): 
+            os.mkdir(cropped_image_dir) 
+        save_cropped_img = f"{cropped_image_dir}/masked_frame_{i+np.random.randint(10000)}.jpg"
+        print(save_cropped_img)
+        cv2.imwrite(save_cropped_img, mask) 
+        self.results[i].cropped_objects = cropped_objects
 
     # @abstractmethod
     # def count_regions(self) -> list: 
