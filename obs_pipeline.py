@@ -126,7 +126,7 @@ def main():
 
         return 
     
-
+    args.type = 'autobackbone' 
     config = {
         'model_name':args.model_name,
         'stream':True, 

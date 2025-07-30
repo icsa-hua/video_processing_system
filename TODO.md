@@ -4,7 +4,7 @@
 
 ## TODO 
 * [] Fix: Autobackbone model issue, tensor to Results 
-* [] Add: Cropping of inference image to cars 
+* [x] Add: Cropping of inference image to cars 
 * [] Add: Concurrent inference of 360 camera frames 
 * [] Add: Jetson docker container 
 * [] Fix: Readme.md Update 
