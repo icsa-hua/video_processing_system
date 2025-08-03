@@ -43,7 +43,9 @@ def check_model_name(model_key:str,condition:str,condition_type:str):
         'yolo5': ('autoshape', 'y5'),
         'yolo8': ('autobackbone', 'y8'),
         'yolov5m': ('autoshape', 'y5'),
-        'yolov8m': ('autobackbone', 'y8')
+        'yolov8m': ('autobackbone', 'y8'),
+        'onnx' : ('compressed', 'y8'), 
+        'compressed' : ('compressed', 'y8') 
     }
     if model_key in model_validation and condition==condition_type:
             return model_validation[model_key][0]

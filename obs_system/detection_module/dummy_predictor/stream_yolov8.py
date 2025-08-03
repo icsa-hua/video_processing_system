@@ -56,7 +56,6 @@ class Yolov8Streamer(YOLOStreamer):
                              queue=queue)
             
         except KeyboardInterrupt as ke: 
-            warnings.warn(KeyboardInterrupt.__doc__)
             if producer_flag is not None: 
                 producer_flag.value=False
             if self.logic_module is not None and self.logic_module["DAV2"] is not None:

@@ -17,3 +17,9 @@
 - Integrate DepthAnythingV2 
 - ByteTracker into the compressed models. 
 
+
+## NOTES 
+- Compressed integration needs to adjust Results. 
+- Integration needs alignment with streaming.py and dummy_app.py 
+
+

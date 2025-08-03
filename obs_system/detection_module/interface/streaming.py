@@ -306,8 +306,7 @@ class YOLOStreamer(ABC):
                 # Postprocess
                 with profilers[2]:
                     self.results = self.postprocess(preds, images, im0s)
-                
-                import pdb;pdb.set_trace()
+
 
                 if not isinstance(self.results[0], Results):
                     self.results = self.results[0]

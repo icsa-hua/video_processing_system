@@ -22,3 +22,6 @@ yt_dlp
 viztracer
 lap 
 ipykernel
+trackers
+onnx 
+onnxruntime

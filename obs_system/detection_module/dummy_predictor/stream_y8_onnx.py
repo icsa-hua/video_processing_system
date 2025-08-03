@@ -1,0 +1,395 @@
+from obs_system.detection_module.interface.streaming import YOLOStreamer
+from obs_system.utils.logger import logger 
+from obs_system.compressed.interface.compressed_yolo import CompressedYOLO 
+from obs_system.compressed.interface.convert_to_Results import ConverterResults 
+
+import os 
+import torch
+import cv2
+import time
+import numpy as np 
+import supervision as sv
+import torchvision.ops as operation 
+ 
+from typing import Any 
+from abc import ABC, abstractmethod 
+from pathlib import Path 
+from ultralytics import YOLO
+from torch.profiler import profile, ProfilerActivity 
+from trackers import SORTTracker 
+from trackers.core.deepsort.tracker import DeepSORTTracker 
+from collections import defaultdict
+from ultralytics.utils import DEFAULT_CFG, ops, callbacks
+from ultralytics.engine.results import Results
+from ultralytics.utils.files import increment_path 
+from ultralytics.utils.torch_utils import select_device, smart_inference_mode
+from ultralytics.utils import colorstr 
+
+
+class OnnxY8Streamer(YOLOStreamer): 
+
+    def __init__(self, cfg:Any=DEFAULT_CFG, overrides=None, _callbacks=None)->None: 
+        super().__init__(cfg,overrides, _callbacks)
+
+        self.color = sv.ColorPalette.from_hex([
+            "#ffff00", "#ff9b00", "#ff8080", "#ff66b2", "#ff66ff", 
+            "#9999ff", "#3399ff", "#66ffff", "#33ff99", "#66ff66"
+            ])
+
+        self.tracker = None 
+        self.tracker_choice = 'sort' 
+        self.box_annotator = sv.BoxAnnotator(color=self.color, color_lookup=sv.ColorLookup.TRACK) 
+
+        self.CONFIDENCE_THRESHOLD = 0.5 
+        self.NMS_THRESHOLD = 0.4 
+        self.converter = ConverterResults()  
+
+
+
+    def __call__(self, source=None, model=None, logic_module=None, mqtt_broker=None,producer_flag=None, queue=None, *args, **kwargs): 
+
+        self.mqtt_interface = mqtt_broker 
+        self.args.stream_buffer = True 
+        self.logic_module = logic_module 
+
+        try: 
+            self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if os.path.isfile(source) else source, 
+                model=model, 
+                producer_flag=producer_flag, 
+                queue=queue
+            )
+
+        except KeyboardInterrupt as ke: 
+            if producer_flag is not None: 
+                producer_flag.value=False 
+            if self.logic_module is not None and self.logic_module["DAV2"] is not None: 
+                self.logic_module["DAV2"].deallocate_resources() 
+            cv2.destroyAllWindows() 
+            logger.exception(f"KeyboardInterrupt: {ke}")
+        
+        return 
+
+
+    def pre_transform(self, im): 
+        return super().pre_transform(im) 
+
+
+    def inference(self, im, *args, **kwargs): 
+        boxes, scores, class_ids = self.model(im) 
+        pad_x, pad_y, scale = self.converter.calculate_padding(self.height, self.width, 640)
+        boxes, scores, class_ids = self.converter.data_to_tensor_filter(boxes=boxes, scores=scores, class_ids=class_ids) 
+        
+        if len(boxes) != 0: 
+            boxes = self.converter.scale_boxes(
+                boxes=boxes, 
+                pad_x=pad_x,
+                pad_y=pad_y, 
+                scale=scale
+            )
+            
+            results = torch.stack(
+                    (boxes[:,0], boxes[:,1], boxes[:,2], boxes[:,3], scores, class_ids),
+                    axis=-1
+            )
+            
+            results = Results(
+                orig_img = im, 
+                path = self.source, 
+                names = self.converter.class_names, 
+                boxes = results, 
+                speed = {}, 
+                probs = class_ids
+            )
+
+            detections = sv.Detections.from_ultralytics(results) 
+            if self.tracker_choice == 'sort': 
+
+                detections = self.tracker.update(detections) 
+            else: 
+                detections = self.tracker.update(detections, im) 
+
+            detections = detections[detections.tracker_id != -1] 
+
+            return results
+
+        return Results(orig_img=im, path='', names=[], boxes=[], speed={}, probs=[])
+
+
+    def preprocess(self,im): 
+        """
+        Prepare input image before inference. 
+
+        Args: 
+            im (torch.Tensor | List(np.ndarray)): BCHW for tensor, [(HWC) x B] for list. 
+        """
+
+        not_tensor = not isinstance(im, torch.Tensor) 
+
+        if not_tensor: 
+            im = np.stack(self.pre_transform(im))
+            im = im[..., ::-1].transpose((0, 3, 1, 2))
+            im = np.ascontiguousarray(im) 
+            im = torch.from_numpy(im) 
+
+        im = im.to(self.device) 
+
+        if not isinstance(self.model, YOLO): 
+            im = im.half() if self.model.fp16 else im.float() 
+        else: 
+            im = im.float() 
+
+        if not_tensor:
+            im = im.div(255.0)  # 0 - 255 to 0.0 - 1.0
+        return im
+
+
+    def postprocess(self, preds, img, orig_img): 
+        return super().postprocess(preds, img, orig_img) 
+
+
+    def predict_cli(self, source, model, producer_flag=None, queue=None): 
+        return super().predict_cli(source, model, producer_flag, queue) 
+
+
+    def setup_source(self, source=""):
+        super().setup_source(source) 
+
+
+    def check_onnx_model(self, model_path, device):
+        if not os.path.exists(model_path):
+            model = YOLO('yolov8s.pt') 
+            model.export(
+                format="onnx",
+                imgsz=(640, 640),
+                opset=12,
+                simplify=True,
+                dynamic=False,
+                half=True,
+                device=device,
+                name="yolov8n_640_dynamic_cpu_fp16_simplified_op12",
+                )
+
+        
+    
+    def setup_model(self, model, verbose=True, opt=''): 
+
+        device = select_device(self.args.device, verbose=verbose) 
+        model_path = 'obs_system/compressed/yolov8s.onnx'
+        self.check_onnx_model(model_path, device)  
+        self.model = CompressedYOLO(model_path) 
+        [self.height, self.width] = self.model.input_height, self.model.input_width 
+
+        self.model = YOLO("yolov8s.pt") 
+        self.device = device 
+
+        if self.tracker_choice == 'sort': 
+            self.tracker = SORTTracker() 
+        else: 
+            # NOTE: This needs some adjustments after trackers latest update. 
+            self.tracker = DeepSORTTracker()
+
+        self.track_history = defaultdict(list)
+        self.stride = 32 
+        self.args.half = self.model.fp16
+        
+
+    @smart_inference_mode()
+    def stream_inference(self, source, model, producer_flag, queue, *args, **kwargs): 
+
+        if self.args.verbose: logger.info("") 
+
+        with self._lock: 
+
+            self.setup_source(source if source is not None else self.args.source)
+
+            for batch in self.dataset: 
+                paths, im0s, s = batch 
+                if self.logic_module is not None and self.logic_module["ROI"] is not None: 
+                    self.logic_module["ROI"].set_regions(im0s[0]) 
+                break 
+
+            if self.args.save or self.args.save_txt: 
+                (self.save_dir / "labels" if self.args.save_txt else  self.save_dir).mkdir(parents=True, exists_ok=True) 
+
+            self.seen, self.windows, self.batch = 0, [], None 
+            profilers = (
+                ops.Profile(device=self.device), 
+                ops.Profile(device=self.device), 
+                ops.Profile(device=self.device)
+            )
+
+            self.run_callbacks("on_predict_start") 
+            activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
+
+            for self.batch in self.dataset: 
+                self.run_callbacks("on_predict_batch_start") 
+                paths, im0s, s = self.batch 
+
+                if self.logic_module is not None and self.logic_module["ROI"] is not None: 
+                    im0s = self.logic_module["ROI"].crop_image(im0s) 
+
+                motion_flags = self.logic_module["SUBTRACTOR"].detect(im0s, threshold=500) 
+
+                filtered_indices = [i for i, m in enumerate(motion_flags) if m] 
+
+                if not filtered_indices: continue 
+
+                paths = [paths[i] for i in filtered_indices] 
+                s = [s[i] for i in filtered_indices] 
+                tmp_im0s = [im0s[i] for i in filtered_indices] 
+
+                with profilers[0]: 
+                    images = self.preprocess(tmp_im0s) 
+
+                with profilers[1]: 
+                    if self.seen == 0: 
+                        with profile(activities=activities) as prof: 
+                            preds = self.inference(images, *args, **kwargs)
+                        prof.export_chrome_trace(f"trace_{model}.json") 
+
+                    else: 
+                        preds = self.inference(images, *args, **kwargs) 
+
+                    if self.args.embed: 
+                        yield from [preds] if isinstance(preds, torch.Tensor) else preds 
+                        continue 
+
+                with profilers[2]: 
+                    self.results = self.postprocess(preds, images, im0s) 
+
+                if not isinstance(self.results[0], Results): 
+                    self.results = self.results[0]
+                    self.results = torch.reshape(self.results, self.results.shape[0], self.results.shape[2], self.results.shape[1]) 
+                
+                self.run_callbacks("on_predict_postprocess_end") 
+
+                n = len(images) 
+
+                if self.logic_module is not None and self.logic_module["DAV2"] is not None: 
+                    fps = self.dataset.fps if self.dataset.mode == "video" else 30 
+                    self.logic_module["DAV2"].dataset(images, fps, "runs/detect/DI_results/dav2_detections") 
+
+                for i in range(n): 
+                    self.seen += 1 
+                    if isinstance(self.results[i], Results): 
+                        self.results[i].speed = {
+                            "preprocess": profilers[0].dt * 1e3 / n, 
+                            "inference": profilers[1].dt * 1e3 / n, 
+                            "postprocess": profilers[2].dt * 1e3 / n, 
+                        }
+                    else: 
+                        self.speed = {
+                            "preprocess": profilers[0].dt * 1e3 / n, 
+                            "inference": profilers[1].dt * 1e3 / n, 
+                            "postprocess": profilers[2].dt * 1e3 / n, 
+                        }
+
+                    if self.args.verbose or self.args.save or self.args.save_txt or self.args.show: 
+                        s[i] += self.write_results(i, Path(paths[i]), images, im0s, s) 
+                        if producer_flag is not None: 
+                            producer_flag.value = True 
+                        if self.proc_image is not None and queue is not None: 
+                            queue.put(self.proc_image) 
+                        elif self.proc_image is None and queue is not None: 
+                            queue.put(None) 
+
+                        time.sleep(0.08) 
+
+                    self.capture_object_boxes(i,im0s[i], self.results[i], cropped_dirname=self.cropped_image_dirname)
+
+                if self.args.verbose: 
+                    logger.info("".join(s)) 
+
+                self.run_callbacks("on_predict_batch_end") 
+                yield from self.results 
+        
+        for v in self.vid_writer.values(): 
+            if isinstance(v, cv2.VideoWriter): 
+                v.release() 
+
+        if self.args.verbose and self.seen: 
+            t = tuple(x.t / self.seen * 1e3 for x in profilers) 
+            logger.info(
+                    f"Speed: %.1fms preprocess, %.1fms inference, %.1fms postprocess per image at shape "
+                    f"{(min(self.args.batch, self.seen), 3, *images.shape[2:])}" % t
+            )
+
+        if self.args.save or self.args.save_txt or self.args.save_crop: 
+            nl = len(list(self.save_dir.glob("labels/*.txt"))) 
+            s = f"\n{nl} label{'s' * (nl > 1)} saved to {self.save_dir / 'labels'}"
+            logger.info(f"Results saves to {colorstr('bold', self.save_dir)}{s}")
+
+        self.run_callbacks("on_predict_end")  
+        yield from self.results 
+
+    @abstractmethod 
+    def write_results(self, i, p, im, original_images, s)->str: 
+       return super().write_results(i, p, im, original_images, s) 
+
+
+    @abstractmethod 
+    def save_predicted_images(self, save_path="", frame=0): 
+       return super().save_predicted_images(save_path, frame) 
+
+
+
+
+
+
+
+
+
+
+
+
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

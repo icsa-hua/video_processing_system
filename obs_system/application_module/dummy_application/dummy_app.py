@@ -1,5 +1,6 @@
 from obs_system.detection_module.dummy_predictor.stream_yolov5 import Yolov5Streamer 
 from obs_system.detection_module.dummy_predictor.stream_yolov8 import Yolov8Streamer 
+from obs_system.detection_module.dummy_predictor.stream_y8_onnx import OnnxY8Streamer
 from obs_system.communication_module.mqtt_com.message_transmitter import RealMQTT
 from obs_system.logic_module.dummy_logic.depth_imaging import DepthImageProcessor
 from obs_system.logic_module.dummy_logic.region_setter import RegionSetter
@@ -52,11 +53,15 @@ class Application:
             "yolov8":  self.yolov8_streaming,
             "yolov8s": self.yolov8_streaming,
             "yolov8n": self.yolov8_streaming,
-            "yolov8m": self.yolov8_streaming
+            "yolov8m": self.yolov8_streaming, 
+            "onnx":    self.onnx_streaming, 
+            "compressed": self.onnx_streaming, 
+            "yolov8.onnx": self.onnx_streaming, 
+
         }
 
         return set_object_detector_func.get(model_name, lambda *args:None)
-    
+     
 
     def yolov5_streaming(self, opt:str):
 
@@ -89,6 +94,20 @@ class Application:
         self.model = self.streamer.model
         logger.info(f"Self model is of type {type(self.model)}" )
         logger.debug(f"-- Streaming Through YoloV8 models --")
+
+    
+    def onnx_streaming(self, opt:str): 
+        if self.model_name != 'onnx' and self.model_name != 'compressed' : 
+            model_weights = "yolov8s.onnx" 
+        else: 
+            model_weights = self.model_name + ".onnx" 
+        import pdb;pdb.set_trace()
+        self.streamer = OnnxY8Streamer(DEFAULT_CFG, {}, None) 
+        self.streamer.setup_model(model=model_weightsm, verbose=self.verbose, opt=opt) 
+        self.model = self.streamer.model 
+        logger.info(f"Self model is of type {type(self.model)}" )
+        logger.debug(f"-- Streaming Through ONNX YOLO8S models --")
+
 
 
     def setup_process(self, source, args): 
