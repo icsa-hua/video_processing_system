@@ -145,7 +145,6 @@ def main():
     #Initialize the application module that interfaces source, model, mqtt and logic module 
     app = Application()
     app.setup_process(config['source'], args)
-
     try: 
         app.setup_model(
             model_name=model_key,

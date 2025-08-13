@@ -1,7 +1,6 @@
 from obs_system.detection_module.interface.streaming import YOLOStreamer
 from obs_system.utils.logger import logger 
 from obs_system.compressed.interface.compressed_yolo import CompressedYOLO 
-from obs_system.compressed.interface.convert_to_Results import ConverterResults 
 
 import os 
 import torch
@@ -17,6 +16,7 @@ from pathlib import Path
 from ultralytics import YOLO
 from torch.profiler import profile, ProfilerActivity 
 from trackers import SORTTracker 
+from torch.nn.utils.rnn import pad_sequence 
 from trackers.core.deepsort.tracker import DeepSORTTracker 
 from collections import defaultdict
 from ultralytics.utils import DEFAULT_CFG, ops, callbacks
@@ -37,13 +37,19 @@ class OnnxY8Streamer(YOLOStreamer):
             ])
 
         self.tracker = None 
-        self.tracker_choice = 'sort' 
+        self.tracker_choice = 'byte_tracker' 
         self.box_annotator = sv.BoxAnnotator(color=self.color, color_lookup=sv.ColorLookup.TRACK) 
-
+        self.source = ""
         self.CONFIDENCE_THRESHOLD = 0.5 
         self.NMS_THRESHOLD = 0.4 
-        self.converter = ConverterResults()  
 
+    
+    def warmup(self, imgsz=(1,3,640,640)): 
+        return super().warmup(imgsz)
+
+
+    def from_numpy(self, x: np.ndarray):
+        return torch.tensor(x).to(self.device) if isinstance(x, np.ndarray) else x
 
 
     def __call__(self, source=None, model=None, logic_module=None, mqtt_broker=None,producer_flag=None, queue=None, *args, **kwargs): 
@@ -74,45 +80,104 @@ class OnnxY8Streamer(YOLOStreamer):
         return super().pre_transform(im) 
 
 
-    def inference(self, im, *args, **kwargs): 
-        boxes, scores, class_ids = self.model(im) 
-        pad_x, pad_y, scale = self.converter.calculate_padding(self.height, self.width, 640)
-        boxes, scores, class_ids = self.converter.data_to_tensor_filter(boxes=boxes, scores=scores, class_ids=class_ids) 
+    def inference(self, im, orig_images, *args, **kwargs): 
+        image_boxes, image_scores, image_class_ids = self.model(im) 
+        if len(image_boxes) == 0: return [] 
+        #Boxes and the others here are lists with 16 length(for each image) 
+
+        preds = [] 
+        pad_x, pad_y, scale = self.converter.calculate_padding(self.orig_height, self.orig_width, 640)
+        for image in range(len(image_boxes)): 
         
-        if len(boxes) != 0: 
-            boxes = self.converter.scale_boxes(
-                boxes=boxes, 
-                pad_x=pad_x,
-                pad_y=pad_y, 
-                scale=scale
-            )
-            
-            results = torch.stack(
-                    (boxes[:,0], boxes[:,1], boxes[:,2], boxes[:,3], scores, class_ids),
-                    axis=-1
-            )
-            
-            results = Results(
-                orig_img = im, 
-                path = self.source, 
-                names = self.converter.class_names, 
-                boxes = results, 
-                speed = {}, 
-                probs = class_ids
-            )
+            boxes, scores, class_ids = self.converter.data_to_tensor_filter(boxes=image_boxes[image], scores=image_scores[image], class_ids=image_class_ids[image]) 
+                
+            if len(boxes) != 0: 
+                boxes = self.converter.scale_boxes(
+                    boxes=boxes, 
+                    pad_x=pad_x,
+                    pad_y=pad_y, 
+                    scale=scale
+                )
 
-            detections = sv.Detections.from_ultralytics(results) 
-            if self.tracker_choice == 'sort': 
+                #padded_boxes = pad_sequence(sequences=boxes, batch_first=True, padding_value=float(0))  
+                inf_results = torch.stack(
+                        (boxes[:,0], boxes[:,1], boxes[:,2], boxes[:,3], scores, class_ids),
+                        axis=-1
+                )
 
-                detections = self.tracker.update(detections) 
+                results = Results(
+                    orig_img = orig_images[image], 
+                    path = f"image{image}.jpg", 
+                    names = self.converter.class_names, 
+                    boxes = inf_results, 
+                    speed = {}, 
+                    probs = class_ids
+                ) 
+
+                detections = sv.Detections.from_ultralytics(results) 
+                if self.tracker_choice == 'sort': 
+                    detections = self.tracker.update(detections) 
+                elif self.tracker_choice == 'deepsort': 
+                    detections = self.tracker.update(detections, orig_images[image]) 
+                elif self.tracker_choice == 'byte_tracker': 
+                    detections = self.tracker.update_with_detections(detections) 
+                
+
+                detections = detections[detections.tracker_id != -1] 
+                del results
+                del inf_results 
+                results = self.build_results_from_detections(detections, orig_images[image], image)
+                preds.append(results)
             else: 
-                detections = self.tracker.update(detections, im) 
 
-            detections = detections[detections.tracker_id != -1] 
+                
+                results = Results(
+                    orig_img = orig_image, 
+                    path = self.source, 
+                    names = self.converter.class_names, 
+                    boxes = [], 
+                    speed = {}, 
+                    probs = []
+                )
+                preds.append(results)
 
-            return results
+        return preds
 
-        return Results(orig_img=im, path='', names=[], boxes=[], speed={}, probs=[])
+
+    def build_results_from_detections(self, detections, orig_image, image): 
+
+        if len(detections) == 0: 
+
+            results = Results(
+               orig_img=orig_image, 
+               path=self.source, 
+               names=self.converter.class_names, 
+               boxes=torch.zeros((0,6),dtype=torch.float32), 
+               speed={}, 
+            )
+            return results 
+
+
+        xyxy = torch.from_numpy(detections.xyxy).to(torch.float32)
+        scores_t = torch.from_numpy(detections.confidence).to(torch.float32) 
+        class_t = torch.from_numpy(detections.class_id).to(torch.float32) 
+        ids_t = torch.from_numpy(detections.tracker_id).to(torch.float32) 
+        inf_results = torch.stack((xyxy[:,0],xyxy[:,1],xyxy[:,2],xyxy[:,3],
+            ids_t.view(-1),
+            scores_t.view(-1), 
+            class_t.view(-1), 
+        ),  axis=-1)
+
+        results = Results(
+            orig_img=orig_image, 
+            path=f"image{image}.jpg", 
+            names=self.converter.class_names, 
+            boxes=inf_results, 
+            speed={}, 
+            probs=class_t
+        )
+
+        return results
 
 
     def preprocess(self,im): 
@@ -133,14 +198,23 @@ class OnnxY8Streamer(YOLOStreamer):
 
         im = im.to(self.device) 
 
-        if not isinstance(self.model, YOLO): 
+        if (not isinstance(self.model, YOLO) and not isinstance(self.model, CompressedYOLO)): 
             im = im.half() if self.model.fp16 else im.float() 
+
         else: 
             im = im.float() 
 
         if not_tensor:
             im = im.div(255.0)  # 0 - 255 to 0.0 - 1.0
+
+        #from torchvision.utils import save_image
+        #save_image(im,'debug.png')
+
         return im
+
+
+    def non_max_suppression(self,detections,score,iou): 
+        return super().non_max_suppression(detections, score, iou)
 
 
     def postprocess(self, preds, img, orig_img): 
@@ -158,19 +232,25 @@ class OnnxY8Streamer(YOLOStreamer):
     def check_onnx_model(self, model_path, device):
         if not os.path.exists(model_path):
             model = YOLO('yolov8s.pt') 
+            #model.export(
+            #    format="onnx",
+            #    imgsz=(640, 640),
+            #    opset=12,
+            #    simplify=True,
+            #    dynamic=True,
+            #    half=True,
+            #    device=device,
+            #    #batch=16, 
+            #    #name="yolov8n_640_dynamic_cpu_fp16_simplified_op12",
+            #     )
             model.export(
                 format="onnx",
-                imgsz=(640, 640),
-                opset=12,
-                simplify=True,
-                dynamic=False,
-                half=True,
-                device=device,
-                name="yolov8n_640_dynamic_cpu_fp16_simplified_op12",
-                )
-
-        
+                imgsz=(640), 
+                dynamic=True,
+                simplify=True
+            )
     
+
     def setup_model(self, model, verbose=True, opt=''): 
 
         device = select_device(self.args.device, verbose=verbose) 
@@ -179,25 +259,30 @@ class OnnxY8Streamer(YOLOStreamer):
         self.model = CompressedYOLO(model_path) 
         [self.height, self.width] = self.model.input_height, self.model.input_width 
 
-        self.model = YOLO("yolov8s.pt") 
         self.device = device 
 
         if self.tracker_choice == 'sort': 
             self.tracker = SORTTracker() 
-        else: 
+        elif self.tracker_choice == 'deepsort': 
             # NOTE: This needs some adjustments after trackers latest update. 
             self.tracker = DeepSORTTracker()
+        elif self.tracker_choice == 'byte_tracker': 
+            self.tracker = sv.ByteTrack() 
+        else: 
+            self.tracker_choice = 'sort' 
+            self.tracker = SORTTracker() 
 
+        self.tracker.reset()  
         self.track_history = defaultdict(list)
         self.stride = 32 
-        self.args.half = self.model.fp16
-        
+        self.args.half = 16        
+
 
     @smart_inference_mode()
     def stream_inference(self, source, model, producer_flag, queue, *args, **kwargs): 
 
         if self.args.verbose: logger.info("") 
-
+        self.source = source 
         with self._lock: 
 
             self.setup_source(source if source is not None else self.args.source)
@@ -208,8 +293,9 @@ class OnnxY8Streamer(YOLOStreamer):
                     self.logic_module["ROI"].set_regions(im0s[0]) 
                 break 
 
+            self.orig_height,self.orig_width = im0s[0].shape[:2]
             if self.args.save or self.args.save_txt: 
-                (self.save_dir / "labels" if self.args.save_txt else  self.save_dir).mkdir(parents=True, exists_ok=True) 
+                (self.save_dir / "labels" if self.args.save_txt else  self.save_dir).mkdir(parents=True) 
 
             self.seen, self.windows, self.batch = 0, [], None 
             profilers = (
@@ -244,11 +330,11 @@ class OnnxY8Streamer(YOLOStreamer):
                 with profilers[1]: 
                     if self.seen == 0: 
                         with profile(activities=activities) as prof: 
-                            preds = self.inference(images, *args, **kwargs)
+                            preds = self.inference(images, im0s, *args, **kwargs)
                         prof.export_chrome_trace(f"trace_{model}.json") 
 
                     else: 
-                        preds = self.inference(images, *args, **kwargs) 
+                        preds = self.inference(images, im0s, *args, **kwargs) 
 
                     if self.args.embed: 
                         yield from [preds] if isinstance(preds, torch.Tensor) else preds 
@@ -256,6 +342,7 @@ class OnnxY8Streamer(YOLOStreamer):
 
                 with profilers[2]: 
                     self.results = self.postprocess(preds, images, im0s) 
+                
 
                 if not isinstance(self.results[0], Results): 
                     self.results = self.results[0]
@@ -322,17 +409,19 @@ class OnnxY8Streamer(YOLOStreamer):
         self.run_callbacks("on_predict_end")  
         yield from self.results 
 
-    @abstractmethod 
+
     def write_results(self, i, p, im, original_images, s)->str: 
        return super().write_results(i, p, im, original_images, s) 
 
 
-    @abstractmethod 
-    def save_predicted_images(self, save_path="", frame=0): 
-       return super().save_predicted_images(save_path, frame) 
-
-
-
+    def empty_Results_instance(self,orig_image): 
+        return Results(
+            orig_img=orig_image,
+            path=self.source, 
+            names=self.converter.class_names,
+            boxes=torch.zeros((0,6),dtype=torch.float32), 
+            speed={}
+        )
 
 
 

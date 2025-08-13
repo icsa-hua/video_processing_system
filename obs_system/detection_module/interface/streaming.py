@@ -1,4 +1,6 @@
+from obs_system.compressed.interface.compressed_yolo import CompressedYOLO
 from obs_system.logic_module.dummy_logic.region_setter import RegionSetter
+from obs_system.compressed.interface.convert_to_Results import ConverterResults 
 from obs_system.utils.logger import logger 
 
 import re
@@ -99,6 +101,9 @@ class YOLOStreamer(ABC):
         #Counting Regions
         self.current_region = None
 
+        #ConverterResults
+        self.converter = ConverterResults() 
+
         callbacks.add_integration_callbacks(self)
         logger.info("Initialization Completed for YOLO Streaming")
 
@@ -131,7 +136,7 @@ class YOLOStreamer(ABC):
         """
         pt = None 
 
-        if isinstance(self.model, YOLO): 
+        if isinstance(self.model, YOLO) or isinstance(self.model, CompressedYOLO): 
             pt = True 
             self.stride = 32 
         else: 
@@ -182,8 +187,9 @@ class YOLOStreamer(ABC):
     @abstractmethod
     def setup_source(self, source:str)->None:
         """Sets up source and inference mode."""
-        self.imgsz = check_imgsz(self.args.imgsz, stride=self.model.stride if not isinstance(self.model, YOLO) else  self.stride, min_dim=2)  # check image size
-        
+
+        # self.imgsz = check_imgsz(self.args.imgsz, stride=self.model.stride if (not isinstance(self.model, YOLO) or not isinstance(self.model, CompressedYOLO)) else  self.stride, min_dim=2)  # check image size
+        self.imgsz = check_imgsz(self.args.imgsz, stride=self.stride,min_dim=2) 
         self.dataset = load_inference_source(
             source=source,
             batch=self.args.batch,
@@ -217,11 +223,6 @@ class YOLOStreamer(ABC):
         
         return operation.nms(detections, scores, iou_threshold=iou)            
         
-
-    @abstractmethod
-    def translate_data(self)->None:
-        pass
-
 
     @smart_inference_mode()
     def stream_inference(self, source:str, model:str, producer_flag:Any, queue:Any, *args, **kwargs):
@@ -298,7 +299,6 @@ class YOLOStreamer(ABC):
                         prof.export_chrome_trace(f"trace_{model}.json")
                     else: 
                         preds = self.inference(images, *args, **kwargs)
-
                     if self.args.embed:
                         yield from [preds] if isinstance(preds, torch.Tensor) else preds  # yield embedding tensors
                         continue
@@ -306,8 +306,7 @@ class YOLOStreamer(ABC):
                 # Postprocess
                 with profilers[2]:
                     self.results = self.postprocess(preds, images, im0s)
-
-
+                import pdb;pdb.set_trace()
                 if not isinstance(self.results[0], Results):
                     self.results = self.results[0]
                     self.results = torch.reshape(self.results, (self.results.shape[0], self.results.shape[2], self.results.shape[1]))
@@ -401,7 +400,7 @@ class YOLOStreamer(ABC):
         #Get the batch size pictures 
         result = self.results[i] 
         if isinstance(result, torch.Tensor):
-            result = self.translate_data(i, p, im, result, original_images)
+            result = self.converter.translate_data(i, p, im, result, original_images)
             if not result: 
                 return "(No Detection Found)"
         
@@ -410,7 +409,14 @@ class YOLOStreamer(ABC):
             time.sleep(0.01)
 
         result.save_dir = self.save_dir.__str__() 
-        string += f"{result.verbose()}{result.speed['inference']:.1f}ms" 
+
+        try:  
+            string += f"{result.verbose()}{result.speed['inference']:.1f}ms" 
+
+        except Exception as E:
+            print(E)
+            import pdb;pdb.set_trace()
+ 
         self.points.clear()
 
         # Update tracking history
@@ -474,7 +480,6 @@ class YOLOStreamer(ABC):
             
 
 
-    @abstractmethod
     def save_predicted_images(self, save_path:str, frame:int)->None: 
         
         im = self.plotted_img 
@@ -508,7 +513,6 @@ class YOLOStreamer(ABC):
             cv2.imwrite(save_path, im)
 
 
-    @abstractmethod
     def show(self, p=str)->None:
         im = self.plotted_img
 
@@ -539,13 +543,11 @@ class YOLOStreamer(ABC):
             cv2.waitKey(300 if self.dataset.mode == 'image' else 1)
 
 
-    @abstractmethod
     def run_callbacks(self, event:str)->None: 
         for cb in self.callbacks.get(event, []): 
             cb(self) 
 
 
-    @abstractmethod
     def add_callback(self, event: str, func:Any)->None: 
         self.callbacks[event].append(func)
 
@@ -564,8 +566,6 @@ class YOLOStreamer(ABC):
         scale = min(infer_w / orig_w, infer_h / orig_h)
         pad_w = (infer_w - orig_w * scale) / 2
         pad_h = (infer_h - orig_h * scale) / 2
-
-        
 
         cropped_objects = []
         for i, box in enumerate(results.boxes):
@@ -591,7 +591,6 @@ class YOLOStreamer(ABC):
         if not os.path.exists(cropped_image_dir): 
             os.mkdir(cropped_image_dir) 
         save_cropped_img = f"{cropped_image_dir}/masked_frame_{i+np.random.randint(10000)}.jpg"
-        print(save_cropped_img)
         cv2.imwrite(save_cropped_img, mask) 
         self.results[i].cropped_objects = cropped_objects
 

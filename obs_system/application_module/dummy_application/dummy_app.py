@@ -29,6 +29,7 @@ class Application:
 
     def __init__(self):
 
+        self.streamer:Any = None 
         self.model = None
         self.parent_path:str =  os.getcwd()
         self.model_name:str = 'yolov8s'
@@ -97,17 +98,16 @@ class Application:
 
     
     def onnx_streaming(self, opt:str): 
-        if self.model_name != 'onnx' and self.model_name != 'compressed' : 
+        if self.model_name != 'onnx' or self.model_name != 'compressed' : 
             model_weights = "yolov8s.onnx" 
         else: 
             model_weights = self.model_name + ".onnx" 
-        import pdb;pdb.set_trace()
         self.streamer = OnnxY8Streamer(DEFAULT_CFG, {}, None) 
-        self.streamer.setup_model(model=model_weightsm, verbose=self.verbose, opt=opt) 
+        self.streamer.setup_model(model=model_weights, verbose=self.verbose, opt=opt) 
+        
         self.model = self.streamer.model 
         logger.info(f"Self model is of type {type(self.model)}" )
         logger.debug(f"-- Streaming Through ONNX YOLO8S models --")
-
 
 
     def setup_process(self, source, args): 
