@@ -13,7 +13,7 @@ This system saves the results, constructing the new view (with detections) in th
 
 ## Prerequisites
 
-### Required software 
+### Utilized Software / Requirements. 
 * Python --> 3.10
 * Torch (with cuda for better performance)
 * Ultralytics (python package)
@@ -21,41 +21,40 @@ This system saves the results, constructing the new view (with detections) in th
 * Shapely (python package)
 * FastAPI (python package)
 * Streamlit (python package)
+* ONNX - ONNXRuntime 
+
+### Installation of Requirements 
+There are two ways to go about it: 
+
+1. Use `pip install -r requirements.txt` after cloning the module 
+2. Install it as a package with: 
+```sh 
+pip install -e .
+```
+
+You can change what is installed with the __setup.py__. 
 
 ### Required Hardware
-The program will execute with a CPU-only systems
+The program can execute with a CPU-only systems
 however it is recommended that there is an 
 NVIDIA GPU to significantly improve performance. 
 
-The program was developed and executed on WSL
-(Linux system) but was tested also on MAC OS. 
+Works on Unix-based systems.  
 
-The UI is not compatible with MAC OS due to the 
-way python handles multiprocessing pipelines (need for all objects/functions to be picklable). 
-
-Works on WSL and Linux. 
 
 ## Installation Instructions 
 
 Clone the repository from the default branch:
 ```sh
-git clone -b feature/streaming-ROI https://github.com/icsa-hua/video_processing_system.git
+git clone -b clean-branch https://github.com/icsa-hua/video_processing_system.git
 ```
 Navigate to the project directory:
 ```sh
 
 cd video_processing_system
 ```
-> NOTE: You should consider using a virtual environment. [Miniconda](https://docs.anaconda.com/miniconda/) is a great and easy way to handle the venv. 
+[!] NOTE: You should consider using a virtual environment. 
 
-Install the dependencies:
-```sh
-pip install -r requirements.txt
-```
-
-After installing the dependencies, the ultralytics package should be installed. 
-You should inlcude the loaders.py from the repository file in the ultralytics/data/
-directory. More information can be found below. 
 
 ## Usage Instructions 
 To execute a simple program execution which is recommended to test everything is functional:
@@ -79,7 +78,8 @@ python3 obs_pipeline.py --source=samples/sample_video.mp4 --show
 python3 obs_pipeline.py --source=samples/sample_video.mp4 --verbose
 ```
 
-> You can opt to use another model by changing the ```--name``` argument.  Models supported are YOLOv5 (all) and YOLOv8 (all). 
+> You can opt to use another model by changing the ```--name``` argument.  
+[!] Models supported are YOLOv5 (all) and YOLOv8 (all) and their compressed form through ONNX. 
 
 ```sh
 python3 obs_pipeline.py --source=samples/sample_video.mp4 --name='yolov8s' 
@@ -104,9 +104,10 @@ Now if the interface was connected to the backend server, you should be able to 
 ![Screenshot 2025-01-23 110818](https://github.com/user-attachments/assets/a9e19e4a-6423-4ecd-a630-a7f8c301ed7a)
 
 You can opt to not use the MQTT broker to get better performance from the model. Just do not include the ```--mqtt``` argument on execution. 
+Using the MQTT will transmit to your designated broker information for speed (preprocessing, inference, postprocessing). 
 
-For the same reasoning you can opt to not show the results during inference, or print out the performance from the inference of batches. Simply do not include the ```--show``` or ```--verbose``` arguments. 
-
+For the same reasoning you can opt to not show the results during inference, or print out the performance from the inference of batches.
+Simply do not include the ```--show``` or ```--verbose``` arguments. 
 
 If you encounter any problem with the modules, setting the PYTHONPATH can be a potential solution:
 ```sh
@@ -124,16 +125,20 @@ Includes the YOLOStreamer interface which is used to create YOLO5Streamer/YOLO8S
 
 > Communication Module
 
-This module creates the publisher and subscriber for an MQTT communication and transmits the performance results. This will in later stages be used to transfer batches of predictions to another server for further processing. The main class here is the RealMQTT which uses the MQTTInterface interface for 4 basic methods, connect, publish, subscribe and on_connect. 
+This module creates the publisher and subscriber for an MQTT communication and transmits the performance results.
+The main class here is the RealMQTT which uses the MQTTInterface interface for 4 basic methods, connect, publish, subscribe and on_connect. 
 
 > Application Module
 
-This is the initial execution script to deploy the necessary resources and pipelines for the intended scenario as provided by the user. Takes the input arguments and deploys the detection model, creates the mqtt broker and configures the process. It also provides some statistics mostly for debugging and performance benchmarking. The class Application is the main object during execution that is used based on the configuration provided by the user. There is also a worker class that creates the optional simplistic GUI. 
+This is the initial execution script to deploy the necessary resources and pipelines for the intended scenario as provided by the user.
+Takes the input arguments and deploys the detection model, creates the mqtt broker and configures the process.
+It also provides some statistics mostly for debugging and performance benchmarking.
+The class Application is the main object during execution that is used based on the configuration provided by the user
 
 > Logic Module
 
-This will be used to store the ROI implementation with lane detection. At the moment this module is not utilized but can be used to detect overlaps among Bounding boxes of detected objects. 
-
+This is used to store the ROI implementation with lane detection.
+We are also currently examining depth imaging algorithms but will include it on later stages. 
 
 ## FAQ and Troubleshooting 
 1. Streaming approach is provided by the Ultralytics implementation which can be found in the documentation [here](https://docs.ultralytics.com/reference/engine/predictor/?h=stream#ultralytics.engine.predictor.BasePredictor.setup_model). This was tailored to yolov8 but we transformed it to work for yolov5 as well.
