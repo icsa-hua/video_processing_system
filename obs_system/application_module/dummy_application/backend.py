@@ -1,6 +1,7 @@
 from obs_system.application_module.dummy_application.dummy_app import Application
 from obs_system.utils.common import *
 from obs_system.utils.logger import logger 
+from obs_systel.utils.appraisal import StepContext 
 
 import os 
 import sys
@@ -17,11 +18,11 @@ from multiprocessing import Process, Queue, Value
 
 logging.getLogger("uvicorn.error").propagate = False
 
-app = FastAPI() 
-frame_queue = Queue(maxsize=100)
-video_processing = False 
 process = None 
+server = FastAPI() 
 application_inst = None
+video_processing = False 
+frame_queue = Queue(maxsize=100)
 
 # Define the flag as a shared variable
 producer_ready = Value('b', False)  # Boolean flag
@@ -37,10 +38,8 @@ class VideoProcessingRequest(BaseModel):
 
 def gracefully_close_server(signum, frame):
     logger.info("Terminating Server...") 
-    try: 
-        sys.exit(0)
-    except SystemExit:
-        pass
+    sys.exit(0)
+
 
 signal.signal(signal.SIGINT, gracefully_close_server)
 
@@ -48,52 +47,51 @@ signal.signal(signal.SIGINT, gracefully_close_server)
 def produce_images(args, config, queue, producer_flag):
     global application_inst
 
-    obs_app = Application()
-    obs_app.setup_process(config['source'], args)
-    
-    try:
-        model_key = config['model_name'].lower()
-        obs_app.setup_model(model_name=model_key,
-                        stream=config['stream'],
-                        opt=config['model_type'])
-        logger.debug(f"-- Model {model_key} initialized --")
+    app = Application()
 
-    except Exception as e:
-        logger.exception(f"-- Error while setting up the model: {e} --") 
-        exit(1) 
-        
-    # if obs_app.model is None: 
-    #     logger.error("Model not initialized")
-    #     raise ValueError("Model not initialized")
+    with StepContext(name='Setup Process', catch=(KeyError, ModuleNotFoundError)):
+        app.setup_process(config['source'], args)
     
-    obs_app.setup_logic_module(args)
-    try:
-        if obs_app.mqtt:
-            obs_app.setup_mqtt(topic="test/topic",
-                        broker_address="mqtt.eclipseprojects.io",
-                        port=1883)
-            logger.debug("-- MQTT interface connected --")
-        else: 
-            logger.debug("-- MQTT interface not enabled --")
-    except Exception as e:
-        logger.exception(f"-- Error setting up MQTT: {e} --")
-        sys.exit(1)
-    
-    obs_app.statistics()
-    application_inst = obs_app
+    with StepContext(name='Setup Model', catch=(OSError,ValueError)):
+        app.setup_model(
+            model_name=config['model_name'], 
+            stream=config['stream'],
+            opt=config['model_type']
+        )
 
-    if isinstance(obs_app.source,str): 
-        obs_app.streamer(
-                     source=obs_app.source,
-                     model=config['model_name'],
-                     stream=obs_app.stream,
-                     mqtt_broker=obs_app.mqtt_interface, 
-                     producer_flag=producer_flag, 
-                     queue=queue)
-        
-        obs_app.close_app()
+    if app.model is None: 
+        logger.error("Model not initialized")
+        raise ValueError("Model not initialized")
+   
+    with StepContext(name='Setup Logic',catch=(KeyError,IndexError)):
+        app.setup_logic_module(args) 
+
+    with StepContext(name='Setup MQTT', catch=(ConnectionError, TimeoutError)): 
+        if app.mqtt: 
+            app.setup_mqtt(
+                topic="test/topic", 
+                broker_address="mqtt.eclipseprojects.io",
+                port=1883
+            )
+        else: logger.debug("[MQTT] interface is disabled") 
     
-    logger.debug("-- Function produce_images finished --")
+
+    app.statistics() 
+    application_inst = app 
+
+    if isinstance(app.source,str): 
+        with StepContext(name="RunApp", catch=(RuntimeError,)): 
+            app.streamer(
+                         source=app.source,
+                         model=config['model_name'],
+                         stream=app.stream,
+                         mqtt_broker=app.mqtt_interface, 
+                         producer_flag=producer_flag, 
+                         queue=queue)
+            
+            app.close_app()
+        
+        logger.debug("-- Function produce_images finished --")
 
 
 def read_frames_from_queue(queue, ready_flag):
@@ -111,7 +109,7 @@ def read_frames_from_queue(queue, ready_flag):
                encoded_image.tobytes() + b"\r\n")
 
 
-@app.post("/")
+@server.post("/")
 def start_video_processing(request: VideoProcessingRequest, background_tasks:BackgroundTasks):
     global video_processing, frame_queue
     
@@ -132,7 +130,7 @@ def start_video_processing(request: VideoProcessingRequest, background_tasks:Bac
     return {'status':"Processing started", "model": model_name, "video_path": video_path}
 
     
-@app.post("/shutdown")
+@server.post("/shutdown")
 def stop_video_processing():
     global video_processing, process, application_inst
 
@@ -154,7 +152,7 @@ def stop_video_processing():
     return {"status": "Server shutting down"}
 
 
-@app.get("/video_feed")
+@server.get("/video_feed")
 def get_frame():
     global frame_queue
     logger.debug("-- Getting frame from queue --")
@@ -168,7 +166,10 @@ def dummy_processing(video_path, model_name, show, mqtt, save, verbose):
     global process
 
     args = argparse.Namespace(name=model_name, source=video_path, type="tracking", gui=True, mqtt=mqtt, show=show, save=save, verbose=verbose)
-    args.name = model_name.lower().split()[0]
+    if " " in model_name.lower(): 
+        args.name = model_name.lower().split()[0]
+    else: 
+        args.name = model_name.lower() 
     
     config = {
         'model_name':args.name,
@@ -178,9 +179,9 @@ def dummy_processing(video_path, model_name, show, mqtt, save, verbose):
         'save':args.save,
         'verbose':args.verbose       
     }
-    
+
     model_key = config['model_name'].lower()
-    config['model_type'] = check_model_name(model_key=model_key, condition= config['model_type'], condition_type='tracking')
+    config['model_name'] = check_model_name(model_key=model_key, condition= config['model_type'], condition_type='tracking')
 
     logger.info("-- Setting up process --")
     

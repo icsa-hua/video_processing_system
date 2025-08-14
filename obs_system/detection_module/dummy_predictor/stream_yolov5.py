@@ -55,7 +55,6 @@ class Yolov5Streamer(YOLOStreamer):
                              queue=queue)
             
         except KeyboardInterrupt as ke: 
-            warnings.warn(KeyboardInterrupt.__doc__)
 
             if producer_flag is not None: 
                 producer_flag.value=False
@@ -82,7 +81,6 @@ class Yolov5Streamer(YOLOStreamer):
         """
         
         not_tensor = not isinstance(im, torch.Tensor)
-        self.orig_shape = im[0].shape if isinstance(im, list) else im.shape 
 
         if not_tensor: 
             im = np.stack(self.pre_transform(im))
@@ -91,7 +89,10 @@ class Yolov5Streamer(YOLOStreamer):
             im = torch.from_numpy(im)
         
         im = im.to(self.device)
-        im = im.float()  # uint8 to fp32
+        if not isinstance(self.model, YOLO): 
+            im = im.half() if seld.model.fp16 else im.float() 
+        else: 
+            im = im.float()  # uint8 to fp32
         
         if not_tensor:
             im = im.div(255.0)  # 0 - 255 to 0.0 - 1.0

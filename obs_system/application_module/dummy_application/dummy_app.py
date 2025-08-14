@@ -33,7 +33,6 @@ class Application:
         self.model = None
         self.parent_path:str =  os.getcwd()
         self.model_name:str = 'yolov8s'
-        self.show:bool = False 
         self.mqtt:bool = False
         self.mqtt_interface:Any = None 
         self.logic_module = defaultdict() 
@@ -106,12 +105,11 @@ class Application:
         self.streamer.setup_model(model=model_weights, verbose=self.verbose, opt=opt) 
         
         self.model = self.streamer.model 
-        logger.info(f"Self model is of type {type(self.model)}" )
+        logger.info(f" [Model-Type] -> {type(self.model)}" )
         logger.debug(f"-- Streaming Through ONNX YOLO8S models --")
 
 
     def setup_process(self, source, args): 
-        logger.debug(f"-- Setting up the process --")
 
         # Check for GPU (NVIDIA) to allow the program to run GPU statistics 
         self.gpu_enabled = check_nvidia_existence()
@@ -141,7 +139,7 @@ class Application:
 
 
     def setup_model(self, model_name, stream, opt:str="tracking"):
-        logger.info(f"-- Setting up the model with {opt} --")
+        logger.debug(f"-- Setting up the model with {opt} --")
        
         self.stream = stream
         self.model_name = model_name        
@@ -178,29 +176,25 @@ class Application:
 
     def process_stream(self, model, producer_flag=None, queue=None):
         logger.debug("-- Starting the video streaming process --")
-        
-        if isinstance(self.source, str):
 
-            # Streaming the video as before
-            kwargs = {
-                "save":self.save,
-                "verbose":self.verbose
-            }
+        # Streaming the video as before
+        kwargs = {
+            "save":self.save,
+            "verbose":self.verbose
+        }
 
-            self.streamer(
-                source=self.source,
-                model=model,
-                logic_module=self.logic_module,
-                mqtt_broker=self.mqtt_interface,
-                producer_flag=producer_flag, 
-                queue=queue, 
-                **{key: kwargs[key] for key in ['verbose', 'save']}
-            ) 
+        self.streamer(
+            source=self.source,
+            model=model,
+            logic_module=self.logic_module,
+            mqtt_broker=self.mqtt_interface,
+            producer_flag=producer_flag, 
+            queue=queue, 
+            **{key: kwargs[key] for key in ['verbose', 'save']}
+        ) 
                             
-            return self.streamer.results
+        return self.streamer.results
         
-        raise ValueError("Only string is supported as source")
-    
 
     def setup_mqtt(self, topic, broker_address, port):
         

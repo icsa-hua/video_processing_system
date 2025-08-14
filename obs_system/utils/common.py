@@ -49,4 +49,5 @@ def check_model_name(model_key:str,condition:str,condition_type:str):
     }
     if model_key in model_validation and condition==condition_type:
             return model_validation[model_key][0]
-
+    else: 
+        raise ValueError("No valid model was provided...\nUse 'yolov8' as an example")

@@ -1,6 +1,7 @@
 from obs_system.application_module.dummy_application.dummy_app import Application
 from obs_system.utils.logger import logger
 from obs_system.utils.common import *
+from obs_system.utils.appraisal import PerfMetric, Timer, StepContext
 
 import os
 import cv2
@@ -40,11 +41,12 @@ def main():
          return
     
     args = argparser.parse_args()
-
+ 
     if args.gui: 
         
         if sys.platform.startswith("win"):
             multiprocessing.set_start_method("spawn", force=True)
+
         elif sys.platform.startswith("linux"):
             multiprocessing.set_start_method("fork", force=True)
 
@@ -87,9 +89,17 @@ def main():
                     '--reload', 
                     '--host', str(host)
                 ])
+                logger.debug(f"Starting fastapi in {str(host)}...") 
 
             def start_streamlit():
-                subprocess.run(["streamlit", "run", 'obs_system/application_module/dummy_application/web_interface.py', f'--server.port={str(port)}', f"--server.address={str(host)}"])
+                subprocess.run([
+                    "streamlit",
+                    "run",
+                    'obs_system/application_module/dummy_application/web_interface.py',
+                    f'--server.port={str(port)}',
+                    f"--server.address={str(host)}"
+                ])
+                logger.debug(f"Starting streamlit server in {str(host)}/{str(port)}")
         
         except Exception as e:
             logger.exception(f"-- Error starting GUI: {e} --")
@@ -140,65 +150,44 @@ def main():
     # Check that the model name responds to the models approved for this application (Yolov5-v8) 
     config['model_name'] = check_model_name(model_key=model_key, condition= config['model_type'], condition_type=args.type)
 
-    logger.info("-- Initial Configuration Complete --\n -- ✅ Starting Application --")
-    
     #Initialize the application module that interfaces source, model, mqtt and logic module 
     app = Application()
-    app.setup_process(config['source'], args)
-    try: 
+
+    with StepContext(name='Setup Process', catch=(KeyError, ModuleNotFoundError)):
+        app.setup_process(config['source'],args) 
+
+    with StepContext(name='Setup Model', catch=(OSError,ValueError)):
         app.setup_model(
-            model_name=model_key,
-             stream=config['stream'], 
-            opt=str(config['model_type'])
+            model_name=config['model_name'], 
+            stream=config['stream'],
+            opt=config['model_type']
         )
-        logger.debug("-- Model Initialized --") 
 
-    except Exception as e:
-        logger.exception(e)
-        exit(1)
-
-    if app.model is None: 
-        logger.error("-- model not initialized correctly. shutting down --")
-        raise exception("-- ❌ model not initialized. shutting down --")
-    
-    
     # length_of_film = 0
     if os.path.isfile(config['source']): 
         data = cv2.VideoCapture(app.source)
         # length_of_film = data.get(cv2.CAP_PROP_FRAME_COUNT)
         data.release()
         cv2.destroyAllWindows()
-    
-    try:
-        app.setup_logic_module(args)
-        logger.info("-- Logic module initialized --")
-    except Exception as e:
-        logger.exception(f"-- Error setting up logic module: {e} --")
-        exit(1)
-    
-    try:
+
+    with StepContext(name='Setup Logic',catch=(KeyError,IndexError)):
+        app.setup_logic_module(args) 
+
+    with StepContext(name='Setup MQTT', catch=(ConnectionError, TimeoutError)): 
         if app.mqtt:
-            app.setup_mqtt(topic="test/topic",
-                        broker_address="mqtt.eclipseprojects.io",
-                        port=1883)
-            logger.debug("-- MQTT interface connected --")
-        else: 
-            logger.debug("-- MQTT interface not enabled --")
-            
-    except Exception as e:
-        logger.exception(f"-- Error setting up MQTT: {e} --")
-        exit(1)
-    
+            app.setup_mqtt(
+                topic="test/topic", 
+                broker_address="mqtt.eclipseprojects.io", 
+                port=1883
+            )
+        else: logger.debug("[MQTT] interface is disabled") 
+
+    with StepContext(name='Run_App', catch=(RuntimeError,)): 
     # Simulate publishing messages in intervals
-    try:
-        app.run_app(model=config['model_name'])
-        app.close_app()
+         app.run_app(model=config['model_name'])
+         app.close_app()
 
-    except KeyboardInterrupt as e:
-        logger.exception(f"-- Exception caught: {e} --")
-        app.close_app()
-        
-
+   
 if __name__ == "__main__":
     main()
     

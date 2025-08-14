@@ -22,4 +22,6 @@
 - Compressed integration needs to adjust Results. 
 - Integration needs alignment with streaming.py and dummy_app.py 
 
+## Additional Features 
+* [x] ADD: Perfomance measurement for modules, and exception catcher. 
 

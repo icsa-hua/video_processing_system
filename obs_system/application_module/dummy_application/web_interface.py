@@ -52,23 +52,24 @@ verbose = False
 with st.sidebar:
     logo_image = Image.open(logo_image)
     icon, title = st.columns([0.4, 0.63])
+
     with icon: 
         st.image(logo_image, width=100)
+
     with title: 
         repo_link: Text = ("https://edge-ai-tech.eu/")
-        st.markdown(f"""<h4 style='color: #f0eef0;'>Real-Time Intersection Traffic Monitoring<a href="{repo_link}" target="_blank">🏢</a></h2>""", unsafe_allow_html=True)        
+        st.markdown(f"""<h4 style='color: #f0eef0;'>Real-Time Intersection Monitoring<a href="{repo_link}" target="_blank">🏢</a></h2>""", unsafe_allow_html=True)        
 
     #Input Options 
     option = st.radio("Select Video Source", ("Local Video", "Live Stream"))
     video_path = None
-
     
     st.subheader("Select Object Detection Model")
     model_choice = st.selectbox(
         "Select a model",
-        ["Yolov5n (Nano)", "Yolov8n (Nano)", 
-        "Yolov5s (Small)", "Yolov8s (Small)", 
-        "Yolov5m (Medium)", "Yolov8m (Medium)"]
+        ["Yolov5n", "Yolov8n", 
+        "Yolov5s", "Yolov8s", 
+        "Onnx (Yolov8s)"]
     )
 
     if st.checkbox("Show Real-Time Inference"):
@@ -110,56 +111,58 @@ if start_button:
     else: 
         st.write("Calling Server for processing...")
         logger.debug(f"video_path:{video_path}, name_model: {model_choice}, show:{show}, mqtt:{mqtt}, save:{save}, verbose:{verbose}")
+
         try:
             response = requests.post(f"{BACKEND_URL}/",
                 json={"video_path":video_path, "name_model": model_choice, "show":show, "mqtt":mqtt, 'save':save, 'verbose': verbose}
             )
+
+            if response.status_code == 200:
+                st.success("Configuration added successfully!")
+                if not show: 
+                    st.write("Processed video will be save locally in ../video_processing_system/runs/detect/")
+                stframe = st.empty()
+                #Stream Frames 
+                with requests.get(f"{BACKEND_URL}/video_feed", stream=True) as video_stream: 
+                    
+                    buffer = b""
+                    for chunk in video_stream.iter_content(chunk_size=1024): 
+                        buffer += chunk 
+                        while b"--frame\r\n" in buffer:
+                            #Find the boundary 
+                            start_buf = buffer.find(b"--frame\r\n")
+                            end_buf = buffer.find(b"--frame\r\n", start_buf+1)
+
+                            if end_buf == -1:
+                                break
+                            # Extract the raw image data 
+                            frame_raw = buffer[start_buf:end_buf]
+                            buffer = buffer[end_buf:]
+                            # Extract JPEG bytes after headers 
+                            try: 
+                                headers_end = frame_raw.find(b"\r\n\r\n") + 4
+                                image_bytes = frame_raw[headers_end:]
+                                if not image_bytes:
+                                    continue
+                                image_array = cv2.imdecode(
+                                    np.frombuffer(image_bytes,dtype=np.uint8),
+                                    cv2.IMREAD_COLOR
+                                )
+                                if image_array is None:
+                                    raise ValueError("Failed to decode image.")
+                                with col2:                                
+                                    stframe.image(image_array, channels="BGR")
+                            except Exception as e:
+                                st.error(f"Error decoding frame: {e}")
+
+            else:
+                st.error(f"Error: {response.json().get('detail')}")
+                sys.exit(1)
+
+            st.write(response.json())
+
         except requests.exceptions.ConnectionError as coe: 
             st.error(f"Connection Error: {coe}")
-
-        # st.write(response.json())
-
-        if response.status_code == 200:
-            st.success("Configuration added successfully!")
-            if not show: 
-                st.write("Processed video will be save locally in ../video_processing_system/runs/detect/")
-            stframe = st.empty()
-            #Stream Frames 
-            with requests.get(f"{BACKEND_URL}/video_feed", stream=True) as video_stream: 
-                
-                buffer = b""
-                for chunk in video_stream.iter_content(chunk_size=1024): 
-                    buffer += chunk 
-                    while b"--frame\r\n" in buffer:
-                        #Find the boundary 
-                        start_buf = buffer.find(b"--frame\r\n")
-                        end_buf = buffer.find(b"--frame\r\n", start_buf+1)
-
-                        if end_buf == -1:
-                            break
-                        # Extract the raw image data 
-                        frame_raw = buffer[start_buf:end_buf]
-                        buffer = buffer[end_buf:]
-                        # Extract JPEG bytes after headers 
-                        try: 
-                            headers_end = frame_raw.find(b"\r\n\r\n") + 4
-                            image_bytes = frame_raw[headers_end:]
-                            if not image_bytes:
-                                continue
-                            image_array = cv2.imdecode(
-                                np.frombuffer(image_bytes,dtype=np.uint8),
-                                cv2.IMREAD_COLOR
-                            )
-                            if image_array is None:
-                                raise ValueError("Failed to decode image.")
-                            with col2:                                
-                                stframe.image(image_array, channels="BGR")
-                        except Exception as e:
-                            st.error(f"Error decoding frame: {e}")
-
-        else:
-            st.error(f"Error: {response.json().get('detail')}")
-            sys.exit(1)
 
 
 if stop_button:

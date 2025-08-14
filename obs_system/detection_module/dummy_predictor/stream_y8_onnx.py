@@ -15,9 +15,9 @@ from abc import ABC, abstractmethod
 from pathlib import Path 
 from ultralytics import YOLO
 from torch.profiler import profile, ProfilerActivity 
-from trackers import SORTTracker 
+#from trackers import SORTTracker 
 from torch.nn.utils.rnn import pad_sequence 
-from trackers.core.deepsort.tracker import DeepSORTTracker 
+#from trackers.core.deepsort.tracker import DeepSORTTracker 
 from collections import defaultdict
 from ultralytics.utils import DEFAULT_CFG, ops, callbacks
 from ultralytics.engine.results import Results
