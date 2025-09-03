@@ -2,6 +2,7 @@ from obs_system.compressed.interface.compressed_yolo import CompressedYOLO
 from obs_system.logic_module.dummy_logic.region_setter import RegionSetter
 from obs_system.compressed.interface.convert_to_Results import ConverterResults 
 from obs_system.utils.logger import logger 
+from obs_system.utils.tiles import * 
 
 import re
 import os 
@@ -135,7 +136,6 @@ class YOLOStreamer(ABC):
             (list): A list of transformed images.
         """
         pt = None 
-
         if isinstance(self.model, YOLO) or isinstance(self.model, CompressedYOLO): 
             pt = True 
             self.stride = 32 
@@ -235,7 +235,7 @@ class YOLOStreamer(ABC):
             # Setup source every time predict is called
             self.setup_source(source if source is not None else self.args.source)
             
-            # Preprocess the images (Crop & Zoom) based on ROI 
+            # Prepare the images (Crop & Zoom) based on ROI 
             for batch in self.dataset:
                 paths, im0s, s = batch
                 if self.logic_module is not None and self.logic_module["ROI"] is not None: 
@@ -306,7 +306,7 @@ class YOLOStreamer(ABC):
                 # Postprocess
                 with profilers[2]:
                     self.results = self.postprocess(preds, images, im0s)
-                import pdb;pdb.set_trace()
+
                 if not isinstance(self.results[0], Results):
                     self.results = self.results[0]
                     self.results = torch.reshape(self.results, (self.results.shape[0], self.results.shape[2], self.results.shape[1]))
@@ -333,7 +333,6 @@ class YOLOStreamer(ABC):
                             "inference": profilers[1].dt * 1e3 / n,
                             "postprocess": profilers[2].dt * 1e3 / n,
                         }
-
 
                     if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
                         s[i] += self.write_results(i, Path(paths[i]), images, im0s, s)

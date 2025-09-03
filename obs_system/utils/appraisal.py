@@ -162,17 +162,16 @@ class StepContext():
         if not isinstance(exc_value, self.catch):
             logger.debug(f"Unnexpected Error [{self.name}]: {self.elapsed_time:.2f}ms")
             return False 
-
-        trace_back_str = "".join(traceback.traceback.format_exception(exc_type,exc_value,exc_tb))
+        trace_back_str = "".join(traceback.format_exception(exc_type,exc_value,exc_tb))
         if self.on_error: 
             self.on_error(self.name, exc_value, trace_back_str)
 
-        if self.suppress: 
+        if self.supress: 
             logger.debug(f"[!] [{self.name}] failed but optional:{exc_value}({self.elapsed_time:.2f}ms)")
             return True 
         
         else: 
-                    raise SetupError(self.name, exc_value)
+            raise SetupError(self.name, exc_value)
 
 
 
