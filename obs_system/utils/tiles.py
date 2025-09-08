@@ -8,8 +8,6 @@ import numpy as np
 from ultralytics import YOLO 
 
 
-
-
 def make_tiles(W, H, tile=640, overlap=0.2):
 
     if overlap < 1.0: 
@@ -53,8 +51,6 @@ def letterbox(img, new_shape=(640,640)):
     px, py = left_x, top_y 
 
     return canvas, (sx, sy), (px, py) 
-
-
 
 
 # code based on https://github.com/collinswakholi/ImgTiler/blob/main/ImgTiler/ImageTiler.py
@@ -101,21 +97,20 @@ def check_divisible(grid, image):
     H, W = image.shape[:2]
     w_pad = (grid[1] - (W % grid[1])) % grid[1] 
     h_pad = (grid[0] - (H % grid[0])) % grid[0] 
-
     new_size = pad_image(image, (0,h_pad, 0, w_pad))
     return new_size 
 
 
-def get_grid(image, tile=640): 
-    rows = int(round(image.shape[0] / tile ))
-    cols = int(round(image.shape[1] / tile ))
+def get_grid(image, tile=640, overlap:int|float=0.0): 
+    stride = tile - overlap 
+    rows = 1 if image.shape[0] <= tile else math.ceil((image.shape[0] - tile)/stride) + 1 
+    cols = 1 if image.shape[1] <= tile else math.ceil((image.shape[1] - tile)/stride) + 1  
     return (rows, cols) 
 
 
 def pad_image(image, padding): 
     if len(image.shape) == 2: 
         return np.pad(image, ((padding[0], padding[1]), (padding[2], padding[3])), 'constant', constant_values=0) 
-
     else: 
         return np.pad(image,  ((padding[0], padding[1]), (padding[2], padding[3]), (0,0)), 'constant', constant_values=0) 
 
@@ -124,7 +119,8 @@ def tile_coords(W, H, tile_size=640, overlap=0.15):
 
     if overlap < 1.0: 
         overlap = int(round(tile_size*overlap))
-    stride = max(1, tile_size-overlap) 
+
+    stride = int(max(1, tile_size-overlap))
 
     xs = list(range(0,max(1, W - tile_size + 1), stride))
     ys = list(range(0,max(1, H - tile_size + 1), stride)) 
@@ -152,41 +148,51 @@ def split_image(image,frame_id, tile_size=640, show_rect=False , show_tiles=Fals
     if overlap < 1.0:  
         overlap = int(tile_size * overlap)
 
-    grid = get_grid(image, tile=tile_size) 
+    grid = get_grid(image, tile=tile_size, overlap=overlap) 
     image = check_divisible(grid=grid, image=image) 
     dtype, max_val, min_val = check_image_type(image) 
 
     H, W = image.shape[:2]
-   
+    orig_H, orig_W = H, W
+
     tile_height, tile_width = tile_size , tile_size
 
-                      #pad_top = max(0, tile_height - H) 
-                      #pad_left = max(0, tile_width - W) 
+    pad_top = max(0, tile_height - H) 
+    pad_left = max(0, tile_width - W) 
 
-                      #if pad_top or pad_left: 
-                      #image = pad_image(image, (overlap, overlap, overlap, overlap)) 
+    gain = 1 if tile_size == 640 else int(min(H/tile_size, W/tile_size)) 
 
-                      #H, W = image.shape[:2]
+    if pad_top !=0 or pad_left!=0: 
+        image = pad_image(image, padding=(overlap, overlap, overlap))
+        H, W = image.shape[:2] 
 
     c = image.shape[2] if len(image.shape) == 3 else 1 
 
     tiles = [] 
     xs, ys = tile_coords(W, H, tile_size=640, overlap=overlap) 
+
     for x0 in xs: 
         for y0 in ys: 
-
             tile = extract_tile(image,x0=x0, y0=y0, tile_size=tile_size) 
             meta = {
                     'frame_id':frame_id, 
                     'grid':grid, 
                     'max_value':max_val, 
                     'min_value':min_val, 
+                    'top_y':y0, 
+                    'left_x': x0, 
+                    'pad_y':pad_top, 
+                    'pad_x':pad_left, 
+                    'gain': gain, 
+                    't_wh': (tile_height, tile_width), 
+                    'f_wh': (orig_H, orig_W),
+                    'overlap':overlap
             }
 
             if c <= 3: 
                 if show_rect: 
                     cv2.rectangle(tile, (overlap, overlap), (tile_width + overlap, tile_height + overlap), (255, 0, 0), 1) 
-
+                    
             tile = convert_from_uint(tile, dtype=dtype, min_val=min_val, max_val=max_val) 
             tiles.append((tile, meta)) 
 
@@ -221,51 +227,3 @@ def draw_tiles(tiles, grid, dtype, min_val, max_val):
     plt.show() 
 
 
-#Convert Tiles back to image. 
-def depad_tiles(tiles, overlap): 
-    tiles_ = [] 
-    for tile in tiles: 
-        tiles_.append(tile[overlap:-overlap, overlap:-overlap, :] if len(tile.shape) == 3 else tile[overlap:-overlap, overlap:overlap])
-    return tiles_ 
-
-
-def combine_tiles(grid, tiles,dtype=np.uint8, min_val=0, max_val=255, show_image=True, overlap=0.15): 
-    tiles = depad_tiles(tiles, overlap) 
-
-    tile_height, tile_width = tiles[0].shape[:2] 
-    image_shape = (tile_height * grid[0], tile_width * grid[1], tiles[0].shape[2]) if len(tiles[0].shape)==3 else (tile_height * grid[0], tile_width * grid[1]) 
-    image = np.zeros(image_shape, dtype=dtype)
-
-    for i in range(grid[0]): 
-        for j in range(grid[1]): 
-            tile = tiles[i * grid[1] + j] 
-            if len(tile.shape) == 3: 
-                image[i + tile_height:(i+1) * tile_height, j * tile_width:(j+1)*tile_width, :] = tile 
-            else: 
-                image[i + tile_height:(i+1) * tile_height, j * tile_width:(j+1)*tile_width] = tile 
-
-    image = convert_from_uint(image, dtype=dtype, min_val=min_val, max_val=max_val)
-    draw_image(image) if show_image else None 
-
-    return image
-
-
-def draw_image(image, dtype=np.uint8, min_val=0, max_val=255): 
-    import matplotlib.pyplot as plt 
-    try: 
-        c = image.shape[2] 
-    except: 
-        c = 1 
-
-    image = image[:, :, 0]if c > 3 else image 
-
-    image = convert_to_uint(image, dtype=dtype, min_val=min_val, max_val=max_val) 
-
-    plt.figure(figsize=(10,10)) 
-    if c == 3: 
-        plt.imshow(image[:, :, ::-1]) 
-    else: 
-        plt.imshow(image) 
-        plt.set_cmap('grey') 
-    plt.title('Reconstructed_image') 
-    plt.show() 

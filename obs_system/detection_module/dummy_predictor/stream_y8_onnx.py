@@ -2,6 +2,7 @@ from obs_system.compressed.interface.compressed_yolo import CompressedYOLO
 from obs_system.detection_module.interface.streaming import YOLOStreamer
 from obs_system.utils.tiles import *
 from obs_system.utils.appraisal import StepContext
+from obs_system.utils.common import draw_and_save_frames
 from obs_system.utils.logger import logger 
 
 import os 
@@ -16,13 +17,12 @@ import torchvision.ops as operation
  
 from typing import Any, List
 from queue import Queue 
-from abc import ABC, abstractmethod 
 from pathlib import Path 
 from ultralytics import YOLO
 from torch.profiler import profile, ProfilerActivity 
-#from trackers import SORTTracker 
+from trackers import SORTTracker 
 from torch.nn.utils.rnn import pad_sequence 
-#from trackers.core.deepsort.tracker import DeepSORTTracker 
+from trackers.core.deepsort.tracker import DeepSORTTracker 
 from collections import defaultdict, Counter
 from ultralytics.utils import DEFAULT_CFG, ops, callbacks
 from ultralytics.engine.results import Results
@@ -117,10 +117,9 @@ class OnnxY8Streamer(YOLOStreamer):
                 #padded_boxes = pad_sequence(sequences=boxes, batch_first=true, padding_value=float(0))  
                 inf_results = torch.stack(
                         (boxes[:,0], boxes[:,1], boxes[:,2], boxes[:,3], scores, class_ids),
-                        axis=-1
                 )
 
-                results = results(
+                results = Results(
                     orig_img = orig_images[image], 
                     path = f"image{image}.jpg", 
                     names = self.converter.class_names, 
@@ -143,11 +142,11 @@ class OnnxY8Streamer(YOLOStreamer):
                 del inf_results 
                 results = self.build_results_from_detections(detections, orig_images[image], image)
                 preds.append(results)
+
             else: 
 
-                
-                results = results(
-                    orig_img = orig_image, 
+                results = Results(
+                    orig_img = orig_images[image], 
                     path = self.source, 
                     names = self.converter.class_names, 
                     boxes = [], 
@@ -181,7 +180,7 @@ class OnnxY8Streamer(YOLOStreamer):
             ids_t.view(-1),
             scores_t.view(-1), 
             class_t.view(-1), 
-        ),  axis=-1)
+        ))
 
         results = Results(
             orig_img=orig_image, 
@@ -195,7 +194,7 @@ class OnnxY8Streamer(YOLOStreamer):
         return results
 
 
-    def preprocess(self,im): 
+    def preprocess(self,im:Any): 
         """
         Prepare input image before inference. 
 
@@ -229,12 +228,12 @@ class OnnxY8Streamer(YOLOStreamer):
         return im
 
 
-    def non_max_suppression(self,detections,score,iou): 
-        return super().non_max_suppression(detections, score, iou)
+    def non_max_suppression(self,detections,scores,iou): 
+        return super().non_max_suppression(detections, scores, iou)
 
 
-    def postprocess(self, preds, img, orig_img): 
-        return super().postprocess(preds, img, orig_img) 
+    def postprocess(self, preds, img, orig_imgs): 
+        return super().postprocess(preds, img, orig_imgs) 
 
 
     def predict_cli(self, source, model, producer_flag=None, queue=None): 
@@ -308,11 +307,11 @@ class OnnxY8Streamer(YOLOStreamer):
 
             for batch in self.dataset: 
                 paths, im0s, s = batch 
+                self.orig_height,self.orig_width = im0s[0].shape[:2]
                 if self.logic_module is not None and self.logic_module["ROI"] is not None: 
                     self.logic_module["ROI"].set_regions(im0s[0]) 
                 break 
 
-            self.orig_height,self.orig_width = im0s[0].shape[:2]
             if self.args.save or self.args.save_txt: 
                 (self.save_dir / "labels" if self.args.save_txt else  self.save_dir).mkdir(parents=True) 
 
@@ -330,6 +329,7 @@ class OnnxY8Streamer(YOLOStreamer):
                 self.run_callbacks("on_predict_batch_start") 
                 paths, im0s, s = self.batch 
                 tiles_batch = []
+
                 with StepContext(name="Batch Tiles", catch=(RuntimeError,)):
                     #self.process_tiles(im0s, s)     
                     
@@ -337,7 +337,13 @@ class OnnxY8Streamer(YOLOStreamer):
                     for i,image in enumerate(im0s): 
                         tiles = split_image(image,frame_id=frame_ids[i], tile_size=640, show_tiles=False, overlap=0.15) 
                         tiles_batch.append(tiles)
-                    self.microbatched(tiles_batch, im0s, self.device, micro=32) 
+
+                    self.microbatched(
+                        tiles_batch = tiles_batch, 
+                        orig_images=im0s, 
+                        device=self.device
+                    ) 
+
                 import pdb;pdb.set_trace()
 
                 if self.logic_module is not None and self.logic_module["ROI"] is not None: 
@@ -356,7 +362,6 @@ class OnnxY8Streamer(YOLOStreamer):
                 import pdb; pdb.set_trace()
                 # Create the frame queue for tile maker. 
                 
-
                 with profilers[0]: 
                     images = self.preprocess(tmp_im0s) 
 
@@ -397,6 +402,7 @@ class OnnxY8Streamer(YOLOStreamer):
                             "inference": profilers[1].dt * 1e3 / n, 
                             "postprocess": profilers[2].dt * 1e3 / n, 
                         }
+
                     else: 
                         self.speed = {
                             "preprocess": profilers[0].dt * 1e3 / n, 
@@ -422,6 +428,7 @@ class OnnxY8Streamer(YOLOStreamer):
 
                 self.run_callbacks("on_predict_batch_end") 
                 yield from self.results 
+
         
         for v in self.vid_writer.values(): 
             if isinstance(v, cv2.VideoWriter): 
@@ -455,7 +462,6 @@ class OnnxY8Streamer(YOLOStreamer):
             boxes=torch.zeros((0,6),dtype=torch.float32), 
             speed={}
         )
-
 
 
     def process_tiles(self, im0s, s): 
@@ -498,9 +504,6 @@ class OnnxY8Streamer(YOLOStreamer):
 
     def microbatched(self, tiles_batch, orig_images, device, micro=32): 
 
-        acc = defaultdict(list) 
-        seen = Counter() 
-        expected = {} 
 
         stream = flatten_tiles(tiles_batch) 
 
@@ -525,38 +528,89 @@ class OnnxY8Streamer(YOLOStreamer):
             except StopIteration: 
                 pass 
 
-            return n 
+            return n + 1
 
         # Pre-fill first 
         n0 = fill(host0, metas0) 
         if n0 == 0: return {} 
 
-        images = self.preprocess(host0) 
-        image_boxes, image_scores, image_class_ids = self.model(images)
-        pdb.set_trace() 
-        host0 = np.transpose(host0, (0,3,1,2))
-
-        # Host host0 has all the tiles from the stream. 
-        #images = self.preprocess(host0)
-        #image_boxes, image_scores, image_class_ids = self.model(host0)
-        #import pdb;pdb.set_trace()
-
+        host0 = self.preprocess(host0) 
         tbuf = torch.empty((micro, 3, 640, 640), device=device, dtype=torch.float32) 
 
         cur_host, cur_metas, cur_n = host0, metas0, n0 
         next_host, next_metas = host1, metas1 
 
+        pending = {}
         while cur_n > 0: 
+
             #Prefetch next on CPU while GPU runs (simple overlap)
             n1 = fill(next_host, next_metas) 
-            tb = torch.from_numpy(cur_host[:cur_n]).to(device, non_blocking=True) 
-            tb = tb.permute(0,3,1,2 ).to(dtype=torch.float32) 
-            tb.mul_(1.0/255.0) 
+            tb = (cur_host[:cur_n]).to(device, non_blocking=True) 
+            # tb = tb.permute(0,3,1,2 ).to(dtype=torch.float32) 
+            # tb.mul_(1.0/255.0) 
+
             tbuf[:cur_n].copy_(tb, non_blocking=True) 
     
-            image_boxes, image_scores, image_class_ids = self.model(tbuf[:cur_n])
+            image_boxes, images_scores, image_class_ids = self.model(tbuf[:cur_n])
 
+            keep = []
+            frames_out = {}
+            for det, score, cls_, meta in zip(image_boxes, images_scores, image_class_ids, cur_metas[:cur_n]): 
+
+                if meta is None: continue
+                f_id = meta['frame_id'] 
+
+                s = pending.setdefault(
+                    f_id, 
+                    {"need":(meta['grid'][0]*meta['grid'][1]), 
+                     "seen":set(), 
+                     "parts":[]
+                    }
+                )
+
+                s["seen"].add(meta['t_idx']) 
+
+                if det is None or len(det) == 0:
+                    mapped_boxes = np.empty((0,4), np.float32) 
+                    score = np.empty((0,), np.float32) 
+                    cls_ = np.empty((0,), np.int64) 
+
+                else: 
+
+                    mapped_boxes = reconstruct_tiles(
+                        boxes_xyxy=det, 
+                        tx=meta['left_x'], 
+                        ty=meta['top_y'], 
+                        orig_H=meta['f_wh'][0], 
+                        orig_W=meta['f_wh'][1], 
+                        gain=meta['gain'], 
+                        pad=(meta['pad_x'],meta['pad_y'])
+                    )
+
+                pack = (mapped_boxes, score, cls_) 
+                
+                s["parts"].append(pack)
+
+                if len(s["seen"]) == s["need"]: 
+                
+                    boxes = np.concatenate([p[0] for p in s["parts"]], 0) 
+                    scores = np.concatenate([p[1] for p in s["parts"]], 0) 
+                    class_ids = np.concatenate([p[2] for p in s["parts"]], 0) 
             
+                    
+                    frames_out[f_id] = (boxes, scores, class_ids)
+                    del pending[f_id]
+            
+           
+            draw_and_save_frames(
+               orig_images=orig_images, 
+               frames_out=frames_out, 
+               class_names=self.converter.class_names, 
+               save=True
+            )
+
+            pdb.set_trace()
+            cur_host, cur_metas, cur_n, next_host, next_metas = next_host, next_metas, n1, cur_host, cur_metas
 
 
 def flatten_tiles(tiles_batch): 
@@ -566,31 +620,17 @@ def flatten_tiles(tiles_batch):
             yield tile, {"frame_id":fid, "t_idx":t_idx, **meta}
 
 
+def reconstruct_tiles(boxes_xyxy, tx, ty, orig_H, orig_W, gain=1, pad=(0,0)) : 
 
+    pw, ph = pad 
+    boxes_xyxy[:, 0::2] -= pw 
+    boxes_xyxy[:, 1::2] -= ph 
+    boxes_xyxy /= gain 
 
+    boxes_xyxy[:,0::2] += tx 
+    boxes_xyxy[:,1::2] += ty 
 
+    boxes_xyxy[:, 0::2] = boxes_xyxy[:, 0::2].clip(0, orig_W - 1) 
+    boxes_xyxy[:, 1::2] = boxes_xyxy[:, 1::2].clip(0, orig_H - 1) 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        
+    return boxes_xyxy 

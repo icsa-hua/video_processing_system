@@ -122,3 +122,8 @@ It's slower because every `put/get` takes locks, condition variables and picklin
 for separating threads and processes. For millisecond budget programs, 
     * Single-Thread &rarr; a plain list is beter 
     * Two threads &rarr; push whole batches, not per-tile items. 
+     
+
+
+#### How to inference the stream when the tile batch is 32 with each frame having multiple tiles? 
+
