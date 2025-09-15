@@ -1,3 +1,4 @@
+from torchvision.ops.boxes import nms
 from obs_system.compressed.interface.compressed_yolo import CompressedYOLO 
 from obs_system.detection_module.interface.streaming import YOLOStreamer
 from obs_system.utils.tiles import *
@@ -8,6 +9,7 @@ from obs_system.utils.logger import logger
 import os 
 import re
 import pdb
+import gc
 import torch
 import cv2
 import time
@@ -22,8 +24,9 @@ from ultralytics import YOLO
 from torch.profiler import profile, ProfilerActivity 
 from trackers import SORTTracker 
 from torch.nn.utils.rnn import pad_sequence 
+from torchvision.ops import batched_nms, nms
 from trackers.core.deepsort.tracker import DeepSORTTracker 
-from collections import defaultdict, Counter
+from collections import defaultdict, deque
 from ultralytics.utils import DEFAULT_CFG, ops, callbacks
 from ultralytics.engine.results import Results
 from ultralytics.utils.files import increment_path 
@@ -31,13 +34,13 @@ from ultralytics.utils.torch_utils import select_device, smart_inference_mode
 from ultralytics.utils import colorstr 
 
 
-def get_frame_ids(labels:List[str])->List[str]: 
+def get_frame_ids(labels:List[str])->List[int]: 
 
     frame_ids = [value.split(' ') for value in labels]
     frame_ids = [id[3] for id in frame_ids]  
     frame_ids = [re.sub(r'[^\w]','|', id) for id in frame_ids]
     frame_ids = [id.split('|') for id in frame_ids]
-    frame_ids = [id[0] for id in frame_ids] 
+    frame_ids = [int(id[0]) for id in frame_ids] 
     return frame_ids
 
 
@@ -171,11 +174,11 @@ class OnnxY8Streamer(YOLOStreamer):
             )
             return results 
 
-
         xyxy = torch.from_numpy(detections.xyxy).to(torch.float32)
         scores_t = torch.from_numpy(detections.confidence).to(torch.float32) 
         class_t = torch.from_numpy(detections.class_id).to(torch.float32) 
         ids_t = torch.from_numpy(detections.tracker_id).to(torch.float32) 
+
         inf_results = torch.stack((xyxy[:,0],xyxy[:,1],xyxy[:,2],xyxy[:,3],
             ids_t.view(-1),
             scores_t.view(-1), 
@@ -186,7 +189,7 @@ class OnnxY8Streamer(YOLOStreamer):
             orig_img=orig_image, 
             path=f"image{image}.jpg", 
             names=self.converter.class_names, 
-            boxes=inf_results, 
+            boxes=inf_results.T, 
             speed={}, 
             probs=class_t
         )
@@ -293,8 +296,8 @@ class OnnxY8Streamer(YOLOStreamer):
         self.args.half = 16        
 
 
-    @smart_inference_mode()
-    def stream_inference(self, source, model, producer_flag, queue, *args, **kwargs): 
+    # @smart_inference_mode()
+    def stream_inference_2(self, source, model, producer_flag, queue, *args, **kwargs): 
 
         if self.args.verbose: logger.info("") 
         self.source = source 
@@ -303,14 +306,12 @@ class OnnxY8Streamer(YOLOStreamer):
 
             self.setup_source(source if source is not None else self.args.source)
             
-
-
             for batch in self.dataset: 
                 paths, im0s, s = batch 
                 self.orig_height,self.orig_width = im0s[0].shape[:2]
                 if self.logic_module is not None and self.logic_module["ROI"] is not None: 
                     self.logic_module["ROI"].set_regions(im0s[0]) 
-                break 
+                break
 
             if self.args.save or self.args.save_txt: 
                 (self.save_dir / "labels" if self.args.save_txt else  self.save_dir).mkdir(parents=True) 
@@ -344,12 +345,11 @@ class OnnxY8Streamer(YOLOStreamer):
                         device=self.device
                     ) 
 
-                import pdb;pdb.set_trace()
 
                 if self.logic_module is not None and self.logic_module["ROI"] is not None: 
                     im0s = self.logic_module["ROI"].crop_image(im0s) 
 
-                motion_flags = self.logic_module["SUBTRACTOR"].detect(im0s, threshold=500) 
+                motion_flags = self.logic_module["SUBTRACTOR"].detect(im0s, threshold=500)
 
                 filtered_indices = [i for i, m in enumerate(motion_flags) if m] 
 
@@ -359,7 +359,6 @@ class OnnxY8Streamer(YOLOStreamer):
                 s = [s[i] for i in filtered_indices] 
                 tmp_im0s = [im0s[i] for i in filtered_indices] 
 
-                import pdb; pdb.set_trace()
                 # Create the frame queue for tile maker. 
                 
                 with profilers[0]: 
@@ -504,15 +503,14 @@ class OnnxY8Streamer(YOLOStreamer):
 
     def microbatched(self, tiles_batch, orig_images, device, micro=32): 
 
-
         stream = flatten_tiles(tiles_batch) 
 
-        # Every tile inside the stream looks correct / RGB image 460x640 in resolution 
-#        for tile in stream: 
-#            cv2.imwrite(filename=f"tile_{tile[1]['t_idx']}.jpg", img=tile[0])
-#            break
+        # # Every tile inside the stream looks correct / RGB image 460x640 in resolution 
+        # for tile in stream: 
+        #     cv2.imwrite(filename=f"tile_{tile[1]['t_idx']}.jpg", img=tile[0])
+        #     break
 
-        # Double buffers in pinned host memory. 
+        # Double buffers in pinnedhost memory. 
         host0 = np.empty((micro,640, 640, 3), dtype=np.uint8) 
         host1 = np.empty_like(host0) 
 
@@ -546,14 +544,11 @@ class OnnxY8Streamer(YOLOStreamer):
             #Prefetch next on CPU while GPU runs (simple overlap)
             n1 = fill(next_host, next_metas) 
             tb = (cur_host[:cur_n]).to(device, non_blocking=True) 
-            # tb = tb.permute(0,3,1,2 ).to(dtype=torch.float32) 
-            # tb.mul_(1.0/255.0) 
 
             tbuf[:cur_n].copy_(tb, non_blocking=True) 
     
             image_boxes, images_scores, image_class_ids = self.model(tbuf[:cur_n])
 
-            keep = []
             frames_out = {}
             for det, score, cls_, meta in zip(image_boxes, images_scores, image_class_ids, cur_metas[:cur_n]): 
 
@@ -574,7 +569,6 @@ class OnnxY8Streamer(YOLOStreamer):
                     mapped_boxes = np.empty((0,4), np.float32) 
                     score = np.empty((0,), np.float32) 
                     cls_ = np.empty((0,), np.int64) 
-
                 else: 
 
                     mapped_boxes = reconstruct_tiles(
@@ -597,20 +591,407 @@ class OnnxY8Streamer(YOLOStreamer):
                     scores = np.concatenate([p[1] for p in s["parts"]], 0) 
                     class_ids = np.concatenate([p[2] for p in s["parts"]], 0) 
             
-                    
                     frames_out[f_id] = (boxes, scores, class_ids)
                     del pending[f_id]
             
+            del image_boxes
+            del images_scores
+            del image_class_ids
            
-            draw_and_save_frames(
+            frames_out = draw_and_save_frames(
                orig_images=orig_images, 
                frames_out=frames_out, 
                class_names=self.converter.class_names, 
                save=True
             )
+            
+            for i, f_id in enumerate(frames_out.keys()): 
+                # frames_out now holds tensors
+                boxes = frames_out[f_id][0]
+                scores = frames_out[f_id][1]
+                class_ids = frames_out[f_id][2]
 
-            pdb.set_trace()
+                inf_results = torch.stack(
+                    (boxes[:,0], boxes[:,1], boxes[:,2], boxes[:,3], 
+                    scores, class_ids)
+                )
+
+                results = Results(
+                    orig_img=orig_images[i], 
+                    path = f"image{f_id}.jpg", 
+                    names = self.converter.class_names, 
+                    boxes = inf_results.T, 
+                    speed = {}, 
+                    probs = class_ids
+                )
+
+                detections = sv.Detections.from_ultralytics(results) 
+                if self.tracker_choice == 'byte_tracker' and self.tracker is not None:
+                    detections = self.tracker.update_with_detections(detections) 
+
+                detections = detections[detections.tracker_id != -1]
+
+                del results 
+                del inf_results 
+
+                results = self.build_results_from_detections(detections, orig_images[i], f_id)
+                preds.append(results)
+
+            gc.collect()
             cur_host, cur_metas, cur_n, next_host, next_metas = next_host, next_metas, n1, cur_host, cur_metas
+
+     
+    @smart_inference_mode()
+    def stream_inference(self, source, model, producer_flag, queue, *args, **kwargs): 
+
+        if self.args.verbose: logger.info("") 
+
+        self.source = source
+        with self._lock: 
+            self.setup_source(source if source is not None else self.args.source) # Create Dataset obj. 
+
+            pending = {} 
+            frames_images = {}
+            max_f_inflight = 16 # Frames batch size 
+            micro = 32 # Maximum number for tiles to exist. 
+            f_inflight = set() 
+            frames_queue = deque()
+            tile_queue = deque() 
+
+
+            def enqueue_frame(frame_id, img): 
+                self.orig_height, self.orig_width = img.shape[:2] 
+                tiles = split_image(img, frame_id=frame_id, tile_size=640, overlap=0.15)
+            
+                for i, (t, m) in enumerate(tiles): 
+                    m['t_idx'] = i
+                    s = pending.setdefault(
+                        frame_id, 
+                        {"need":(m['grid'][0]*m['grid'][1]), 
+                         "seen":set(), 
+                         "parts":[] 
+                        }
+                    )
+                    
+                    tile_queue.append((t, m)) # This is the equivalent of tiles_batch.  
+
+                f_inflight.add(frame_id)
+                frames_images[frame_id] = img
+
+            out_dir="assets/save_inferences/"
+            self.seen = 0 
+            self.windows = [] 
+            self.batch = None 
+            use_roi = False
+
+            profilers = (
+                ops.Profile(device=self.device), 
+                ops.Profile(device=self.device), 
+                ops.Profile(device=self.device), 
+            )
+            activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA] 
+
+            self.run_callbacks("on_predict_start") 
+            
+            if self.args.save or self.args.save_txt: 
+                (self.save_dir / "labels" if self.args.save_txt else self.save_dir).mkdir(parents=True)
+
+            if self.logic_module is not None and self.logic_module["ROI"] is not None: 
+                use_roi = True 
+
+            self.dataset = iter(self.dataset)
+            self.results = []
+            # Initialize the frames queue 
+            while len(frames_queue) <= max_f_inflight: 
+                try: 
+                    self.batch = next(self.dataset)
+                except StopIteration:
+                    break 
+
+                
+                im0s = self.batch[1]
+                if 'frame 1' in self.batch[2][0]: 
+                    if use_roi: 
+                        self.logic_module['ROI'].set_regions(im0s[0])
+                
+                frame_ids = get_frame_ids(labels=self.batch[2])  
+                
+                with StepContext(name="Crop & Subtraction", catch=(RuntimeError, )): 
+                    if use_roi: 
+                        im0s = self.logic_module["ROI"].crop(im0s) 
+
+                    mfgs = self.logic_module["SUBTRACTOR"].detect(
+                        im0s,threshold=500
+                    )
+
+                    if not any(mfgs): 
+                        # Handle that no frames have any items and only have background 
+                        pass 
+
+                    mfgs = np.asarray(mfgs, np.int8).tolist() 
+
+                with StepContext(name="Batch Tiles", catch=(RuntimeError, )): 
+                    for f_id, im in zip(frame_ids, im0s): 
+                        frames_queue.append((f_id, im))
+
+            # Initialize the buffers to host the tiles and metas. 
+            host0 = np.empty((micro, 640, 640, 3), np.uint8) 
+            host1 = np.empty_like(host0) 
+
+            metas0, metas1 = [None]*micro, [None]*micro 
+            tbuf = torch.empty((micro, 3, 640, 640), device = self.device, dtype=torch.float32)
+
+            # Helper function to refill the frames_qeueu
+            def refill(): 
+                while len(tile_queue)< micro and len(f_inflight) < max_f_inflight and frames_queue: 
+                    f_id, im = frames_queue.popleft()
+                    enqueue_frame(f_id, im) 
+
+            refill()
+
+            # Main loop that executes until no tiles or frames are left pending 
+            while tile_queue or pending or frames_queue: 
+
+                if len(tile_queue) < (micro //2) and len(f_inflight) < max_f_inflight: 
+
+                    try: 
+                        self.batch = next(self.dataset) 
+                        im0s = self.batch[1]
+                        frame_ids = get_frame_ids(labels=self.batch[2]) 
+                        for f_id, im in zip(frame_ids, im0s) : 
+                            frames_queue.append((f_id, im))
+
+                    except StopIteration: 
+                        pass
+
+                    refill() 
+
+                n0, host0, metas0, tile_queue = fill(
+                    host=host0, 
+                    metas=metas0, 
+                    tile_queue=tile_queue,
+                    micro=micro
+                )
+
+                if n0 == 0: continue
+
+                cur_host, cur_metas = host0, metas0 
+                
+                nxt_host, nxt_metas = host1, metas1 
+
+                n1, nxt_host, nxt_metas, tile_queue = fill(
+                    host=nxt_host, 
+                    metas=nxt_metas, 
+                    tile_queue=tile_queue, 
+                    micro=micro
+                )
+
+                with profilers[0]:
+                    tb = (self.preprocess(cur_host[:n0])).to(self.device, non_blocking=True) 
+                tbuf[:n0].copy_(tb, non_blocking=True) 
+
+                with profilers[1]:
+                    if self.seen == 0: 
+                        with profile(activities=activities) as prof:
+                            i_boxes, i_scores, i_classes = self.model(tbuf[:n0]) 
+                        prof.export_chrome_trace(f"trace_{model}.json")
+                    else: 
+                        i_boxes, i_scores, i_classes = self.model(tbuf[:n0])
+
+                with profilers[2]:
+                    frames_out = {} 
+                    for det, score, cls_, meta in zip(i_boxes, i_scores, i_classes, cur_metas[:n0]): 
+
+                        if meta is None: continue 
+                    
+                        f_id = int(meta['frame_id'])
+                        s = pending.setdefault(
+                            f_id, 
+                            {"need":(meta['grid'][0]*meta['grid'][1]), 
+                             "seen":set(), 
+                             "parts":[] 
+                            }
+                        )
+
+                        s["seen"].add(meta['t_idx'])
+
+                        if det is None or len(det) == 0: 
+                            mapped_boxes = np.empty((0,4), np.float32) 
+                            score = np.empty((0,), np.float32) 
+                            cls_ = np.empty((0,), np.int64) 
+
+                        else: 
+                            
+                            mapped_boxes = reconstruct_tiles(
+                                boxes_xyxy=det, 
+                                tx=meta['left_x'], 
+                                ty=meta['top_y'], 
+                                orig_H=self.orig_height, 
+                                orig_W=self.orig_width, 
+                                gain=meta['gain'], 
+                                pad=(meta['pad_x'],meta['pad_y'])
+                            )
+
+                        s["parts"].append( (mapped_boxes, score, cls_) ) 
+
+                        if len(s["seen"]) == s["need"]: 
+
+                            if len(s["parts"]) == 0 or all(p[0].shape[0] == 0 for p in s["parts"]): 
+                                frames_out[f_id] = (
+                                    np.empty((0,4), np.float32), 
+                                    np.empty((0,), np.float32), 
+                                    np.empty((0,), np.int64)
+                                ) 
+
+                            else: 
+                                print("Another one")
+                                frames_out[f_id] = (
+
+                                    np.concatenate([p[0] for p in s["parts"]], 0),
+                                    np.concatenate([p[1] for p in s["parts"]], 0), 
+                                    np.concatenate([p[2] for p in s["parts"]], 0)
+                                )
+
+                            del pending[f_id] 
+                        
+                        # frames_ready = draw_and_save_frames(
+                        #     orig_images=[frames_images.get(i) for i in frames_out.keys()], 
+                        #     frames_out=frames_out, 
+                        #     class_names=self.converter.class_names, 
+                        #     save=True
+                        # )
+
+                    for f_id in (frames_out.keys()):
+
+                        out_image = frames_images.get(f_id)
+                        if out_image is None: continue
+                        boxes, scores, classes = frames_out[f_id]
+                        boxes_t = torch.from_numpy(boxes)
+                        scores_t = torch.from_numpy(scores) 
+                        classes_t = torch.from_numpy(classes) 
+
+                        if boxes is None or len(boxes) == 0: 
+                            cv2.imwrite(os.path.join(out_dir, f"{f_id}.jpg"), out_image)
+                            continue
+
+
+                        keep_pc = batched_nms(boxes_t, scores_t, classes_t.long(), iou_threshold=0.2)
+
+                        if keep_pc.numel() == 0:
+                            keep_final = keep_pc  # empty
+                        else:
+                            boxes_pc  = boxes_t[keep_pc]
+                            scores_pc = scores_t[keep_pc]
+
+                            keep_ca = nms(boxes_pc, scores_pc, iou_threshold=0.4)
+
+                            # 3) map back to original indices
+                            keep_final = keep_pc[keep_ca]
+
+                        boxes, scores, classes = boxes_t[keep_final], scores_t[keep_final], classes_t[keep_final] 
+                        
+                        inf_results = torch.stack(
+                            (boxes[:,0], boxes[:,1], boxes[:,2], boxes[:,3], 
+                                scores, classes
+                            )
+                        )
+
+                        results = Results(
+                            orig_img=frames_images[f_id],
+                            path= f"image_{f_id}.jpg", 
+                            names=self.converter.class_names, 
+                            boxes=inf_results.T, 
+                            speed = {}, 
+                            probs = classes 
+                        )
+
+                        detections = sv.Detections.from_ultralytics(results)
+                        if self.tracker_choice == 'byte_tracker' and self.tracker is not None: 
+                            detections = self.tracker.update_with_detections(detections) 
+
+                        detections = detections[detections.tracker_id != -1] 
+
+                        del results 
+                        del inf_results 
+
+                        results = self.build_results_from_detections(detections, frames_images[f_id], f_id)
+                        self.results.append(results)
+                        
+                        f_inflight.discard(f_id) 
+                        frames_images.pop(f_id,None)
+                
+                    cur_host, cur_metas, n0, nxt_host, nxt_metas, n1 = nxt_host, nxt_metas, n1, cur_host, cur_metas, n0 
+                    self.run_callbacks("on_predict_postprocess_end") 
+
+                    n = len(self.results)
+                    for i in range(n): 
+                        self.seen += 1 
+                        if isinstance(self.results[i], Results): 
+                            self.results[i].speed = {
+                                "preprocess": profilers[0].dt * 1e3 / n,
+                                "inference": profilers[1].dt * 1e3 / n,
+                                "postprocess": profilers[2].dt * 1e3 / n,
+
+                            }
+                        else: 
+                            self.speed = {
+                                "preprocess": profilers[0].dt * 1e3 / n,
+                                "inference": profilers[1].dt * 1e3 / n,
+                                "postprocess": profilers[2].dt * 1e3 / n,
+
+                            }
+                        
+                        if self.args.verbose or self.args.save or self.args.save_txt or self.args.show: 
+                            self.batch[2][i] += self.write_results(i, Path(self.batch[0][i]),tbuf , self.batch[1], self.batch[2]) 
+
+                            if producer_flag is not None : 
+                               producer_flag.value = True 
+
+                            if self.proc_image is not None and queue is not None: 
+                                queue.put(self.proc_image) 
+                            elif self.proc_image is None and queue is not None: 
+                                queue.put(None) 
+
+                            time.sleep(0.05) 
+
+                        self.capture_object_boxes(i, frames_images[i], self.results[i], cropped_dirname=self.cropped_image_dirname)
+
+                        if self.args.verbose: 
+                            logger.info("\n".join(self.batch[2])) 
+
+                        self.run_callbacks("on_predict_batch_end") 
+                        pdb.set_trace()
+                
+        for v in self.vid_writer.values(): 
+            if isinstance(v, cv2.VideoWriter): 
+                v.release() 
+
+
+        if self.args.verbose and self.seen: 
+            t = tuple(x.t / self.seen * 1e3 for x in profilers) 
+            logger.info(
+                f"Speed: %.1fms preprocess, %.1fms inference, %.1fms postprocess per image at shape "
+                f"{(min(self.args.batch, self.seen), 3, *tbuf.shape[2:])}" % t
+            )
+        if self.args.save or self.args.save_txt or self.args.save_crop:
+            nl = len(list(self.save_dir.glob("labels/*.txt")))  # number of labels
+            s = f"\n{nl} label{'s' * (nl > 1)} saved to {self.save_dir / 'labels'}" if self.args.save_txt else ""
+            logger.info(f"Results saved to {colorstr('bold', self.save_dir)}{s}")
+        
+        self.run_callbacks("on_predict_end")
+        
+
+
+                            
+                        
+                            
+
+
+
+
+
+                    
+        
 
 
 def flatten_tiles(tiles_batch): 
@@ -634,3 +1015,59 @@ def reconstruct_tiles(boxes_xyxy, tx, ty, orig_H, orig_W, gain=1, pad=(0,0)) :
     boxes_xyxy[:, 1::2] = boxes_xyxy[:, 1::2].clip(0, orig_H - 1) 
 
     return boxes_xyxy 
+
+
+
+def fill(host, metas, tile_queue, micro): 
+    n = 0 
+    while  n < micro and tile_queue: 
+        try:
+            tile, meta = tile_queue.popleft() 
+            host[n][...] = tile 
+            metas[n] = meta 
+            n += 1 
+        except Exception as e:
+            print(e)
+            pdb.set_trace()
+        
+    return n, host, metas, tile_queue
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

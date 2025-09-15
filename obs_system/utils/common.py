@@ -89,6 +89,7 @@ def draw_and_save_frames(
     num_classes = max((int(c.max()) for _, (_,_,c) in frames_out.items() if len(c)), default=-1) + 1 
     colors = _make_colors(max(num_classes, len(class_names)))
 
+    import pdb;pdb.set_trace()  
     for index, f_id in enumerate(frames_out): 
 
         boxes, scores, classes = frames_out[f_id]
@@ -106,31 +107,34 @@ def draw_and_save_frames(
 
         keep_ind = torch.searchsorted(keep.sort().values, keep_nms.sort().values) 
         keep = keep[keep_ind]
+        
+        if save or show: 
+            boxes = boxes[keep]
+            scores = scores[keep] 
+            classes = classes[keep]
+            boxes = boxes.astype(np.int32, copy=False)
 
-        boxes = boxes[keep]
-        scores = scores[keep] 
-        classes = classes[keep]
-        boxes = boxes.astype(np.int32, copy=False)
+            for (x1, y1, x2, y2), sc, cid in zip(boxes, scores, classes): 
+                color = colors[int(cid) % len(colors)] 
 
-        for (x1, y1, x2, y2), sc, cid in zip(boxes, scores, classes): 
-            color = colors[int(cid) % len(colors)] 
+                cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness, lineType=cv2.LINE_AA) 
+                cls_name = class_names[cid] if 0 <= cid < len(class_names) else str(cid) 
+                label = f"{cls_name} {sc:.2f}" 
 
-            cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness, lineType=cv2.LINE_AA) 
-            cls_name = class_names[cid] if 0 <= cid < len(class_names) else str(cid) 
-            label = f"{cls_name} {sc:.2f}" 
-
-            (tw, th), _ = cv2.getTextSize(label, font, font_scale, text_thickness) 
-            ty1 = max(y1 - th - 4, 0) 
-            cv2.rectangle(image, (x1, ty1), (x1 + tw + 4, ty1 + th + 4), color, -1) 
-            cv2.putText(image, label, (x1 + 2, ty1 + th + 2), font, font_scale, (0,0,0), thickness=text_thickness, lineType=cv2.LINE_AA) 
+                (tw, th), _ = cv2.getTextSize(label, font, font_scale, text_thickness) 
+                ty1 = max(y1 - th - 4, 0) 
+                cv2.rectangle(image, (x1, ty1), (x1 + tw + 4, ty1 + th + 4), color, -1) 
+                cv2.putText(image, label, (x1 + 2, ty1 + th + 2), font, font_scale, (0,0,0), thickness=text_thickness, lineType=cv2.LINE_AA) 
 
         if save: 
             cv2.imwrite(os.path.join(out_dir, f"{f_id}.jpg"), image)
 
-    if show: 
-        cv2.imshow("Test_image", orig_images[-1])
-        
+        if show: 
+            cv2.imshow("Test_image", orig_images[-1])
 
+        frames_out[f_id] = (boxes_t[keep], scores_t[keep], classes_t[keep]) 
+        
+    return frames_out
 
 
 

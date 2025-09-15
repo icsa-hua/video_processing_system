@@ -197,6 +197,7 @@ def split_image(image,frame_id, tile_size=640, show_rect=False , show_tiles=Fals
             tiles.append((tile, meta)) 
 
     draw_tiles(tiles, grid, dtype, min_val, max_val) if show_tiles else None 
+    
     return tiles
 
 
