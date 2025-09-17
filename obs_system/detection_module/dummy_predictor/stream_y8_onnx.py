@@ -667,9 +667,8 @@ class OnnxY8Streamer(YOLOStreamer):
                          "parts":[] 
                         }
                     )
-                    s["seen"].add(m['t_idx'])
                     
-                    tile_queue.extend(zip(t, m)) # Fill the tile_queue
+                    tile_queue.append((t, m)) # Fill the tile_queue
                 f_inflight.add(frame_id) # Fill the incoming frames 
                 frames_images[frame_id] = img # Map frame id with frame. 
 
@@ -689,6 +688,8 @@ class OnnxY8Streamer(YOLOStreamer):
 
             self.run_callbacks("on_predict_start") 
 
+
+            # Warmup for Better Inference. Reduces Initial frames high inference time and is more stable. 
             with StepContext(name="Warmup Session", catch=(Exception, RuntimeError)):
                 if not self.done_warmup: 
                     self.model.warmup(micro=micro, warmup_sessions=4)
@@ -697,43 +698,19 @@ class OnnxY8Streamer(YOLOStreamer):
             if self.args.save or self.args.save_txt: 
                 (self.save_dir / "labels" if self.args.save_txt else self.save_dir).mkdir(parents=True)
 
+            # Do we use regions of interest to crop the frames? 
             if self.logic_module is not None and self.logic_module["ROI"] is not None: 
                 use_roi = True 
 
             self.dataset = iter(self.dataset)
             self.results = []
 
-            # Initialize the frames queue 
-            while len(frames_queue) <= max_f_inflight: 
-                try: 
-                    self.batch = next(self.dataset)
-                except StopIteration:
-                    break 
-
-                im0s = self.batch[1]
-                if 'frame 1' in self.batch[2][0]: 
-                    if use_roi: 
-                        self.logic_module['ROI'].set_regions(im0s[0])
-                
-                frame_ids = get_frame_ids(labels=self.batch[2])  
-                
-                with StepContext(name="Crop & Subtraction", catch=(RuntimeError, )): 
-                    if use_roi: 
-                        im0s = self.logic_module["ROI"].crop(im0s) 
-
-                    mfgs = self.logic_module["SUBTRACTOR"].detect(im0s)
-
-                    if not any(mfgs): 
-                        # Handle that no frames have any items and only have background 
-                        # Skip to the next batch 
-                        continue
-
-                    mfgs = np.asarray(mfgs, np.int8).tolist() 
-
-                with StepContext(name="Batch Tiles", catch=(RuntimeError, )): 
-                    for ind, (f_id, im) in enumerate(zip(frame_ids, im0s)): 
-                        if not mfgs[ind]: continue # Skip the frames that don't have any objects inside of them.  
-                        frames_queue.append((f_id, im))
+            # Fill the frames Queue after checking motion on frames. 
+            frames_queue = self.admit_frames(
+                fr_queue = frames_queue, 
+                max_f_inf = max_f_inflight, 
+                use_roi = use_roi
+            )
 
             # Initialize the buffers to host the tiles and metas. 
             host0 = np.empty((micro, 640, 640, 3), np.uint8) 
@@ -757,15 +734,11 @@ class OnnxY8Streamer(YOLOStreamer):
                 if len(tile_queue) < (micro //2) and len(f_inflight) < max_f_inflight: 
 
                     # When tiles are low bring the next dataset if frames_queue is low though. 
-                    try: 
-                        self.batch = next(self.dataset) 
-                        im0s = self.batch[1]
-                        frame_ids = get_frame_ids(labels=self.batch[2]) 
-                        for f_id, im in zip(frame_ids, im0s) : 
-                            frames_queue.append((f_id, im))
-
-                    except StopIteration: 
-                        pass
+                    frames_queue = self.admit_frames(
+                        fr_queue=frames_queue, 
+                        max_f_inf=max_f_inflight, 
+                        use_roi=use_roi
+                    )
 
                     refill() 
 
@@ -779,9 +752,8 @@ class OnnxY8Streamer(YOLOStreamer):
                 if n0 == 0: continue
 
                 cur_host, cur_metas = host0, metas0 
-                
                 nxt_host, nxt_metas = host1, metas1 
-                pdb.set_trace()
+
                 n1, nxt_host, nxt_metas, tile_queue = fill(
                     host=nxt_host, 
                     metas=nxt_metas, 
@@ -791,7 +763,7 @@ class OnnxY8Streamer(YOLOStreamer):
 
                 with profilers[0]:
                     tb = (self.preprocess(cur_host[:n0])).to(self.device, non_blocking=True) 
-                tbuf[:n0].copy_(tb, non_blocking=True) 
+                    tbuf[:n0].copy_(tb, non_blocking=True) 
 
                 with profilers[1]:
                     if self.seen == 0: 
@@ -859,13 +831,10 @@ class OnnxY8Streamer(YOLOStreamer):
 
                             del pending[f_id] 
                         
-                        # frames_ready = draw_and_save_frames(
-                        #     orig_images=[frames_images.get(i) for i in frames_out.keys()], 
-                        #     frames_out=frames_out, 
-                        #     class_names=self.converter.class_names, 
-                        #     save=True
-                        # )
-
+                    del i_boxes
+                    del i_classes
+                    del i_scores
+                
                     for f_id in (frames_out.keys()):
 
                         out_image = frames_images.get(f_id)
@@ -878,7 +847,6 @@ class OnnxY8Streamer(YOLOStreamer):
                         if boxes is None or len(boxes) == 0: 
                             cv2.imwrite(os.path.join(out_dir, f"{f_id}.jpg"), out_image)
                             continue
-
 
                         keep_pc = batched_nms(boxes_t, scores_t, classes_t.long(), iou_threshold=0.2)
 
@@ -924,78 +892,65 @@ class OnnxY8Streamer(YOLOStreamer):
                         
                         f_inflight.discard(f_id) 
                         frames_images.pop(f_id,None)
+            
+                cur_host, cur_metas, n0, nxt_host, nxt_metas, n1 = nxt_host, nxt_metas, n1, cur_host, cur_metas, n0 
+                self.run_callbacks("on_predict_postprocess_end") 
+                n = len(self.results)
+                for i in range(n): 
+                    if self.seen == len(self.batch[1]): 
+                        self.seen = 0
+
+                    if isinstance(self.results[i], Results): 
+                        self.results[i].speed = {
+                            "preprocess": profilers[0].dt * 1e3 / n,
+                            "inference": profilers[1].dt * 1e3 / n,
+                            "postprocess": profilers[2].dt * 1e3 / n,
+
+                        }
+                    else: 
+                        self.speed = {
+                            "preprocess": profilers[0].dt * 1e3 / n,
+                            "inference": profilers[1].dt * 1e3 / n,
+                            "postprocess": profilers[2].dt * 1e3 / n,
+
+                        }
+                    
+                    if self.args.verbose or self.args.save or self.args.save_txt or self.args.show: 
+                        self.batch[2][self.seen] += self.write_results(
+                                i = i,
+                                p = Path(self.batch[0][self.seen]),
+                                im = self.batch[1][self.seen] ,
+                                original_images=self.batch[1],
+                                s = self.batch[2]
+                        ) 
+
+                        if producer_flag is not None : 
+                           producer_flag.value = True 
+
+                        if self.proc_image is not None and queue is not None: 
+                            queue.put(self.proc_image) 
+                        elif self.proc_image is None and queue is not None: 
+                            queue.put(None) 
+
+                        time.sleep(0.05) 
+                    
+                    with StepContext(name="Crop Objects to Image", catch=(RuntimeError,)):
+                        self.capture_object_boxes(
+                                image=self.batch[1][self.seen],
+                                results=self.results[i],
+                                cropped_dirname=self.cropped_image_dirname,
+                                save=self.args.save
+                        )
+                    
+                    self.seen += 1 
                 
-                    cur_host, cur_metas, n0, nxt_host, nxt_metas, n1 = nxt_host, nxt_metas, n1, cur_host, cur_metas, n0 
-                    self.run_callbacks("on_predict_postprocess_end") 
+                self.results.clear()
 
-                    n = len(self.results)
+                # if self.args.verbose: 
+                #     logger.info("\n".join(self.batch[2])) 
 
-                    for i in range(n): 
-                        if self.seen == len(self.batch[1]): 
-                            self.seen = 0
+                self.run_callbacks("on_predict_batch_end") 
 
-                        if isinstance(self.results[i], Results): 
-                            self.results[i].speed = {
-                                "preprocess": profilers[0].dt * 1e3 / n,
-                                "inference": profilers[1].dt * 1e3 / n,
-                                "postprocess": profilers[2].dt * 1e3 / n,
-
-                            }
-                        else: 
-                            self.speed = {
-                                "preprocess": profilers[0].dt * 1e3 / n,
-                                "inference": profilers[1].dt * 1e3 / n,
-                                "postprocess": profilers[2].dt * 1e3 / n,
-
-                            }
-                        
-                        if self.args.verbose or self.args.save or self.args.save_txt or self.args.show: 
-                            self.batch[2][self.seen] += self.write_results(
-                                    i = self.seen,
-                                    p = Path(self.batch[0][self.seen]),
-                                    im = self.batch[1][self.seen] ,
-                                    original_images=self.batch[1],
-                                    s = self.batch[2]
-                            ) 
-
-                            if producer_flag is not None : 
-                               producer_flag.value = True 
-
-                            if self.proc_image is not None and queue is not None: 
-                                queue.put(self.proc_image) 
-                            elif self.proc_image is None and queue is not None: 
-                                queue.put(None) 
-
-                            time.sleep(0.05) 
-                        
-                        logger.info(f"Image {i}, Results:{len(self.results)} Self Seen {self.seen}")
-                        with StepContext(name="Crop Objects to Image", catch=(RuntimeError,)):
-                            self.capture_object_boxes(
-                                    image=self.batch[1][self.seen],
-                                    results=self.results[i],
-                                    cropped_dirname=self.cropped_image_dirname,
-                                    save=self.args.save
-                            )
-                        
-                        self.seen += 1 
-                    logger.info(f"""
-                                Results:{len(self.results)}, 
-                                Frame_Queue: {len(frames_queue)}, 
-                                Frame_Images: {len(frames_images)}, 
-                                im0s: {len(self.batch[1])}, 
-                                paths: {len(self.batch[0])}, 
-                                strings: {len(self.batch[2])}, 
-                                tile_queue: {len(tile_queue)}, 
-                                frames_out: {len(frames_out)}, 
-                                frame_ids:{len(frame_ids)}
-                                """
-                    )
-                    self.results.clear()
-
-                    if self.args.verbose: 
-                        logger.info("\n".join(self.batch[2])) 
-
-                    self.run_callbacks("on_predict_batch_end") 
                 
 
         for v in self.vid_writer.values(): 
@@ -1044,13 +999,15 @@ def reconstruct_tiles(boxes_xyxy, tx, ty, orig_H, orig_W, gain=1, pad=(0,0)) :
 def fill(host, metas, tile_queue, micro): 
     n = 0 
     while  n < micro and tile_queue: 
-        try:
-            tile, meta = tile_queue.popleft() 
-            host[n][...] = tile 
-            metas[n] = meta 
-            n += 1 
-        except Exception as e:
-            logger.exception(e)
+        tile, meta = tile_queue.popleft() 
+        host[n][...] = tile 
+        metas[n] = meta 
+        n += 1 
+
+    for i in range(n, micro): 
+        metas[i] = None 
+
+        
         
     return n, host, metas, tile_queue
 

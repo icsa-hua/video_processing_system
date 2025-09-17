@@ -403,7 +403,10 @@ class YOLOStreamer(ABC):
         string += "%gx%g " % im.shape[2:]
 
         #Get the batch size pictures 
-        result = self.results[i] 
+        try: 
+            result = self.results[i] 
+        except: 
+            import pdb;pdb.set_trace()
         if isinstance(result, torch.Tensor):
             # result = self.converter.translate_data(i, p, im, result, original_images)
             # if not result: 
@@ -629,7 +632,7 @@ class YOLOStreamer(ABC):
                     if not mfgs[ind]: continue 
                     fr_queue.append((f_id, im))
         
-        return fr_queue, 
+        return fr_queue
 
 
 
@@ -681,3 +684,34 @@ class YOLOStreamer(ABC):
     #             if self.current_region is not None and self.current_region["dragging"]:
     #                 self.current_region["dragging"] = False
 
+ # # Initialize the frames queue 
+            # while len(frames_queue) <= max_f_inflight: 
+            #     try: 
+            #         self.batch = next(self.dataset)
+            #     except StopIteration:
+            #         break 
+            #
+            #     im0s = self.batch[1]
+            #     if 'frame 1' in self.batch[2][0]: 
+            #         if use_roi: 
+            #             self.logic_module['ROI'].set_regions(im0s[0])
+            #     
+            #     frame_ids = get_frame_ids(labels=self.batch[2])  
+            #     
+            #     with StepContext(name="Crop & Subtraction", catch=(RuntimeError, )): 
+            #         if use_roi: 
+            #             im0s = self.logic_module["ROI"].crop(im0s) 
+            #
+            #         mfgs = self.logic_module["SUBTRACTOR"].detect(im0s)
+            #
+            #         if not any(mfgs): 
+            #             # Handle that no frames have any items and only have background 
+            #             # Skip to the next batch 
+            #             continue
+            #
+            #         mfgs = np.asarray(mfgs, np.int8).tolist() 
+            #
+            #     with StepContext(name="Batch Tiles", catch=(RuntimeError, )): 
+            #         for ind, (f_id, im) in enumerate(zip(frame_ids, im0s)): 
+            #             if not mfgs[ind]: continue # Skip the frames that don't have any objects inside of them.  
+            #             frames_queue.append((f_id, im))
