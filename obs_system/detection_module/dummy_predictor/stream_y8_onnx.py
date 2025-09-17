@@ -3,13 +3,12 @@ from obs_system.compressed.interface.compressed_yolo import CompressedYOLO
 from obs_system.detection_module.interface.streaming import YOLOStreamer
 from obs_system.utils.tiles import *
 from obs_system.utils.appraisal import StepContext
-from obs_system.utils.common import draw_and_save_frames
-from obs_system.utils.logger import logger 
+from obs_system.utils.common import get_frame_ids
+from obs_system.utils.logger import get_logger 
 
 import os 
-import re
-import pdb
 import gc
+import pdb
 import torch
 import cv2
 import time
@@ -33,15 +32,7 @@ from ultralytics.utils.files import increment_path
 from ultralytics.utils.torch_utils import select_device, smart_inference_mode
 from ultralytics.utils import colorstr 
 
-
-def get_frame_ids(labels:List[str])->List[int]: 
-
-    frame_ids = [value.split(' ') for value in labels]
-    frame_ids = [id[3] for id in frame_ids]  
-    frame_ids = [re.sub(r'[^\w]','|', id) for id in frame_ids]
-    frame_ids = [id.split('|') for id in frame_ids]
-    frame_ids = [int(id[0]) for id in frame_ids] 
-    return frame_ids
+logger = get_logger("obs_system."+__name__)
 
 
 class OnnxY8Streamer(YOLOStreamer): 
@@ -269,7 +260,7 @@ class OnnxY8Streamer(YOLOStreamer):
             )
     
 
-    def setup_model(self, model, verbose=True, opt=''): 
+    def setup_model(self, model, verbose=True, opt='tracking'): 
 
         device = select_device(self.args.device, verbose=verbose) 
         model_path = 'obs_system/compressed/yolov8s.onnx'
@@ -279,21 +270,25 @@ class OnnxY8Streamer(YOLOStreamer):
 
         self.device = device 
 
-        if self.tracker_choice == 'sort': 
-            self.tracker = SORTTracker() 
-        elif self.tracker_choice == 'deepsort': 
-            # NOTE: This needs some adjustments after trackers latest update. 
-            self.tracker = DeepSORTTracker()
-        elif self.tracker_choice == 'byte_tracker': 
-            self.tracker = sv.ByteTrack() 
-        else: 
-            self.tracker_choice = 'sort' 
-            self.tracker = SORTTracker() 
+        if opt == 'tracking':
+            if self.tracker_choice == 'sort': 
+                self.tracker = SORTTracker() 
+            elif self.tracker_choice == 'deepsort': 
+                # NOTE: This needs some adjustments after trackers latest update. 
+                self.tracker = DeepSORTTracker()
+            elif self.tracker_choice == 'byte_tracker': 
+                self.tracker = sv.ByteTrack() 
+            else: 
+                self.tracker_choice = 'sort' 
+                self.tracker = SORTTracker() 
 
-        self.tracker.reset()  
+            self.tracker.reset()  
+
         self.track_history = defaultdict(list)
         self.stride = 32 
         self.args.half = 16        
+
+        logger.info(f"[checked] Model {model} successfully set up")
 
 
     # @smart_inference_mode()
@@ -672,11 +667,12 @@ class OnnxY8Streamer(YOLOStreamer):
                          "parts":[] 
                         }
                     )
+                    s["seen"].add(m['t_idx'])
                     
-                    tile_queue.append((t, m)) # This is the equivalent of tiles_batch.  
+                    tile_queue.extend(zip(t, m)) # Fill the tile_queue
+                f_inflight.add(frame_id) # Fill the incoming frames 
+                frames_images[frame_id] = img # Map frame id with frame. 
 
-                f_inflight.add(frame_id)
-                frames_images[frame_id] = img
 
             out_dir="assets/save_inferences/"
             self.seen = 0 
@@ -692,7 +688,12 @@ class OnnxY8Streamer(YOLOStreamer):
             activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA] 
 
             self.run_callbacks("on_predict_start") 
-            
+
+            with StepContext(name="Warmup Session", catch=(Exception, RuntimeError)):
+                if not self.done_warmup: 
+                    self.model.warmup(micro=micro, warmup_sessions=4)
+                    self.done_warmup = True
+
             if self.args.save or self.args.save_txt: 
                 (self.save_dir / "labels" if self.args.save_txt else self.save_dir).mkdir(parents=True)
 
@@ -701,6 +702,7 @@ class OnnxY8Streamer(YOLOStreamer):
 
             self.dataset = iter(self.dataset)
             self.results = []
+
             # Initialize the frames queue 
             while len(frames_queue) <= max_f_inflight: 
                 try: 
@@ -708,7 +710,6 @@ class OnnxY8Streamer(YOLOStreamer):
                 except StopIteration:
                     break 
 
-                
                 im0s = self.batch[1]
                 if 'frame 1' in self.batch[2][0]: 
                     if use_roi: 
@@ -720,18 +721,18 @@ class OnnxY8Streamer(YOLOStreamer):
                     if use_roi: 
                         im0s = self.logic_module["ROI"].crop(im0s) 
 
-                    mfgs = self.logic_module["SUBTRACTOR"].detect(
-                        im0s,threshold=500
-                    )
+                    mfgs = self.logic_module["SUBTRACTOR"].detect(im0s)
 
                     if not any(mfgs): 
                         # Handle that no frames have any items and only have background 
-                        pass 
+                        # Skip to the next batch 
+                        continue
 
                     mfgs = np.asarray(mfgs, np.int8).tolist() 
 
                 with StepContext(name="Batch Tiles", catch=(RuntimeError, )): 
-                    for f_id, im in zip(frame_ids, im0s): 
+                    for ind, (f_id, im) in enumerate(zip(frame_ids, im0s)): 
+                        if not mfgs[ind]: continue # Skip the frames that don't have any objects inside of them.  
                         frames_queue.append((f_id, im))
 
             # Initialize the buffers to host the tiles and metas. 
@@ -741,9 +742,10 @@ class OnnxY8Streamer(YOLOStreamer):
             metas0, metas1 = [None]*micro, [None]*micro 
             tbuf = torch.empty((micro, 3, 640, 640), device = self.device, dtype=torch.float32)
 
-            # Helper function to refill the frames_qeueu
+            # Helper function to refill the tile_queue, frames inflight and remove the frames from the frame queue. 
             def refill(): 
                 while len(tile_queue)< micro and len(f_inflight) < max_f_inflight and frames_queue: 
+                    #Frame queue starts at max size and steadily decreases. 
                     f_id, im = frames_queue.popleft()
                     enqueue_frame(f_id, im) 
 
@@ -754,6 +756,7 @@ class OnnxY8Streamer(YOLOStreamer):
 
                 if len(tile_queue) < (micro //2) and len(f_inflight) < max_f_inflight: 
 
+                    # When tiles are low bring the next dataset if frames_queue is low though. 
                     try: 
                         self.batch = next(self.dataset) 
                         im0s = self.batch[1]
@@ -778,7 +781,7 @@ class OnnxY8Streamer(YOLOStreamer):
                 cur_host, cur_metas = host0, metas0 
                 
                 nxt_host, nxt_metas = host1, metas1 
-
+                pdb.set_trace()
                 n1, nxt_host, nxt_metas, tile_queue = fill(
                     host=nxt_host, 
                     metas=nxt_metas, 
@@ -799,6 +802,10 @@ class OnnxY8Streamer(YOLOStreamer):
                         i_boxes, i_scores, i_classes = self.model(tbuf[:n0])
 
                 with profilers[2]:
+                    pass 
+
+                with StepContext(name="PostProcess", catch=(Exception, RuntimeError)): 
+
                     frames_out = {} 
                     for det, score, cls_, meta in zip(i_boxes, i_scores, i_classes, cur_metas[:n0]): 
 
@@ -844,9 +851,7 @@ class OnnxY8Streamer(YOLOStreamer):
                                 ) 
 
                             else: 
-                                print("Another one")
                                 frames_out[f_id] = (
-
                                     np.concatenate([p[0] for p in s["parts"]], 0),
                                     np.concatenate([p[1] for p in s["parts"]], 0), 
                                     np.concatenate([p[2] for p in s["parts"]], 0)
@@ -924,8 +929,11 @@ class OnnxY8Streamer(YOLOStreamer):
                     self.run_callbacks("on_predict_postprocess_end") 
 
                     n = len(self.results)
+
                     for i in range(n): 
-                        self.seen += 1 
+                        if self.seen == len(self.batch[1]): 
+                            self.seen = 0
+
                         if isinstance(self.results[i], Results): 
                             self.results[i].speed = {
                                 "preprocess": profilers[0].dt * 1e3 / n,
@@ -942,7 +950,13 @@ class OnnxY8Streamer(YOLOStreamer):
                             }
                         
                         if self.args.verbose or self.args.save or self.args.save_txt or self.args.show: 
-                            self.batch[2][i] += self.write_results(i, Path(self.batch[0][i]),tbuf , self.batch[1], self.batch[2]) 
+                            self.batch[2][self.seen] += self.write_results(
+                                    i = self.seen,
+                                    p = Path(self.batch[0][self.seen]),
+                                    im = self.batch[1][self.seen] ,
+                                    original_images=self.batch[1],
+                                    s = self.batch[2]
+                            ) 
 
                             if producer_flag is not None : 
                                producer_flag.value = True 
@@ -953,15 +967,37 @@ class OnnxY8Streamer(YOLOStreamer):
                                 queue.put(None) 
 
                             time.sleep(0.05) 
+                        
+                        logger.info(f"Image {i}, Results:{len(self.results)} Self Seen {self.seen}")
+                        with StepContext(name="Crop Objects to Image", catch=(RuntimeError,)):
+                            self.capture_object_boxes(
+                                    image=self.batch[1][self.seen],
+                                    results=self.results[i],
+                                    cropped_dirname=self.cropped_image_dirname,
+                                    save=self.args.save
+                            )
+                        
+                        self.seen += 1 
+                    logger.info(f"""
+                                Results:{len(self.results)}, 
+                                Frame_Queue: {len(frames_queue)}, 
+                                Frame_Images: {len(frames_images)}, 
+                                im0s: {len(self.batch[1])}, 
+                                paths: {len(self.batch[0])}, 
+                                strings: {len(self.batch[2])}, 
+                                tile_queue: {len(tile_queue)}, 
+                                frames_out: {len(frames_out)}, 
+                                frame_ids:{len(frame_ids)}
+                                """
+                    )
+                    self.results.clear()
 
-                        self.capture_object_boxes(i, frames_images[i], self.results[i], cropped_dirname=self.cropped_image_dirname)
+                    if self.args.verbose: 
+                        logger.info("\n".join(self.batch[2])) 
 
-                        if self.args.verbose: 
-                            logger.info("\n".join(self.batch[2])) 
-
-                        self.run_callbacks("on_predict_batch_end") 
-                        pdb.set_trace()
+                    self.run_callbacks("on_predict_batch_end") 
                 
+
         for v in self.vid_writer.values(): 
             if isinstance(v, cv2.VideoWriter): 
                 v.release() 
@@ -980,19 +1016,6 @@ class OnnxY8Streamer(YOLOStreamer):
         
         self.run_callbacks("on_predict_end")
         
-
-
-                            
-                        
-                            
-
-
-
-
-
-                    
-        
-
 
 def flatten_tiles(tiles_batch): 
     for fb in tiles_batch: 
@@ -1027,8 +1050,7 @@ def fill(host, metas, tile_queue, micro):
             metas[n] = meta 
             n += 1 
         except Exception as e:
-            print(e)
-            pdb.set_trace()
+            logger.exception(e)
         
     return n, host, metas, tile_queue
 

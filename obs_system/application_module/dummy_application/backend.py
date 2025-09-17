@@ -1,7 +1,7 @@
 from obs_system.application_module.dummy_application.dummy_app import Application
 from obs_system.utils.common import *
-from obs_system.utils.logger import logger 
-from obs_systel.utils.appraisal import StepContext 
+from obs_system.utils.logger import get_logger 
+from obs_system.utils.appraisal import StepContext 
 
 import os 
 import sys
@@ -16,6 +16,7 @@ from fastapi import FastAPI, BackgroundTasks, Response
 from fastapi.responses import StreamingResponse
 from multiprocessing import Process, Queue, Value 
 
+logger = get_logger(f"obs_system.{__name__}")
 logging.getLogger("uvicorn.error").propagate = False
 
 process = None 

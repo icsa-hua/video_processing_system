@@ -1,5 +1,5 @@
 from obs_system.detection_module.interface.streaming import YOLOStreamer
-from obs_system.utils.logger import logger  
+from obs_system.utils.logger import get_logger
 
 import torch 
 import numpy as np
@@ -17,6 +17,7 @@ from ultralytics.utils.files import increment_path
 from ultralytics.nn.autobackend import AutoBackend
 from ultralytics.utils.torch_utils import select_device, smart_inference_mode
 
+logger = get_logger("obs_system."+__name__)
 
 class Yolov8Streamer(YOLOStreamer):
 

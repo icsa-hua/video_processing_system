@@ -1,8 +1,10 @@
 from obs_system.communication_module.interface.mqtt_interface import MQTTInterface
-from obs_system.utils.logger import logger 
+from obs_system.utils.logger import get_logger 
 
 import paho.mqtt.client as mqtt
 
+
+logger = get_logger("obs_system."+__name__)
 
 class RealMQTT(MQTTInterface):
 

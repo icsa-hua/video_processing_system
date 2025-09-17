@@ -1,11 +1,12 @@
-from obs_system.utils.logger import logger
-
+import re
 import subprocess
 import cv2
 import os
 import socket
 import numpy as np
 import torch 
+
+from typing import List
 from torchvision.ops import batched_nms, nms
 
 # check the existence of GPU 
@@ -24,7 +25,6 @@ def check_nvidia_existence():
         return False
     
 
-
 def find_available_port(start_port=8000, max_attempts=10):
     for port in range(start_port, start_port + max_attempts): 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s: 
@@ -36,28 +36,51 @@ def find_available_port(start_port=8000, max_attempts=10):
     return None 
 
 
-
-def check_model_name(model_key:str,condition:str,condition_type:str): 
+def check_model_name(model_key:str,condition:str): 
 
     model_validation = {
-        'yolo': ('autoshape', 'y5'),
-        'yolov5': ('autoshape', 'y5'),
-        'yolov8': ('autobackbone', 'y8'),
-        'yolov5s': ('autoshape', 'y5'),
-        'yolov8s': ('autobackbone', 'y8'),
-        'yolov5n': ('autoshape', 'y5'),
-        'yolov8n': ('autobackbone', 'y8'),
-        'yolo5': ('autoshape', 'y5'),
-        'yolo8': ('autobackbone', 'y8'),
-        'yolov5m': ('autoshape', 'y5'),
-        'yolov8m': ('autobackbone', 'y8'),
-        'onnx' : ('compressed', 'y8'), 
-        'compressed' : ('compressed', 'y8') 
+        'yolo': ('autoshape', 'yolov8s'),
+        'yolov5': ('autoshape', 'yolov5s'),
+        'yolov8': ('autobackbone', 'yolov8s'),
+        'yolov5s': ('autoshape', 'yolov5s'),
+        'yolov8s': ('autobackbone', 'yolov8s'),
+        'yolov5n': ('autoshape', 'yolov5n'),
+        'yolov8n': ('autobackbone', 'yolov8n'),
+        'yolo5': ('autoshape', 'yolov5n'),
+        'yolo8': ('autobackbone', 'yolov8s'),
+        'yolov5m': ('autoshape', 'yolov5m'),
+        'yolov8m': ('autobackbone', 'yolov8m'),
+        'onnx' : ('compressed', 'onnx'), 
+        'compressed' : ('compressed', 'onnx') 
     }
-    if model_key in model_validation and condition==condition_type:
-            return model_validation[model_key][0]
+    model_validation_2 = {
+        'yolo': ('YOLO', 'yolov8s'),
+        'yolov5': ('YOLO', 'yolov5s'),
+        'yolov8': ('YOLO', 'yolov8s'),
+        'yolov5s': ('YOLO', 'yolov5s'),
+        'yolov8s': ('YOLO', 'yolov8s'),
+        'yolov5n': ('YOLO', 'yolov5n'),
+        'yolov8n': ('YOLO', 'yolov8n'),
+        'yolo5': ('YOLO', 'yolov5n'),
+        'yolo8': ('YOLO', 'yolov8s'),
+        'yolov5m': ('YOLO', 'yolov5m'),
+        'yolov8m': ('YOLO', 'yolov8m'),
+        'onnx' : ('compressed', 'onnx'), 
+        'compressed' : ('compressed', 'onnx') 
+    }
+    
+    if condition == 'tracking': 
+        if model_key in model_validation_2: 
+            return model_validation_2[model_key][1], model_validation_2[model_key][0]
+        else: 
+            raise ValueError("No valid model was provided...\nUse 'yolov8' as an example")
+
     else: 
-        raise ValueError("No valid model was provided...\nUse 'yolov8' as an example")
+
+        if model_key in model_validation:
+                return model_validation[model_key][1], model_validation[model_key][0]
+        else: 
+            raise ValueError("No valid model was provided...\nUse 'yolov8' as an example")
 
 
 
@@ -84,12 +107,11 @@ def draw_and_save_frames(
         os.makedirs(out_dir) 
 
     if not orig_images or frames_out: 
-        logger.debug("No original images or frames kept parts provided")
+        raise ValueError("No original images or process frames")
 
     num_classes = max((int(c.max()) for _, (_,_,c) in frames_out.items() if len(c)), default=-1) + 1 
     colors = _make_colors(max(num_classes, len(class_names)))
 
-    import pdb;pdb.set_trace()  
     for index, f_id in enumerate(frames_out): 
 
         boxes, scores, classes = frames_out[f_id]
@@ -137,6 +159,14 @@ def draw_and_save_frames(
     return frames_out
 
 
+def get_frame_ids(labels:List[str])->List[int]: 
+
+    frame_ids = [value.split(' ') for value in labels]
+    frame_ids = [id[3] for id in frame_ids]  
+    frame_ids = [re.sub(r'[^\w]','|', id) for id in frame_ids]
+    frame_ids = [id.split('|') for id in frame_ids]
+    frame_ids = [int(id[0]) for id in frame_ids] 
+    return frame_ids
 
 
 

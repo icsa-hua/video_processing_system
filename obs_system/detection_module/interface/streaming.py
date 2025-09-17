@@ -1,8 +1,10 @@
 from obs_system.compressed.interface.compressed_yolo import CompressedYOLO
 from obs_system.logic_module.dummy_logic.region_setter import RegionSetter
 from obs_system.compressed.interface.convert_to_Results import ConverterResults 
-from obs_system.utils.logger import logger 
+from obs_system.utils.logger import get_logger 
 from obs_system.utils.tiles import * 
+from obs_system.utils.appraisal import StepContext
+from obs_system.utils.common import get_frame_ids
 
 import re
 import os 
@@ -19,6 +21,7 @@ from pathlib import Path
 from io import StringIO 
 
 from abc import ABC, abstractmethod
+from collections import deque
 from torch.profiler import profile, ProfilerActivity
 from ultralytics import YOLO 
 from ultralytics.cfg import get_cfg, get_save_dir
@@ -31,6 +34,7 @@ from ultralytics.utils.checks import check_imgsz
 from ultralytics.engine.results import Results
 from ultralytics.utils import DEFAULT_CFG, MACOS, WINDOWS,callbacks, ops, colorstr
 
+logger = get_logger("obs_system."+__name__)
 
 class YOLOStreamer(ABC): 
 
@@ -248,12 +252,14 @@ class YOLOStreamer(ABC):
             
             # Warmup model
             if not self.done_warmup and not isinstance(self.model, YOLO) :
+
                 if model == "yolov8":
                     self.model.warmup(imgsz=(1 if self.model.pt or self.model.triton else self.dataset.bs, 3, *self.imgsz))
                 elif model == "yolov5":
-                    logger.info("Warming up model...")
                     self.warmup(imgsz=(1 if self.model.pt else self.dataset.bs, 3, *self.imgsz))
+
                 self.done_warmup = True
+
             else: 
                 self.warmup(imgsz=(1, 3, *self.imgsz))
                 self.done_warmup = True 
@@ -388,7 +394,7 @@ class YOLOStreamer(ABC):
             string += f"{i}: "
             frame = self.dataset.count
         else:
-            match = re.search(r"frame (\d+)/", s[i])
+            match = re.search(r"frame (\d+)/", s[self.seen])
             frame = int(match[1]) if match else None  # 0 if frame undetermined
 
         self.txt_path = self.save_dir / "labels" / (
@@ -399,9 +405,10 @@ class YOLOStreamer(ABC):
         #Get the batch size pictures 
         result = self.results[i] 
         if isinstance(result, torch.Tensor):
-            result = self.converter.translate_data(i, p, im, result, original_images)
-            if not result: 
-                return "(No Detection Found)"
+            # result = self.converter.translate_data(i, p, im, result, original_images)
+            # if not result: 
+                # return "(No Detection Found)"
+            raise ValueError("Not using pytorch and the ultralytics.YOLO class")
         
         if self.mqtt_interface is not None:
             self.mqtt_interface.publish(self.mqtt_interface.topic, str(result.speed))
@@ -409,12 +416,7 @@ class YOLOStreamer(ABC):
 
         result.save_dir = self.save_dir.__str__() 
 
-        try:  
-            string += f"{result.verbose()}{result.speed['inference']:.1f}ms" 
-
-        except Exception as E:
-            print(E)
-            import pdb;pdb.set_trace()
+        string += f"{result.verbose()}{result.speed['inference']:.1f}ms" 
  
         self.points.clear()
 
@@ -438,15 +440,15 @@ class YOLOStreamer(ABC):
                 
                 track = self.track_history[track_id]
                 self.points[cls] = np.hstack(track).astype(np.int32).reshape((-1,1,2))
+
+                if self.logic_module is not None and self.logic_module["ROI"] is not None: 
+                    self.logic_module["ROI"].count_regions(bbox=bbox_center)
                 
             #Remove track IDs from track history that were not detected in the current frame 
             lost_track_ids = set(self.track_history.keys()) - current_track_ids
             for lost_track_id in lost_track_ids:
                 self.track_history.pop(lost_track_id, None)
                 self.points = {cls:pts for cls, pts in self.points.items() if cls not in lost_track_ids}
-            
-            if self.logic_module is not None and self.logic_module["ROI"] is not None: 
-                self.logic_module["ROI"].count_regions(bbox=bbox_center)
 
             # for region in self.regions:
             #     if region["polygon"].contains(Point((bbox_center[0], bbox_center[1]))):
@@ -470,7 +472,7 @@ class YOLOStreamer(ABC):
             result.save_crop(save_dir=self.save_dir / "crops", file_name=self.txt_path.stem)
         
         if self.args.show:
-            self.show(str(p))
+            self.show(p)
         
         if self.args.save:
             self.save_predicted_images(str(self.save_dir / p.name), frame)
@@ -551,15 +553,17 @@ class YOLOStreamer(ABC):
         self.callbacks[event].append(func)
 
     
-    def capture_object_boxes(self,i, image,results, cropped_dirname): 
+    def capture_object_boxes(self, image:np.ndarray|torch.Tensor,results:Any, cropped_dirname:str, save:bool=False): 
+
+        if results is None:
+            return 
 
         cropped_objects = [] 
 
         mask = np.zeros_like(image)
         orig_h, orig_w = image.shape[:2]
         
-        input_shape = results.orig_shape 
-        infer_h, infer_w = input_shape 
+        infer_h, infer_w = results.orig_shape  
 
         # Calculate resize ratio and padding used in letterboxing
         scale = min(infer_w / orig_w, infer_h / orig_h)
@@ -586,12 +590,48 @@ class YOLOStreamer(ABC):
         if not os.path.exists(cropped_image_dir) : 
             os.mkdir(cropped_image_dir) 
 
-        cropped_image_dir = os.path.join(cropped_image_dir, cropped_dirname) 
-        if not os.path.exists(cropped_image_dir): 
-            os.mkdir(cropped_image_dir) 
-        save_cropped_img = f"{cropped_image_dir}/masked_frame_{i+np.random.randint(10000)}.jpg"
+        image_dir = os.path.join(cropped_image_dir, cropped_dirname) 
+        if not os.path.exists(image_dir): 
+            os.mkdir(image_dir) 
+
+        save_cropped_img = f"{image_dir}/masked_frame_{np.random.randint(10000)}.jpg"
         cv2.imwrite(save_cropped_img, mask) 
-        self.results[i].cropped_objects = cropped_objects
+
+        # return cropped_objects
+
+
+    def admit_frames(self, fr_queue:deque, max_f_inf:int, use_roi:bool): 
+
+        while len(fr_queue) <= max_f_inf: 
+            try:
+                self.batch = next(self.dataset) 
+            except StopIteration: 
+                break
+
+            im0s = self.batch[1] 
+            frame_ids = get_frame_ids(labels=self.batch[2])
+            if 'frame 1' in self.batch[2][0] and use_roi:
+                self.logic_module['ROI'].set_regions(im0s[0]) 
+
+            with StepContext(name="Crop & Subtraction", catch=(RuntimeError,)): 
+
+                if use_roi: 
+                    im0s = self.logic_module['ROI'].crop(im0s)
+
+                mfgs = self.logic_module["SUBTRACTOR"].detect(im0s)
+
+                if not any(mfgs): 
+                    continue
+                mfgs = np.asarray(mfgs, np.int8).tolist()
+
+            with StepContext(name="Fill Frame Queue", catch=(RuntimeError,)): 
+                for ind, (f_id, im) in enumerate(zip(frame_ids, im0s)): 
+                    if not mfgs[ind]: continue 
+                    fr_queue.append((f_id, im))
+        
+        return fr_queue, 
+
+
 
     # @abstractmethod
     # def count_regions(self) -> list: 

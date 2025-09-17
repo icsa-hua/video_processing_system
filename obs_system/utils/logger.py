@@ -3,6 +3,14 @@ import datetime
 import os, sys
 
 
+
+def remove_logger(name=None): 
+    logr = logging.getLogger(name) 
+    logr.propagate = True 
+    logr.handlers.clear()
+    logr.setLevel(logging.WARNING)
+
+
 def jupyter_logger(level=logging.INFO)->logging.StreamHandler: 
     jupyter_handler = logging.StreamHandler(sys.stdout)
     jupyter_handler.setLevel(level)
@@ -16,36 +24,73 @@ def jupyter_logger(level=logging.INFO)->logging.StreamHandler:
     return jupyter_handler
 
 
-parent_dir = os.getcwd()
-log_dir = parent_dir + "/logs"
+def setup_logging(level=logging.INFO, log_dir="logs"):
+    root = logging.getLogger("obs_system")
+    root.setLevel(level)
+    # if root.handlers:  # idempotent
+    #     root.setLevel(level)
+    #     for h in root.handlers:
+    #         h.setLevel(level)
+    #     
 
-if not os.path.exists(log_dir):
-    os.mkdir(log_dir)
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, f"log_{datetime.datetime.now():%Y%m%d_%H%M%S}.log")
 
-log_file = os.path.join(log_dir, f"log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    fmt = logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
-logging.basicConfig(filename=log_file, filemode='w', format='[%(asctime)a][%(levelname)s]:%(message)s', encoding='utf-8', level=logging.DEBUG, datefmt='%m/%d/%Y %I:%M:%S %p')
-logger = logging.getLogger("obs_system")
+    # Console (stdout)
+    # sh = logging.StreamHandler(sys.stdout)
+    # sh.setLevel(level)
+    # sh.setFormatter(fmt)
 
-# Create console handler
-ch = logging.StreamHandler()
-ch.setLevel(logging.DEBUG)  # Default console level
+    # File
+    fh = logging.FileHandler(log_file, encoding="utf-8", mode="w")
+    fh.setLevel(level)
+    fh.setFormatter(fmt)
 
-# Create formatter
-formatter = logging.Formatter(
-    fmt="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
+    root.setLevel(level)
+    # root.addHandler(sh)
+    root.addHandler(fh)
 
-# Add formatter to handler
-ch.setFormatter(formatter)
+    jupyter_handler = jupyter_logger(level=logging.INFO)
 
-# Add handler to logger if not already added (avoids duplicate logs)
-if not logger.hasHandlers():
-    logger.addHandler(ch)
+    if not any(isinstance(h, logging.StreamHandler) for h in root.handlers):
+        root.addHandler(jupyter_handler) 
 
-jupyter_handler = jupyter_logger(level=logging.INFO)
+    root.propagate = True
 
-if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
-    logger.addHandler(jupyter_handler) 
+
+def get_logger(name=None):
+    return logging.getLogger(name)
+
+
+def list_loggers(show_handlers=False):
+    reg = logging.Logger.manager.loggerDict  # name -> Logger or PlaceHolder
+    rows = []
+    for name, obj in reg.items():
+        if not isinstance(obj, logging.Logger):
+            continue
+        level = logging.getLevelName(obj.level) if obj.level else "NOTSET"
+        eff   = logging.getLevelName(obj.getEffectiveLevel())
+        hs    = [type(h).__name__ for h in obj.handlers]
+        rows.append((name, level, eff, obj.propagate, hs))
+    rows.sort()
+    for name, level, eff, prop, hs in rows:
+        line = f"{name:40} level={level:7} effective={eff:7} propagate={prop}"
+        if show_handlers:
+            line += f" handlers={hs}"
+        print(line)
+
+    for n in logging.Logger.manager.loggerDict:
+        if n.startswith(("matplotlib", "urllib3", "botocore")):
+            print(n)
+
+# usage
+
+# remove_logger("matplotlib")
+# remove_logger("matplotlib.font_manager")
+setup_logging(logging.DEBUG)
 

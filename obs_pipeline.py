@@ -1,9 +1,10 @@
+from obs_system.utils.logger import get_logger, remove_logger
 from obs_system.application_module.dummy_application.dummy_app import Application
-from obs_system.utils.logger import logger
+from obs_system.utils.appraisal import StepContext
 from obs_system.utils.common import *
-from obs_system.utils.appraisal import PerfMetric, Timer, StepContext
 
 import os
+import pdb
 import cv2
 import sys
 import signal 
@@ -13,15 +14,14 @@ import subprocess
 import multiprocessing
 
 from multiprocessing import Process
-from silence_tensorflow import silence_tensorflow
 
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  #suppress warnings. 
-silence_tensorflow()
+logger = get_logger(name="obs_system."+__name__)
+remove_logger("matplotlib") 
+remove_logger("matplotlib.font_manager") 
 
 
 def main():
-    logger.info("--- Initializing Application ---")
-    
+    logger.debug("--- Initializing Application ---")
     argparser = argparse.ArgumentParser(description=__doc__)
     argparser.add_argument('--model_name', metavar='M', default='onnx', help='Model to use (Yolov5, Yolov8 (Default), MaskRCNN, ONNX (yolov5, yolov8))')
     argparser.add_argument('--source', metavar='SO', default='samples/10_DrivingWith.mp4', help='Source to use - Local video path (.mp4) or stream index (key needs to be provided)')
@@ -135,32 +135,40 @@ def main():
             shutdown_handler(None ,None)
 
         return 
+
     
     config = {
         'model_name':args.model_name,
         'stream':True, 
         'source':args.source, 
-        'model_type':args.type, 
-        'save':args.save, 
-        'verbose':args.verbose,
+        'model_type':None, 
+        'opt':args.type,
+        'save':args.save if args.save is not None else False, 
+        'verbose':args.verbose if args.verbose is not None else False
     }   
 
     model_key = config['model_name'].lower()
 
     # Check that the model name responds to the models approved for this application (Yolov5-v8) 
-    config['model_name'] = check_model_name(model_key=model_key, condition= config['model_type'], condition_type=args.type)
+    config['model_name'], config['model_type'] = check_model_name(model_key=model_key, condition= config['opt'])
 
     #Initialize the application module that interfaces source, model, mqtt and logic module 
-    app = Application()
+    app = Application(
+        source = config['source'],
+        model_name = config['model_name' ], 
+        opt=config['opt'],
+        model_type=config['model_type'], 
+        save=config['save'], 
+        verbose=config['verbose']
+    )
 
     with StepContext(name='Setup Process', catch=(KeyError, ModuleNotFoundError)):
-        app.setup_process(config['source'],args) 
-
+        app.setup_process(args) 
+    pdb.set_trace()
     with StepContext(name='Setup Model', catch=(OSError,ValueError)):
         app.setup_model(
-            model_name=config['model_name'], 
             stream=config['stream'],
-            opt=config['model_type']
+            opt=config['opt']
         )
 
     # length_of_film = 0
@@ -180,11 +188,12 @@ def main():
                 broker_address="mqtt.eclipseprojects.io", 
                 port=1883
             )
-        else: logger.debug("[MQTT] interface is disabled") 
+        else:
+            logger.debug("[MQTT] interface is disabled") 
 
     with StepContext(name='Run_App', catch=(RuntimeError,)): 
     # Simulate publishing messages in intervals
-         app.run_app(model=config['model_name'])
+         app.run_app()
          app.close_app()
 
    

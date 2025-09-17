@@ -6,7 +6,7 @@ from obs_system.logic_module.dummy_logic.depth_imaging import DepthImageProcesso
 from obs_system.logic_module.dummy_logic.region_setter import RegionSetter
 from obs_system.logic_module.dummy_logic.subtractor import Subtractor
 from obs_system.utils.common import check_nvidia_existence
-from obs_system.utils.logger import logger 
+from obs_system.utils.logger import get_logger 
 
 import os 
 import psutil 
@@ -18,6 +18,7 @@ from typing import Any
 from collections import defaultdict
 from ultralytics.utils import DEFAULT_CFG
 
+logger = get_logger("obs_system."+__name__)
 
 class Application: 
 
@@ -27,13 +28,19 @@ class Application:
     the hardware utilization and the memory usage.
     """
 
-    def __init__(self):
+    def __init__(self, source:Any, model_name:str='yolov8s', opt='tracking', model_type='YOLO', save:bool=False, verbose:bool=False):
 
-        self.streamer:Any = None 
+        self.source = source 
+        self.model_name:str = model_name
+        self.opt = opt 
+        self.model_type = model_type 
+        self.save_outputs = save
+        self.verbose_outputs = verbose 
+
         self.model = None
         self.parent_path:str =  os.getcwd()
-        self.model_name:str = 'yolov8s'
         self.mqtt:bool = False
+        self.streamer:Any = None 
         self.mqtt_interface:Any = None 
         self.logic_module = defaultdict() 
         self.gpu_enabled:bool = False 
@@ -43,21 +50,15 @@ class Application:
         
         # Associate the model from the model key to the corresponding streaming function. 
         set_object_detector_func = {
-            "yolo":    self.yolov8_streaming,
-            "yolo5":   self.yolov5_streaming,
-            "yolov5":  self.yolov5_streaming,
             "yolov5s": self.yolov5_streaming,
             "yolov5n": self.yolov5_streaming,
             "yolov5m": self.yolov5_streaming,
-            "yolo8":   self.yolov8_streaming,
-            "yolov8":  self.yolov8_streaming,
             "yolov8s": self.yolov8_streaming,
             "yolov8n": self.yolov8_streaming,
             "yolov8m": self.yolov8_streaming, 
             "onnx":    self.onnx_streaming, 
             "compressed": self.onnx_streaming, 
             "yolov8.onnx": self.onnx_streaming, 
-
         }
 
         return set_object_detector_func.get(model_name, lambda *args:None)
@@ -66,15 +67,9 @@ class Application:
     def yolov5_streaming(self, opt:str):
 
         # Check the model version. If the perscribed model is not lower than the medium version then default to the nano version. 
-        if self.model_name != "yolov5n" and self.model_name != "yolov5s" and self.model_name != "yolov5m":
-            model_weights = "yolov5n.pt" 
-        else:
-            model_weights = self.model_name + ".pt" 
-        
+        model_weights = self.model_name + ".pt" 
         self.streamer = Yolov5Streamer(DEFAULT_CFG, {}, None)
-
-        self.streamer.setup_model(model=model_weights, verbose=self.verbose, opt=opt)
-
+        self.streamer.setup_model(model=model_weights, verbose=self.verbose_outputs, opt=opt)
         self.model = self.streamer.model
         
         logger.debug(f"-- Streaming Through YoloV5 models --")
@@ -83,33 +78,25 @@ class Application:
     def yolov8_streaming(self, opt:str):
 
         # Check the model version. If the perscribed model is not lower than the medium version then default to the nano version. 
-        if self.model_name != "yolov8n" and self.model_name != "yolov8s" and self.model_name != "yolov8m":
-            model_weights = "yolov8n.pt"
-        else:
-            model_weights = self.model_name + ".pt"
-
+        model_weights = self.model_name + ".pt"
         self.streamer = Yolov8Streamer(DEFAULT_CFG, {}, None)
-
-        self.streamer.setup_model(model=model_weights, verbose=self.verbose, opt=opt)
+        self.streamer.setup_model(model=model_weights, verbose=self.verbose_outputs, opt=opt)
         self.model = self.streamer.model
-        logger.info(f"Self model is of type {type(self.model)}" )
+
         logger.debug(f"-- Streaming Through YoloV8 models --")
 
     
     def onnx_streaming(self, opt:str): 
-        if self.model_name != 'onnx' or self.model_name != 'compressed' : 
-            model_weights = "yolov8s.onnx" 
-        else: 
-            model_weights = self.model_name + ".onnx" 
+
+        model_weights = self.model_name + ".onnx" 
         self.streamer = OnnxY8Streamer(DEFAULT_CFG, {}, None) 
-        self.streamer.setup_model(model=model_weights, verbose=self.verbose, opt=opt) 
-        
+        self.streamer.setup_model(model=model_weights, verbose=self.verbose_outputs, opt=opt) 
         self.model = self.streamer.model 
-        logger.info(f" [Model-Type] -> {type(self.model)}" )
+
         logger.debug(f"-- Streaming Through ONNX YOLO8S models --")
 
 
-    def setup_process(self, source, args): 
+    def setup_process(self, args): 
 
         # Check for GPU (NVIDIA) to allow the program to run GPU statistics 
         self.gpu_enabled = check_nvidia_existence()
@@ -119,31 +106,22 @@ class Application:
         
         self.process_memory = psutil.Process(os.getpid())
         
-        self.source = os.path.join(self.parent_path, source) if os.path.isfile(source) else source
+        self.source = os.path.join(self.parent_path, self.source) if os.path.isfile(self.source) else self.source
         self.mqtt = args.mqtt if args.mqtt is not None else False 
-        self.save = args.save if args.save is not None else False
-        self.verbose = args.verbose if args.verbose is not None else False
         self.start_time = time.time()
         
         DEFAULT_CFG.show = args.show if args.show is not None else False
-        DEFAULT_CFG.verbose = args.verbose if args.verbose is not None else False
         DEFAULT_CFG.gui = args.gui if args.gui is not None else False
-        DEFAULT_CFG.save = self.save
-        DEFAULT_CFG.verbose = self.verbose
-        
-        logger.debug(f"-- Default config: {DEFAULT_CFG} --")
+        DEFAULT_CFG.save = self.save_outputs
+        DEFAULT_CFG.verbose = self.verbose_outputs
         
         tracemalloc.start()
-        
-        return 
 
 
-    def setup_model(self, model_name, stream, opt:str="tracking"):
-        logger.debug(f"-- Setting up the model with {opt} --")
+    def setup_model(self, stream, opt:str="tracking"):
        
         self.stream = stream
-        self.model_name = model_name        
-        setup_func = self.get_streaming_detector(model_name)
+        setup_func = self.get_streaming_detector(self.model_name)
         return setup_func(opt)
         
  
@@ -151,8 +129,6 @@ class Application:
 
         EMPTY_IMAGE_PATH = f"{self.parent_path}/samples/highway_back.png" 
         self.logic_module["SUBTRACTOR"] = Subtractor(empty_background_image=EMPTY_IMAGE_PATH)
-
-        logger.debug("-- Setting up logic module --")
 
         if args.roi: 
             self.logic_module["ROI"] = RegionSetter() 
@@ -168,10 +144,10 @@ class Application:
         #    self.logic_module.clear()
 
 
-    def run_app(self, model, producer_flag=None, queue=None): 
+    def run_app(self, producer_flag=None, queue=None): 
         self.statistics()
         process_video_func = self.process_stream
-        return process_video_func(model=model, producer_flag=producer_flag, queue=queue)
+        return process_video_func(model=self.model_name, producer_flag=producer_flag, queue=queue)
           
 
     def process_stream(self, model, producer_flag=None, queue=None):
@@ -179,8 +155,8 @@ class Application:
 
         # Streaming the video as before
         kwargs = {
-            "save":self.save,
-            "verbose":self.verbose
+            "save":self.save_outputs,
+            "verbose":self.verbose_outputs
         }
 
         self.streamer(

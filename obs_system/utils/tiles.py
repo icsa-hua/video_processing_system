@@ -1,11 +1,6 @@
-from obs_system.utils.logger import logger 
-
 import math 
-import torch
 import cv2 
 import numpy as np 
-
-from ultralytics import YOLO 
 
 
 def make_tiles(W, H, tile=640, overlap=0.2):

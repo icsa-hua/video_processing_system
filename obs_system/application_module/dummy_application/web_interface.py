@@ -1,4 +1,4 @@
-from obs_system.utils.logger import logger 
+from obs_system.utils.logger import get_logger 
 
 import os 
 import cv2 
@@ -15,6 +15,7 @@ from PIL import Image
 from typing import Text
 from pathlib import Path
 
+logger = get_logger("obs_system."+__name__)
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent  # Moves up to `mypackage/`
 BACKEND_URL = f"http://{st.get_option('server.address')}:8000"
