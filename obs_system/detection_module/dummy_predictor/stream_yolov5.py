@@ -1,10 +1,8 @@
 from obs_system.detection_module.interface.streaming import YOLOStreamer 
 from obs_system.utils.logger import get_logger
-
 import torch 
 import numpy as np
 import cv2  
-import warnings
 import os
 
 from typing import Any
@@ -12,7 +10,6 @@ from pathlib import Path
 from collections import defaultdict
 from ultralytics import YOLO 
 from ultralytics.utils import DEFAULT_CFG
-from ultralytics.engine.results import Results
 from ultralytics.utils.files import increment_path
 from ultralytics.utils.torch_utils import select_device, smart_inference_mode
 

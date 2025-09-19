@@ -14,9 +14,10 @@ class SetupError(RuntimeError):
 
 class StepContext(): 
 
-    def __init__(self, name, *, catch=(Exception,),supress=False,on_error=None):
+    def __init__(self, name, *, catch=(Exception,), verbose=False,supress=False,on_error=None):
         self.name = name 
         self.catch = catch
+        self.verbose = verbose
         self.supress = supress
         self.on_error = on_error 
 
@@ -26,7 +27,8 @@ class StepContext():
 
 
     def __enter__(self) : 
-        logger.info(f"✅SCM -> {self.name}...")
+        if self.verbose: 
+            logger.info(f"✅SCM -> {self.name}...")
         self.t0 = time.perf_counter() 
         return self 
 
@@ -36,7 +38,8 @@ class StepContext():
 
         if exc_value is None: 
             self.no_exception_found =True 
-            logger.info(f"[{self.name}] took {self.elapsed_time:.2f}ms")
+            if self.verbose: 
+                logger.info(f"[{self.name}] took {self.elapsed_time:.2f}ms")
             return False #Nothing to suppress 
 
         self.no_exception_found = False 

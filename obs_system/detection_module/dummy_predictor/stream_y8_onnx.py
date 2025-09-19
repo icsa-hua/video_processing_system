@@ -14,7 +14,6 @@ import cv2
 import time
 import numpy as np 
 import supervision as sv
-import torchvision.ops as operation 
  
 from typing import Any, List
 from queue import Queue 
@@ -355,7 +354,6 @@ class OnnxY8Streamer(YOLOStreamer):
                 tmp_im0s = [im0s[i] for i in filtered_indices] 
 
                 # Create the frame queue for tile maker. 
-                
                 with profilers[0]: 
                     images = self.preprocess(tmp_im0s) 
 
@@ -672,7 +670,6 @@ class OnnxY8Streamer(YOLOStreamer):
                 f_inflight.add(frame_id) # Fill the incoming frames 
                 frames_images[frame_id] = img # Map frame id with frame. 
 
-
             out_dir="assets/save_inferences/"
             self.seen = 0 
             self.windows = [] 
@@ -687,7 +684,6 @@ class OnnxY8Streamer(YOLOStreamer):
             activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA] 
 
             self.run_callbacks("on_predict_start") 
-
 
             # Warmup for Better Inference. Reduces Initial frames high inference time and is more stable. 
             with StepContext(name="Warmup Session", catch=(Exception, RuntimeError)):
@@ -776,7 +772,7 @@ class OnnxY8Streamer(YOLOStreamer):
                 with profilers[2]:
                     pass 
 
-                with StepContext(name="PostProcess", catch=(Exception, RuntimeError)): 
+                with StepContext(name="Post Process", catch=(Exception, RuntimeError)): 
 
                     frames_out = {} 
                     for det, score, cls_, meta in zip(i_boxes, i_scores, i_classes, cur_metas[:n0]): 
@@ -800,7 +796,6 @@ class OnnxY8Streamer(YOLOStreamer):
                             cls_ = np.empty((0,), np.int64) 
 
                         else: 
-                            
                             mapped_boxes = reconstruct_tiles(
                                 boxes_xyxy=det, 
                                 tx=meta['left_x'], 
@@ -893,8 +888,23 @@ class OnnxY8Streamer(YOLOStreamer):
                         f_inflight.discard(f_id) 
                         frames_images.pop(f_id,None)
             
+                
                 cur_host, cur_metas, n0, nxt_host, nxt_metas, n1 = nxt_host, nxt_metas, n1, cur_host, cur_metas, n0 
                 self.run_callbacks("on_predict_postprocess_end") 
+
+                if self.logic_module is not None and self.logic_module["DAV2"] is not None: 
+                    fps = self.dataset.fps if self.dataset.mode == "video" else 30 
+                    dav2_dir = os.getcwd() + '/assets/dav2_detections/'
+
+                    if not os.path.exists(dav2_dir): 
+                        os.makedirs(dav2_dir)
+
+                    self.logic_module["DAV2"].detect(
+                            queue=tbuf[self.seen:self.seen + len(self.results)], 
+                            fps=fps, 
+                            save_path=dav2_dir 
+                    )
+
                 n = len(self.results)
                 for i in range(n): 
                     if self.seen == len(self.batch[1]): 
@@ -919,7 +929,7 @@ class OnnxY8Streamer(YOLOStreamer):
                         self.batch[2][self.seen] += self.write_results(
                                 i = i,
                                 p = Path(self.batch[0][self.seen]),
-                                im = self.batch[1][self.seen] ,
+                                im = tbuf[:n0] ,
                                 original_images=self.batch[1],
                                 s = self.batch[2]
                         ) 
@@ -932,7 +942,6 @@ class OnnxY8Streamer(YOLOStreamer):
                         elif self.proc_image is None and queue is not None: 
                             queue.put(None) 
 
-                        time.sleep(0.05) 
                     
                     with StepContext(name="Crop Objects to Image", catch=(RuntimeError,)):
                         self.capture_object_boxes(
@@ -945,13 +954,12 @@ class OnnxY8Streamer(YOLOStreamer):
                     self.seen += 1 
                 
                 self.results.clear()
-
                 # if self.args.verbose: 
                 #     logger.info("\n".join(self.batch[2])) 
 
                 self.run_callbacks("on_predict_batch_end") 
 
-                
+                # yield from self.results 
 
         for v in self.vid_writer.values(): 
             if isinstance(v, cv2.VideoWriter): 
@@ -964,6 +972,7 @@ class OnnxY8Streamer(YOLOStreamer):
                 f"Speed: %.1fms preprocess, %.1fms inference, %.1fms postprocess per image at shape "
                 f"{(min(self.args.batch, self.seen), 3, *tbuf.shape[2:])}" % t
             )
+
         if self.args.save or self.args.save_txt or self.args.save_crop:
             nl = len(list(self.save_dir.glob("labels/*.txt")))  # number of labels
             s = f"\n{nl} label{'s' * (nl > 1)} saved to {self.save_dir / 'labels'}" if self.args.save_txt else ""

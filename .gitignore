@@ -25,3 +25,5 @@ vps_env2
 sort_results.mp4
 debug.png
 debug_detection.jpg
+samples/highway.mp4
+get_background_video.py

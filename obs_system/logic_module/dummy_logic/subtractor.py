@@ -1,10 +1,11 @@
 from obs_system.logic_module.interface.event_extractor import EventExtractorInterface
 import numpy as np
 import cv2
+import os
 
 
 class Subtractor(EventExtractorInterface): 
-    def __init__(self, trials=10, history=500, threshold_ratio=0.02, detect_shadows=True, empty_background_image="", downscale=(640,640)):
+    def __init__(self, trials=10, history=500, threshold_ratio=0.02, detect_shadows=True, empty_background_image="", downscale=(320,320)):
         self.downscale = downscale
         self.threshold_ratio = float(threshold_ratio)
 
@@ -27,7 +28,16 @@ class Subtractor(EventExtractorInterface):
                 self.static_bg = True
 
     
-    def detect(self, batch): 
+    def detect(self, batch, save_img=False): 
+
+        save_dir = "" 
+        if save_img: 
+            parent = os.getcwd()
+            save_dir = f"{parent}/assets/background_check/"
+            os.makedirs(save_dir, exist_ok = True)
+            self._save_idx = 0 
+
+
         motion_flags = [] 
         for frame in batch:
             if self.downscale:
@@ -47,6 +57,15 @@ class Subtractor(EventExtractorInterface):
                 motion_flags.append(motion_pixels > threshold)
             else:
                 motion_flags.append(False)
+
+
+            if save_img: 
+                idx = self._save_idx 
+                self._save_idx += 1 
+
+                cv2.imwrite(os.path.join(save_dir, f"{idx:06d}_mask.png"), mask)
+                motion_cutout = cv2.bitwise_and(frame,frame, mask=mask) 
+                cv2.imwrite(os.path.join(save_dir, f"{idx:06d}_motion.png"), motion_cutout)
 
         return motion_flags
         

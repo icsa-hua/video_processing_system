@@ -403,10 +403,8 @@ class YOLOStreamer(ABC):
         string += "%gx%g " % im.shape[2:]
 
         #Get the batch size pictures 
-        try: 
-            result = self.results[i] 
-        except: 
-            import pdb;pdb.set_trace()
+        result = self.results[i] 
+       
         if isinstance(result, torch.Tensor):
             # result = self.converter.translate_data(i, p, im, result, original_images)
             # if not result: 
@@ -458,13 +456,13 @@ class YOLOStreamer(ABC):
             #         region["counts"] += 1
 
         # Add predictions to image
+
         if self.args.save or self.args.show:
             self.plotted_img = result.plot(
                 line_width=self.args.line_width,
                 boxes=self.args.show_boxes,
                 conf=self.args.show_conf,
                 labels=self.args.show_labels,
-                im_gpu=None if self.args.retina_masks else im[i],
             )
 
         # Save results
@@ -616,18 +614,19 @@ class YOLOStreamer(ABC):
             if 'frame 1' in self.batch[2][0] and use_roi:
                 self.logic_module['ROI'].set_regions(im0s[0]) 
 
-            with StepContext(name="Crop & Subtraction", catch=(RuntimeError,)): 
+            with StepContext(name="Crop & Subtraction", catch=(RuntimeError,), verbose=True): 
 
                 if use_roi: 
                     im0s = self.logic_module['ROI'].crop(im0s)
 
-                mfgs = self.logic_module["SUBTRACTOR"].detect(im0s)
+                mfgs = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=True)
 
                 if not any(mfgs): 
                     continue
+
                 mfgs = np.asarray(mfgs, np.int8).tolist()
 
-            with StepContext(name="Fill Frame Queue", catch=(RuntimeError,)): 
+            with StepContext(name="Fill Frame Queue", catch=(RuntimeError,), verbose=True): 
                 for ind, (f_id, im) in enumerate(zip(frame_ids, im0s)): 
                     if not mfgs[ind]: continue 
                     fr_queue.append((f_id, im))
