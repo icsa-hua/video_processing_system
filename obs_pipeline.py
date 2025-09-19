@@ -164,7 +164,7 @@ def main():
 
     with StepContext(name='Setup Process', catch=(KeyError, ModuleNotFoundError)):
         app.setup_process(args) 
-    pdb.set_trace()
+
     with StepContext(name='Setup Model', catch=(OSError,ValueError)):
         app.setup_model(
             stream=config['stream'],

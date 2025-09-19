@@ -772,11 +772,12 @@ class OnnxY8Streamer(YOLOStreamer):
                 with profilers[2]:
                     pass 
 
-                with StepContext(name="Post Process", catch=(Exception, RuntimeError)): 
+                with StepContext(name="Post Process", catch=(Exception, RuntimeError), verbose=True): 
 
                     frames_out = {} 
                     for det, score, cls_, meta in zip(i_boxes, i_scores, i_classes, cur_metas[:n0]): 
-
+                        pdb.set_trace()
+                        
                         if meta is None: continue 
                     
                         f_id = int(meta['frame_id'])

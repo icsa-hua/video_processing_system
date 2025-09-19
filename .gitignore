@@ -13,7 +13,6 @@ __pycache__
 vps_env
 VIDPS.egg-info
 logs
-compressed 
 tensorRT
 samples/highway_attika.mp4 
 samples/mask_background.mp4 
