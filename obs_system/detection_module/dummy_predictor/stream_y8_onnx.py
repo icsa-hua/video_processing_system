@@ -1,4 +1,3 @@
-from torchvision.ops.boxes import nms
 from obs_system.compressed.interface.compressed_yolo import CompressedYOLO 
 from obs_system.detection_module.interface.streaming import YOLOStreamer
 from obs_system.utils.tiles import *
@@ -455,43 +454,6 @@ class OnnxY8Streamer(YOLOStreamer):
             speed={}
         )
 
-
-    def process_tiles(self, im0s, s): 
-        
-        frame_ids = get_frame_ids(labels=s) 
-
-        tile = self.height if self.height == self.width else 640 
-        overlap = 0.15 
-
-        in_queue = Queue(maxsize=100) 
-
-        for frame, f_id in zip(im0s, frame_ids): 
-            H, W = frame.shape[:2]
-
-            for (x0, y0, tw, th) in make_tiles(W, H, tile, overlap): 
-                slice = frame[y0:y0+th, x0:x0+tw] 
-
-                if slice.shape[0] != th or slice.shape[1] != tw: 
-                    slice = cv2.copyMakeBorder(
-                        slice, 
-                        0, th - slice.shape[0], 0, tw-slice.shape[1],
-                        cv2.BORDER_REPLICATE
-                    )
-
-                crop, scale, pad = letterbox(
-                    img=slice, 
-                    new_shape=(tile, tile)
-                )
-
-                meta_data = {
-                    "frame_id": f_id, 
-                    "offset":(x0,y0), 
-                    "scale":scale, 
-                    "pad": pad, 
-                    "orig_shape":(H, W, 3)
-                }
-
-                in_queue.put((crop, meta_data))
 
 
     def microbatched(self, tiles_batch, orig_images, device, micro=32): 

@@ -1,4 +1,5 @@
 from obs_system.compressed.interface.compressed_yolo import CompressedYOLO
+from obs_system.compressed.interface.tensor_yolo import TensorRTYOLO
 from obs_system.logic_module.dummy_logic.region_setter import RegionSetter
 from obs_system.compressed.interface.convert_to_Results import ConverterResults 
 from obs_system.utils.logger import get_logger 
@@ -140,7 +141,7 @@ class YOLOStreamer(ABC):
             (list): A list of transformed images.
         """
         pt = None 
-        if isinstance(self.model, YOLO) or isinstance(self.model, CompressedYOLO): 
+        if isinstance(self.model, YOLO) or isinstance(self.model, CompressedYOLO) or isinstance(self.model, TensorRTYOLO): 
             pt = True 
             self.stride = 32 
         else: 

@@ -84,7 +84,7 @@ class CompressedYOLO:
         # Resize input image
         input_img = cv2.resize(input_img, (int(self.input_width), int(self.input_height)))
 
-        # Scale input pixel values to 0 to 1
+        # Scale input pixel values to 0 and 1
         input_img = input_img / 255.0
         input_img = input_img.transpose(2, 0, 1)
         input_tensor = input_img[np.newaxis, :, :, :].astype(np.float32)
@@ -185,7 +185,7 @@ class CompressedYOLO:
                     all_class_ids.append(class_ids[indices]) 
 
                 else: 
-                    all_boxes.append(torch.empty((0,4), dtype=np.float16))
+                    all_boxes.append(torch.empty((0,4), dtype=torch.float16))
                     all_scores.append(np.empty((0,), dtype=np.float16))
                     all_class_ids.append(np.empty((0,), dtype=np.int32))
         
@@ -284,6 +284,7 @@ class CompressedYOLO:
 
         # Check for dynamic shape
         if isinstance(self.input_shape[2], str) or isinstance(self.input_shape[3], str):
+
             self.input_height = 640
             self.input_width = 640
         else:

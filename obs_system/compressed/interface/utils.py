@@ -19,10 +19,9 @@ rng = np.random.default_rng(3)
 colors = rng.uniform(0, 255, size=(len(class_names), 3))
 
 
-def nms(boxes, scores, iou_threshold):
+def nms_light(boxes, scores, iou_threshold):
     # Sort by score
     sorted_indices = np.argsort(scores)[::-1]
-
     keep_boxes = []
     while sorted_indices.size > 0:
         # Pick the last box
@@ -44,26 +43,37 @@ def nms(boxes, scores, iou_threshold):
 def multiclass_nms(boxes, scores, class_ids, iou_threshold):
 
     keep_boxes = []
-    if isinstance(boxes, torch.Tensor) or isinstance(scores, torch.Tensor) or isinstance(class_ids, torch.Tensor): 
-        unique_class_ids = torch.unique(class_ids) 
-        for class_id in unique_class_ids: 
-            class_indices = torch.where(class_ids == class_id)[0] 
-            class_boxes = boxes[class_indices, :] 
-            class_scores = scores[class_indices] 
 
-            class_keep_boxes = nms(class_boxes, class_scores, iou_threshold) 
-            keep_boxes.extend(class_indices[class_keep_boxes])
-    
+
+    if isinstance(boxes, torch.Tensor): 
+        boxes = boxes.to(dtype=torch.float32)
     else: 
-        unique_class_ids = np.unique(class_ids)
+        boxes = torch.as_tensor(boxes, dtype=torch.float32)
 
-        for class_id in unique_class_ids:
-            class_indices = np.where(class_ids == class_id)[0]
-            class_boxes = boxes[class_indices,:]
-            class_scores = scores[class_indices]
+    
+    if isinstance(scores, torch.Tensor): 
+        scores = scores.to(dtype=torch.float32)
+    else: 
+        scores = torch.as_tensor(scores, dtype=torch.float32)
 
-            class_keep_boxes = nms(class_boxes, class_scores, iou_threshold)
-            keep_boxes.extend(class_indices[class_keep_boxes])
+
+    if isinstance(class_ids, torch.Tensor): 
+        class_ids = class_ids.to(dtype=torch.float16)
+    else: 
+        class_ids = torch.as_tensor(class_ids, dtype=torch.int8)
+
+
+    unique_class_ids = torch.unique(class_ids) 
+    for class_id in unique_class_ids: 
+        
+        class_indx = (class_ids == class_id).nonzero(as_tuple=False).squeeze(1)
+        if class_indx.numel() == 0: 
+            continue
+
+        kept = nms(boxes[class_indx], scores[class_indx], iou_threshold)
+        if kept.numel(): 
+            keep_boxes.extend(class_indx[kept].tolist())
+
 
     return keep_boxes
 

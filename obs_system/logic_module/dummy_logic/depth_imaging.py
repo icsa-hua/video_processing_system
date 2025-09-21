@@ -27,6 +27,7 @@ class DepthImageProcessor(EventExtractorInterface):
         self.model = self.model.to(self.DEVICE).eval()
         self.precision = "fp16"
         if self.precision == "fp16": 
+            
 
             self.model = self.model.half()
         else: 

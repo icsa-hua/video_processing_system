@@ -51,7 +51,9 @@ def check_model_name(model_key:str,condition:str):
         'yolov5m': ('autoshape', 'yolov5m'),
         'yolov8m': ('autobackbone', 'yolov8m'),
         'onnx' : ('compressed', 'onnx'), 
-        'compressed' : ('compressed', 'onnx') 
+        'compressed' : ('compressed', 'onnx'), 
+        'trt':('trt', 'engine'),
+        'trt-onnx':('trt', 'onnx')
     }
     model_validation_2 = {
         'yolo': ('YOLO', 'yolov8s'),
@@ -66,7 +68,9 @@ def check_model_name(model_key:str,condition:str):
         'yolov5m': ('YOLO', 'yolov5m'),
         'yolov8m': ('YOLO', 'yolov8m'),
         'onnx' : ('compressed', 'onnx'), 
-        'compressed' : ('compressed', 'onnx') 
+        'compressed' : ('compressed', 'onnx') ,
+        'trt':('trt', 'engine'), 
+        'trt-onnx':('trt', 'onnx')
     }
     
     if condition == 'tracking': 
