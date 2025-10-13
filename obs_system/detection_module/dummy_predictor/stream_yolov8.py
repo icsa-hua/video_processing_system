@@ -127,13 +127,13 @@ class Yolov8Streamer(YOLOStreamer):
         super().setup_source(source)
 
 
-    def setup_model(self, model, verbose=True, opt='autobackbone'):
+    def setup_model(self, model, opt='autobackbone'):
         
         """Initialize YOLO model with given parameters and set it to evaluation mode if needed."""
         if self.model: 
             return self.model
 
-        device = select_device(self.args.device, verbose=verbose)
+        device = select_device(self.args.device, verbose=self.args.verbose)
 
         if opt == "autobackbone": 
             self.model = AutoBackend(
@@ -144,7 +144,7 @@ class Yolov8Streamer(YOLOStreamer):
                 fp16=self.args.half,
                 batch=self.args.batch,
                 fuse=True,
-                verbose=verbose,
+                verbose=self.args.verbose,
             )
 
             self.device = self.model.device  # update device
@@ -156,7 +156,7 @@ class Yolov8Streamer(YOLOStreamer):
             self.model = YOLO(model)
             self.model = self.model.to(device)
             self.device = self.model.device
-            self.stride = 32 
+            self.stride = 32 if not self.args.half else 16 
 
 
     def non_max_suppression(self, detections,scores, iou):

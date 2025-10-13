@@ -21,8 +21,8 @@ class CompressedYOLO:
         self.initialize_model(path)
 
 
-    def __call__(self, image):
-        return self.detect_objects(image)
+    def __call__(self, image, debug=False):
+        return self.detect_objects(image, debug=debug)
 
 
     def initialize_model(self, path):
@@ -45,7 +45,7 @@ class CompressedYOLO:
         self.get_output_details()
 
 
-    def detect_objects(self, im):
+    def detect_objects(self, im, debug=False):
         if isinstance(im, torch.Tensor): 
             # Perform inference on the tiles
             self.img_height, self.img_width = im[0].shape[1], im[0].shape[2]
@@ -66,7 +66,7 @@ class CompressedYOLO:
             if BRG_to_RGB: im = im.flip(1)
 
             input_tensor = im #this is a tensor with 16 images. 
-            outputs = self.inference(input_tensor)
+            outputs = self.inference(input_tensor, verbose=debug)
             
             self.boxes, self.scores, self.class_ids = self.process_output(outputs)
             
@@ -92,7 +92,7 @@ class CompressedYOLO:
         return input_tensor
 
 
-    def inference(self, input_tensor, return_numpy=False):
+    def inference(self, input_tensor, return_numpy=False, verbose=False):
 
         """ 
         This class method at its current implementation takes: 
@@ -135,8 +135,9 @@ class CompressedYOLO:
             outputs = io.get_outputs() 
             # outputs = None
             outputs = [torch.from_numpy(o.numpy()) for o in outputs] 
-
-        logger.debug(f"Inference time: {(time.perf_counter() - start)*1000:.2f} ms")
+        
+        if verbose:
+            logger.debug(f"Inference time: {(time.perf_counter() - start)*1000:.2f} ms")
         return outputs
 
 
@@ -150,7 +151,8 @@ class CompressedYOLO:
 
     def process_output(self, output):
         batch_images = output[0] 
-
+        logger.debug(f"Batch shape = {batch_images.shape} and boxes shape = {batch_images[0].shape}")
+        logger.debug(batch_images[0])
         all_boxes, all_scores, all_class_ids = [], [], [] 
         if isinstance(batch_images, torch.Tensor): 
             pred = torch.transpose(batch_images, 1, 2)
@@ -172,13 +174,14 @@ class CompressedYOLO:
                     all_scores.append(torch.empty((0,), dtype=torch.float16)) 
                     all_class_ids.append(torch.empty((0,), dtype=torch.int32))
                     continue
-       
+                
                 predictions = predictions[scores>self.conf_threshold, :] 
                 scores = scores[scores > self.conf_threshold] 
-                class_ids = torch.argmax(predictions[:,4:], axis=1)
+                class_ids = torch.argmax(predictions[:,4:],dim=1)
                 boxes = self.extract_boxes(predictions)
 
                 indices = multiclass_nms(boxes, scores, class_ids, self.iou_threshold) 
+
                 if indices: 
                     all_boxes.append(boxes[indices]) 
                     all_scores.append(scores[indices]) 
@@ -186,8 +189,8 @@ class CompressedYOLO:
 
                 else: 
                     all_boxes.append(torch.empty((0,4), dtype=torch.float16))
-                    all_scores.append(np.empty((0,), dtype=np.float16))
-                    all_class_ids.append(np.empty((0,), dtype=np.int32))
+                    all_scores.append(torch.empty((0,), dtype=torch.float16))
+                    all_class_ids.append(torch.empty((0,), dtype=torch.int32))
         
         else: 
 
@@ -204,41 +207,40 @@ class CompressedYOLO:
                 if isinstance(obj, np.ndarray): 
                     obj = 1/(1 + np.exp(-obj)) 
 
-        for preds in batch_images: 
+            for preds in batch_images: 
 
-            predictions = preds.T
+                predictions = preds.T
+                
+                # Filter predictions 
+                scores = np.max(predictions[:,4:], axis=-1) * (obj if np.isscalar(obj)==False else 1.0) 
+                mask = scores > self.conf_threshold 
+                
+                if not np.any(mask): 
+                    all_boxes.append(np.empty((0,4), dtype=np.float32))
+                    all_scores.append(np.empty((0,), dtype=np.float32))
+                    all_class_ids.append(np.empty((0,), dtype=np.int64)) 
+                    continue 
+
+                predictions = predictions[scores>self.conf_threshold, :]
+                scores = scores[scores>self.conf_threshold]
+
+                # Get class with highest confidence 
+                class_ids = np.argmax(predictions[:,4:], axis=1)
+                boxes = self.extract_boxes(predictions) 
+
+                # Non-Maima suppression for overlapping bounding boxes
+                indices = multiclass_nms(boxes, scores, class_ids, self.iou_threshold) 
+
+                if indices: 
+                    all_boxes.append(boxes[indices]) 
+                    all_scores.append(scores[indices]) 
+                    all_class_ids.append(class_ids[indices]) 
+
+                else: 
+                    all_boxes.append(np.empty((0,4), dtype=np.float32))
+                    all_scores.append(np.empty((0,), dtype=np.float32))
+                    all_class_ids.append(np.empty((0,), dtype=np.float32))
             
-            # Filter predictions 
-            scores = np.max(predictions[:,4:], axis=-1) * (obj if np.isscalar(obj)==False else 1.0) 
-            mask = scores > self.conf_threshold 
-            
-            if not np.any(mask): 
-                all_boxes.append(np.empty((0,4), dtype=np.float32))
-                all_scores.append(np.empty((0,), dtype=np.float32))
-                all_class_ids.append(np.empty((0,), dtype=np.int64)) 
-                continue 
-
-            predictions = predictions[scores>self.conf_threshold, :]
-            scores = scores[scores>self.conf_threshold]
-
-            # Get class with highest confidence 
-            class_ids = np.argmax(predictions[:,4:], axis=1)
-            boxes = self.extract_boxes(predictions) 
-
-            # Non-Maima suppression for overlapping bounding boxes
-            indices = multiclass_nms(boxes, scores, class_ids, self.iou_threshold) 
-            
-            if indices: 
-                all_boxes.append(boxes[indices]) 
-                all_scores.append(scores[indices]) 
-                all_class_ids.append(class_ids[indices]) 
-
-            else: 
-                all_boxes.append(np.empty((0,4), dtype=np.float32))
-                all_scores.append(np.empty((0,), dtype=np.float32))
-                all_class_ids.append(np.empty((0,), dtype=np.float32))
-        
-        logger.info("Post Process completed...")
         return all_boxes, all_scores, all_class_ids 
 
 

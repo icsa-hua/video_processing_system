@@ -12,15 +12,22 @@
 * [x] Add: Integrate compressed models inside the main pipeline
 * [x] Test: MQTT broker from withing the Jetson into the GNT MQTT broker
 * [] Fix: Web Interface Connection Error / Model Inference broken pipelin 
-* [] Test: MQTT broker from within Jetson Orin 
+* [x] Test: MQTT broker from within Jetson Orin 
 * [] Benchmark: Improve performance 
+* [] Fix: homography Integration 
+* [] Fix: TensorRT performance + ONNX Runtime performance 
+* [] Fix: Memory Allocation is very large 
+* [] Test: Hysteresis & Homography 
+* [] Add: Zone violations & abnormal object detections 
 
 
 
 ## Ideas 
-- Integrate DepthAnythingV2 
+- Integrate DepthAnythingV2.
 - ByteTracker into the compressed models. 
-
+- Homography, which transforms the original image can provide BEV depictions 
+  which can then be used to assess the zones by checking the footpoint of each object. 
+- Hysteresis to allow even less checks in regards to motion-filtering 
 
 ## NOTES 
 - Compressed integration needs to adjust Results. 
@@ -28,6 +35,7 @@
 
 ## Additional Features 
 * [x] ADD: Perfomance measurement for modules, and exception catcher. 
+* [] ADD: Visualization of Metrics 
 
 ## NOTES
 - MQTT broker Test: Required a docker image with a test python script that can execute in the 
@@ -128,5 +136,4 @@ for separating threads and processes. For millisecond budget programs,
      
 
 
-#### How to inference the stream when the tile batch is 32 with each frame having multiple tiles? 
 

@@ -24,7 +24,7 @@ def jupyter_logger(level=logging.INFO)->logging.StreamHandler:
     return jupyter_handler
 
 
-def setup_logging(level=logging.INFO, log_dir="logs"):
+def setup_logging(level=logging.DEBUG, log_dir="logs"):
     root = logging.getLogger("obs_system")
     root.setLevel(level)
     # if root.handlers:  # idempotent
@@ -55,7 +55,7 @@ def setup_logging(level=logging.INFO, log_dir="logs"):
     # root.addHandler(sh)
     root.addHandler(fh)
 
-    jupyter_handler = jupyter_logger(level=logging.INFO)
+    jupyter_handler = jupyter_logger(level=level)
 
     if not any(isinstance(h, logging.StreamHandler) for h in root.handlers):
         root.addHandler(jupyter_handler) 

@@ -6,6 +6,7 @@ from obs_system.communication_module.mqtt_com.message_transmitter import RealMQT
 from obs_system.logic_module.dummy_logic.depth_imaging import DepthImageProcessor
 from obs_system.logic_module.dummy_logic.region_setter import RegionSetter
 from obs_system.logic_module.dummy_logic.subtractor import Subtractor
+from obs_system.logic_module.dummy_logic.fisheye import FishEyeProjection
 from obs_system.utils.common import check_nvidia_existence
 from obs_system.utils.logger import get_logger 
 
@@ -72,7 +73,7 @@ class Application:
         # Check the model version. If the perscribed model is not lower than the medium version then default to the nano version. 
         model_weights = self.model_name + ".pt" 
         self.streamer = Yolov5Streamer(DEFAULT_CFG, {}, None)
-        self.streamer.setup_model(model=model_weights, verbose=self.verbose_outputs, opt=opt)
+        self.streamer.setup_model(model=model_weights, opt=opt)
         self.model = self.streamer.model
         
         logger.debug(f"-- Streaming Through YoloV5 models --")
@@ -83,7 +84,7 @@ class Application:
         # Check the model version. If the perscribed model is not lower than the medium version then default to the nano version. 
         model_weights = self.model_name + ".pt"
         self.streamer = Yolov8Streamer(DEFAULT_CFG, {}, None)
-        self.streamer.setup_model(model=model_weights, verbose=self.verbose_outputs, opt=opt)
+        self.streamer.setup_model(model=model_weights, opt=opt)
         self.model = self.streamer.model
 
         logger.debug(f"-- Streaming Through YoloV8 models --")
@@ -93,7 +94,7 @@ class Application:
 
         model_weights = self.model_name + ".onnx" 
         self.streamer = OnnxY8Streamer(DEFAULT_CFG, {}, None) 
-        self.streamer.setup_model(model=model_weights, verbose=self.verbose_outputs, opt=opt) 
+        self.streamer.setup_model(model=model_weights, opt=opt) 
         self.model = self.streamer.model 
 
         logger.debug(f"-- Streaming Through ONNX YOLO8S models --")
@@ -102,7 +103,7 @@ class Application:
     def trt_streaming(self, opt:str): 
         model_weights = self.model_name + ".engine" if not self.model_name.endswith('.csv') else self.model_name + '.onnx'
         self.streamer = TensorRTRTXStreamer(DEFAULT_CFG, {}, None)
-        self.streamer.setup_model(model=model_weights, verbose=self.verbose_outputs, opt=opt)
+        self.streamer.setup_model(model=model_weights, opt=opt)
         self.model = self.streamer.model
 
         logger.debug(f"-- Streaming Through TRT Engine --")
@@ -126,6 +127,7 @@ class Application:
         DEFAULT_CFG.gui = args.gui if args.gui is not None else False
         DEFAULT_CFG.save = self.save_outputs
         DEFAULT_CFG.verbose = self.verbose_outputs
+        DEFAULT_CFG.half = args.half
         
         tracemalloc.start()
 
@@ -152,6 +154,14 @@ class Application:
         else : 
             self.logic_module["DAV2"] = None
             
+
+        if args.fep: 
+            self.logic_module["FEP"] = FishEyeProjection()
+
+        else: 
+            self.logic_module["FEP"] = None
+
+
         #if not args.roi and not args.DAV2: 
         #    self.logic_module.clear()
 

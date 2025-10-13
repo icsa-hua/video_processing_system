@@ -1,6 +1,7 @@
 # this file is based upon the : https://github.com/ibaiGorordo/ONNX-YOLOv8-Object-Detection/blob/library/YOLOv8.py
 import numpy as np
 import cv2
+import pdb
 import torch
 from torchvision.ops import nms
 
@@ -40,33 +41,30 @@ def nms_light(boxes, scores, iou_threshold):
     return keep_boxes
 
 
-def multiclass_nms(boxes, scores, class_ids, iou_threshold):
+def multiclass_nms(in_boxes, in_scores, in_class_ids, iou_threshold):
 
+    # Always check torch.dtype, shape and device. 
     keep_boxes = []
-
-
-    if isinstance(boxes, torch.Tensor): 
-        boxes = boxes.to(dtype=torch.float32)
+    if isinstance(in_boxes, torch.Tensor): 
+        boxes = in_boxes.to(dtype=torch.float32)
     else: 
-        boxes = torch.as_tensor(boxes, dtype=torch.float32)
+        boxes = torch.as_tensor(in_boxes, dtype=torch.float32)
 
+    if isinstance(in_scores, torch.Tensor): 
+        scores = in_scores.to(dtype=torch.float32)
+    else: 
+        scores = torch.as_tensor(in_scores, dtype=torch.float32)
+
+    if isinstance(in_class_ids, torch.Tensor): 
+        class_ids = in_class_ids.to(dtype=torch.int64)
+    else: 
+        class_ids = torch.as_tensor(in_class_ids, dtype=torch.int8)
     
-    if isinstance(scores, torch.Tensor): 
-        scores = scores.to(dtype=torch.float32)
-    else: 
-        scores = torch.as_tensor(scores, dtype=torch.float32)
-
-
-    if isinstance(class_ids, torch.Tensor): 
-        class_ids = class_ids.to(dtype=torch.float16)
-    else: 
-        class_ids = torch.as_tensor(class_ids, dtype=torch.int8)
-
-
     unique_class_ids = torch.unique(class_ids) 
     for class_id in unique_class_ids: 
-        
+         
         class_indx = (class_ids == class_id).nonzero(as_tuple=False).squeeze(1)
+        
         if class_indx.numel() == 0: 
             continue
 

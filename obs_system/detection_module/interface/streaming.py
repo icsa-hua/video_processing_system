@@ -5,11 +5,12 @@ from obs_system.compressed.interface.convert_to_Results import ConverterResults
 from obs_system.utils.logger import get_logger 
 from obs_system.utils.tiles import * 
 from obs_system.utils.appraisal import StepContext
-from obs_system.utils.common import get_frame_ids
+from obs_system.utils.common import get_frame_ids, ensure_dir, open_writer
 
 import re
 import os 
 import cv2 
+import pdb
 import time
 import torch 
 import threading 
@@ -22,7 +23,7 @@ from pathlib import Path
 from io import StringIO 
 
 from abc import ABC, abstractmethod
-from collections import deque
+from collections import deque, defaultdict
 from torch.profiler import profile, ProfilerActivity
 from ultralytics import YOLO 
 from ultralytics.cfg import get_cfg, get_save_dir
@@ -84,7 +85,9 @@ class YOLOStreamer(ABC):
         self.windows = [] 
         self.trackers = [] 
         self.vid_writer = {} 
+        self.frame_images = {}
         self.data = self.args.data
+
         self.model:Any = None 
         self.stride:Any = None
         self.imgsz:Any = None 
@@ -97,21 +100,21 @@ class YOLOStreamer(ABC):
         self.txt_path = None 
         self.proc_image = None
         self.logic_module:Any = None
-        self.track_history = None
+        self.tracker_model:Any = None
         self.points = dict() 
+
         self._lock = threading.Lock()
         self.mqtt_interface:Any = None
+
         self.callbacks = _callbacks or callbacks.get_default_callbacks() 
         self.cropped_image_dirname = f'cropped_trial_{np.random.randint(44)}'
          
-        #Counting Regions
-        self.current_region = None
-
         #ConverterResults
         self.converter = ConverterResults() 
 
         callbacks.add_integration_callbacks(self)
-        logger.info("Initialization Completed for YOLO Streaming")
+        if self.args.verbose: 
+            logger.info("Initialization Completed for Streamer")
 
 
     @abstractmethod 
@@ -141,9 +144,12 @@ class YOLOStreamer(ABC):
             (list): A list of transformed images.
         """
         pt = None 
-        if isinstance(self.model, YOLO) or isinstance(self.model, CompressedYOLO) or isinstance(self.model, TensorRTYOLO): 
+        if isinstance(self.model, YOLO) or isinstance(self.model, CompressedYOLO) : 
             pt = True 
-            self.stride = 32 
+            self.stride = 16 if self.args.half else 32 
+        elif isinstance(self.model, TensorRTYOLO): 
+            pt = True 
+            self.stride = 16 if self.args.half else 32
         else: 
             pt = self.model.pt 
             self.stride = self.model.stride
@@ -193,8 +199,8 @@ class YOLOStreamer(ABC):
     def setup_source(self, source:str)->None:
         """Sets up source and inference mode."""
 
-        # self.imgsz = check_imgsz(self.args.imgsz, stride=self.model.stride if (not isinstance(self.model, YOLO) or not isinstance(self.model, CompressedYOLO)) else  self.stride, min_dim=2)  # check image size
         self.imgsz = check_imgsz(self.args.imgsz, stride=self.stride,min_dim=2) 
+
         self.dataset = load_inference_source(
             source=source,
             batch=self.args.batch,
@@ -212,11 +218,12 @@ class YOLOStreamer(ABC):
         ): 
             logger.warning(YOLOStreamer.STREAM_WARNING)
 
-        logger.debug("Dataset Source Type | {}".format(self.source_type))
+        if self.args.verbose:
+            logger.debug("Dataset Source Type | {}".format(self.source_type))
 
 
     @abstractmethod
-    def setup_model(self, model:str, verbose:bool)->None:
+    def setup_model(self, model:str, opt:str)->None:
         pass 
 
 
@@ -395,7 +402,7 @@ class YOLOStreamer(ABC):
             string += f"{i}: "
             frame = self.dataset.count
         else:
-            match = re.search(r"frame (\d+)/", s[self.seen])
+            match = re.search(r"frame (\d+)/", s[i])
             frame = int(match[1]) if match else None  # 0 if frame undetermined
 
         self.txt_path = self.save_dir / "labels" / (
@@ -405,65 +412,30 @@ class YOLOStreamer(ABC):
 
         #Get the batch size pictures 
         result = self.results[i] 
-       
         if isinstance(result, torch.Tensor):
             # result = self.converter.translate_data(i, p, im, result, original_images)
             # if not result: 
                 # return "(No Detection Found)"
-            raise ValueError("Not using pytorch and the ultralytics.YOLO class")
+            raise ValueError("Not using pytorch and the ultralytics.Results class")
         
         if self.mqtt_interface is not None:
             self.mqtt_interface.publish(self.mqtt_interface.topic, str(result.speed))
-            time.sleep(0.01)
 
         result.save_dir = self.save_dir.__str__() 
 
         string += f"{result.verbose()}{result.speed['inference']:.1f}ms" 
- 
-        self.points.clear()
-
-        # Update tracking history
-        if result.boxes.id is not None and self.track_history is not None: 
-            
-            boxes = result.boxes.xyxy.cpu()
-            track_ids = result.boxes.id.int().cpu().tolist() 
-            clss = result.boxes.cls.cpu().tolist()
-
-            current_track_ids = set()
-            
-            for box, track_id, cls in zip(boxes, track_ids,  clss):
-                bbox_center = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2 
-                current_track_ids.add(track_id)
-                
-                self.track_history.setdefault(track_id, []).append(bbox_center)
-                
-                if len(self.track_history) > 30:
-                    self.track_history.pop(next(iter(self.track_history)))    
-                
-                track = self.track_history[track_id]
-                self.points[cls] = np.hstack(track).astype(np.int32).reshape((-1,1,2))
-
-                if self.logic_module is not None and self.logic_module["ROI"] is not None: 
-                    self.logic_module["ROI"].count_regions(bbox=bbox_center)
-                
-            #Remove track IDs from track history that were not detected in the current frame 
-            lost_track_ids = set(self.track_history.keys()) - current_track_ids
-            for lost_track_id in lost_track_ids:
-                self.track_history.pop(lost_track_id, None)
-                self.points = {cls:pts for cls, pts in self.points.items() if cls not in lost_track_ids}
-
-            # for region in self.regions:
-            #     if region["polygon"].contains(Point((bbox_center[0], bbox_center[1]))):
-            #         region["counts"] += 1
-
-        # Add predictions to image
-
+        try:  
+            self.points.clear()
+        except: 
+            pass
+        self.points = self.tracker_model.update_tracker_history(result, logic_module=self.logic_module)
+        
         if self.args.save or self.args.show:
             self.plotted_img = result.plot(
-                line_width=self.args.line_width,
-                boxes=self.args.show_boxes,
-                conf=self.args.show_conf,
-                labels=self.args.show_labels,
+                    line_width=self.args.line_width,
+                    boxes=self.args.show_boxes,
+                    conf=self.args.show_conf,
+                    labels=self.args.show_labels,
             )
 
         # Save results
@@ -477,7 +449,7 @@ class YOLOStreamer(ABC):
             self.show(p)
         
         if self.args.save:
-            self.save_predicted_images(str(self.save_dir / p.name), frame)
+            self.save_predicted_images(str(self.save_dir / p.name), int(frame))
 
         return string
             
@@ -486,43 +458,81 @@ class YOLOStreamer(ABC):
     def save_predicted_images(self, save_path:str, frame:int)->None: 
         
         im = self.plotted_img 
-        # Save videos and streams
-        if self.dataset.mode in {"stream", "video"}:
-            fps = self.dataset.fps if self.dataset.mode == "video" else 30
-            frames_path = f'{save_path.split(".", 1)[0]}_frames/'
+
+        if im is None: return 
+
+        out_path = Path(save_path).expanduser() 
+
+        if out_path.name == "": 
+            logger.error(f"Save predicted images: empty save path {save_path}")
+            return 
+
+        ensure_dir(out_path.parent) 
+        
+        if im.ndim==3 and im.shape[2]==3: 
+            bgr = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
+        else: 
+            bgr = im 
+        
+        is_stream_or_video = getattr(self.dataset, "mode", None) in {"stream", "video"}
+        if is_stream_or_video: 
+            fps = self.dataset.fps if self.dataset.mode == "video" else 30 
+            h, w = bgr.shape[:2] 
+
+            if h <= 0 or w <= 0: 
+                logger.error("Invalid frame size")
+                return 
+
+            vid_key = str(out_path.resolve())
+
+            vw = self.vid_writer.get(vid_key) 
+            if vw is None: 
+                vw, opened_path, fourcc_used = open_writer(out_path, fps=fps, size_hw=(h,w))
+                if vw is None: 
+                    logger.error("VideoWriter failed to open for %s (fps=%s, size=%sx%s). "
+                             "Check codec support in your OpenCV build.",
+                             out_path, fps, w, h)
+                    return
+                self.vid_writer[vid_key] = vw 
+                logger.info("Opened VideoWriter: %s (fourcc=%s)", opened_path, fourcc_used)
+                if self.args.save_frames: 
+                    frames_dir = opened_path.with_suffix("").parent / (opened_path.stem + "_frames")
+                    ensure_dir(frames_dir)
+                    self._frames_dir_cache = getattr(self, "_frames_dir_cache", {})
+                    self._frames_dir_cache[vid_key] = frames_dir
             
-            if save_path not in self.vid_writer:  # new video
-                
-                if self.args.save_frames:
-                    Path(frames_path).mkdir(parents=True, exist_ok=True)
-                
-                suffix, fourcc = (".mp4", "avc1") if MACOS else (".avi", "WMV2") if WINDOWS else (".avi", "MJPG")
-                
-                self.vid_writer[save_path] = cv2.VideoWriter(
-                    filename=str(Path(save_path).with_suffix(suffix)),
-                    fourcc=cv2.VideoWriter_fourcc(*fourcc),
-                    fps=fps,  # integer required, floats produce error in MP4 codec
-                    frameSize=(im.shape[1], im.shape[0]),  # (width, height)
-                )
+            self.vid_writer[vid_key].write(bgr)
 
-            im = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
-            # Save video
-            self.vid_writer[save_path].write(im)
-            if self.args.save_frames:
-                cv2.imwrite(f"{frames_path}{frame}.jpg", im)
+            if getattr(self.args, "save_frames", False):
+                frames_dir = getattr(self, "_frames_dir_cache", {}).get(vid_key)
 
-        # Save images
+                if frames_dir is None:
+                    frames_dir = out_path.with_suffix("").parent / (out_path.stem + "_frames")
+                    ensure_dir(frames_dir)
+                    self._frames_dir_cache[vid_key] = frames_dir
+                img_path = frames_dir / f"{int(frame):06d}.jpg"
+
+                ok = cv2.imwrite(str(img_path), bgr)
+                if not ok:
+                    logger.warning("cv2.imwrite failed: %s", img_path)
+
         else:
-            cv2.imwrite(save_path, im)
+            # Save a single image
+            img_path = out_path
+            ok = cv2.imwrite(str(img_path), bgr)
+            if not ok:
+                logger.error("cv2.imwrite failed: %s", img_path)
 
 
-    def show(self, p=str)->None:
+    def show(self, p:str)->None:
         im = self.plotted_img
 
-        logic_flag = False
+        if im is None: 
+            return 
+        
+        
         if self.logic_module is not None and self.logic_module['ROI'] is not None:
             self.logic_module["ROI"]._show_regions(im)
-            logic_flag = True
 
         for cls in self.points.keys(): 
             cv2.polylines(im, [self.points[cls]], isClosed=False, color=colors(cls, True), thickness=2)
@@ -534,7 +544,6 @@ class YOLOStreamer(ABC):
         elif platform.system() == "Linux" and p not in self.windows: 
             self.windows.append(p)
             cv2.namedWindow(p, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
-            # if logic_flag: cv2.setMouseCallback(p, self.logic_module["ROI"].mouse_callback)
             cv2.resizeWindow(p, im.shape[1], im.shape[0])
 
         im = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
@@ -542,7 +551,7 @@ class YOLOStreamer(ABC):
             cv2.destroyAllWindows()
             self.proc_image = im
         elif self.args.show: 
-            cv2.imshow(p,im)
+            cv2.imshow(winname=p, mat=im)
             cv2.waitKey(300 if self.dataset.mode == 'image' else 1)
 
 
@@ -555,12 +564,10 @@ class YOLOStreamer(ABC):
         self.callbacks[event].append(func)
 
     
-    def capture_object_boxes(self, image:np.ndarray|torch.Tensor,results:Any, cropped_dirname:str, save:bool=False): 
+    def capture_object_boxes(self, image:np.ndarray|torch.Tensor,results:Any, cropped_dirname:str, save:bool=True): 
 
         if results is None:
             return 
-
-        cropped_objects = [] 
 
         mask = np.zeros_like(image)
         orig_h, orig_w = image.shape[:2]
@@ -572,8 +579,7 @@ class YOLOStreamer(ABC):
         pad_w = (infer_w - orig_w * scale) / 2
         pad_h = (infer_h - orig_h * scale) / 2
 
-        cropped_objects = []
-        for i, box in enumerate(results.boxes):
+        for _, box in enumerate(results.boxes):
             x1, y1, x2, y2 = map(float, box.xyxy[0])
 
         # Remove padding and rescale back to original image size
@@ -597,16 +603,15 @@ class YOLOStreamer(ABC):
             os.mkdir(image_dir) 
 
         save_cropped_img = f"{image_dir}/masked_frame_{np.random.randint(10000)}.jpg"
-        cv2.imwrite(save_cropped_img, mask) 
-
-        # return cropped_objects
+        if save:
+            cv2.imwrite(save_cropped_img, mask) 
 
 
     def admit_frames(self, fr_queue:deque, max_f_inf:int, use_roi:bool): 
 
         while len(fr_queue) <= max_f_inf: 
             try:
-                self.batch = next(self.dataset) 
+               self.batch = next(self.dataset) 
             except StopIteration: 
                 break
 
@@ -614,8 +619,9 @@ class YOLOStreamer(ABC):
             frame_ids = get_frame_ids(labels=self.batch[2])
             if 'frame 1' in self.batch[2][0] and use_roi:
                 self.logic_module['ROI'].set_regions(im0s[0]) 
+                self.orig_height, self.orig_width = im0s[0].shape[:2]
 
-            with StepContext(name="Crop & Subtraction", catch=(RuntimeError,), verbose=True): 
+            with StepContext(name="Crop & Subtraction", catch=(RuntimeError,), verbose=self.args.verbose): 
 
                 if use_roi: 
                     im0s = self.logic_module['ROI'].crop(im0s)
@@ -627,7 +633,7 @@ class YOLOStreamer(ABC):
 
                 mfgs = np.asarray(mfgs, np.int8).tolist()
 
-            with StepContext(name="Fill Frame Queue", catch=(RuntimeError,), verbose=True): 
+            with StepContext(name="Fill Frame Queue", catch=(RuntimeError,), verbose=self.args.verbose): 
                 for ind, (f_id, im) in enumerate(zip(frame_ids, im0s)): 
                     if not mfgs[ind]: continue 
                     fr_queue.append((f_id, im))
@@ -635,83 +641,44 @@ class YOLOStreamer(ABC):
         return fr_queue
 
 
+    def iter_data(self, use_roi:bool): 
+        # Yields (frame_id, image) lazily from self.dataset after ROI + MOG2 gating 
 
-    # @abstractmethod
-    # def count_regions(self) -> list: 
-    #     return [{
-    #         "name": "YOLOv8 Polygon Region",
-    #         "polygon": Polygon([(100, 150), (340, 150), (340, 450), (100, 450)]),  # Polygon points
-    #         "counts": 0,
-    #         "dragging": False,
-    #         "region_color": (255, 42, 4),  # BGR Value
-    #         "text_color": (255, 255, 255),  # Region Text Color
-    #     },
-    #     {
-    #         "name": "YOLOv8 Rectangle Region",
-    #         "polygon": Polygon([(300, 150), (540, 150), (540, 450), (300, 450)]),  # Polygon points
-    #         "counts": 0,
-    #         "dragging": False,
-    #         "region_color": (37, 255, 225),  # BGR Value
-    #         "text_color": (0, 0, 0),  # Region Text Color
-    #     }]
+        self.dataset = iter(self.dataset) 
+
+        while True: 
+            try: 
+                self.batch = next(self.dataset)
+            except StopIteration: 
+                return 
+
+            _, im0s, s = self.batch 
+            frame_ids = get_frame_ids(labels=s) 
+
+            # One-time ROI init on first frame if needed 
+            if use_roi and ("frame_1" in s[0] or self.seen == 0): 
+                self.logic_module['ROI'].set_regions(im0s[0]) 
+                self.orig_height, self.orig_width = im0s[0].shape[:2] 
+ 
+            with StepContext(name="Crop & Subtract", catch=(RuntimeError, ), verbose=self.args.verbose): 
+
+                if use_roi: 
+                    im0s = self.logic_module['ROI'].crop(im0s)
+                
+                # Motion gate (vectorized over the mini batch) 
+                mfgs = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False) 
+                
+            for passed, f_id, img in zip(mfgs, frame_ids, im0s): 
+                if passed: 
+                    yield (int(f_id), img)
+    
+
+    def _frames_to_tiles(self, frame_iter, tile_size:int, overlap_ratio:float): 
+        overlap_px = max(0, int(round(tile_size * overlap_ratio)))
+        for f_id, img in frame_iter: 
+            self.frame_images[f_id] = img
+            for t, m in split_image_gen(img, f_id, tile_size=tile_size, overlap=overlap_px):
+                yield t, m
 
 
-    # @abstractmethod
-    # def mouse_callback(self, event:int, x:int, y:int, flags:int, param:Any)->None:
-    #         self.regions 
-    #         # Mouse left button down event
-    #         if event == cv2.EVENT_LBUTTONDOWN:
-    #             for region in self.regions:
-    #                 if region["polygon"].contains(Point((x, y))):
-    #                     self.current_region = region
-    #                     self.current_region["dragging"] = True
-    #                     self.current_region["offset_x"] = x
-    #                     self.current_region["offset_y"] = y
 
-    #         # Mouse move event
-    #         elif event == cv2.EVENT_MOUSEMOVE:
-    #             if self.current_region is not None and self.current_region["dragging"]:
-    #                 dx = x - self.current_region["offset_x"]
-    #                 dy = y - self.current_region["offset_y"]
-    #                 self.current_region["polygon"] = Polygon(
-    #                     [(p[0] + dx, p[1] + dy) for p in self.current_region["polygon"].exterior.coords]
-    #                 )
-    #                 self.current_region["offset_x"] = x
-    #                 self.current_region["offset_y"] = y
-
-    #         # Mouse left button up event
-    #         elif event == cv2.EVENT_LBUTTONUP:
-    #             if self.current_region is not None and self.current_region["dragging"]:
-    #                 self.current_region["dragging"] = False
-
- # # Initialize the frames queue 
-            # while len(frames_queue) <= max_f_inflight: 
-            #     try: 
-            #         self.batch = next(self.dataset)
-            #     except StopIteration:
-            #         break 
-            #
-            #     im0s = self.batch[1]
-            #     if 'frame 1' in self.batch[2][0]: 
-            #         if use_roi: 
-            #             self.logic_module['ROI'].set_regions(im0s[0])
-            #     
-            #     frame_ids = get_frame_ids(labels=self.batch[2])  
-            #     
-            #     with StepContext(name="Crop & Subtraction", catch=(RuntimeError, )): 
-            #         if use_roi: 
-            #             im0s = self.logic_module["ROI"].crop(im0s) 
-            #
-            #         mfgs = self.logic_module["SUBTRACTOR"].detect(im0s)
-            #
-            #         if not any(mfgs): 
-            #             # Handle that no frames have any items and only have background 
-            #             # Skip to the next batch 
-            #             continue
-            #
-            #         mfgs = np.asarray(mfgs, np.int8).tolist() 
-            #
-            #     with StepContext(name="Batch Tiles", catch=(RuntimeError, )): 
-            #         for ind, (f_id, im) in enumerate(zip(frame_ids, im0s)): 
-            #             if not mfgs[ind]: continue # Skip the frames that don't have any objects inside of them.  
-            #             frames_queue.append((f_id, im))

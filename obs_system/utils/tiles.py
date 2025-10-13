@@ -1,5 +1,6 @@
 import math 
 import cv2 
+import torch
 import numpy as np 
 
 
@@ -139,7 +140,19 @@ def extract_tile(image, x0, y0, tile_size=640):
     return tile 
 
 
-def split_image(image,frame_id, tile_size=640, show_rect=False , show_tiles=False, overlap=0.15): 
+def split_image(is_tensor, image,frame_id, tile_size=640, show_rect=False , show_tiles=False, overlap=0.15): 
+    
+    if is_tensor: 
+        return split_image_t(
+            image=image, 
+            frame_id=frame_id, 
+            tile_size=tile_size, 
+            show_rect=show_rect, 
+            show_tiles=show_tiles, 
+            overlap=overlap
+        )
+
+
     if overlap < 1.0:  
         overlap = int(tile_size * overlap)
 
@@ -150,10 +163,8 @@ def split_image(image,frame_id, tile_size=640, show_rect=False , show_tiles=Fals
     H, W = image.shape[:2]
     orig_H, orig_W = H, W
 
-    tile_height, tile_width = tile_size , tile_size
-
-    pad_top = max(0, tile_height - H) 
-    pad_left = max(0, tile_width - W) 
+    pad_top = max(0, tile_size - H) 
+    pad_left = max(0, tile_size - W) 
 
     gain = 1 if tile_size == 640 else int(min(H/tile_size, W/tile_size)) 
 
@@ -179,14 +190,20 @@ def split_image(image,frame_id, tile_size=640, show_rect=False , show_tiles=Fals
                     'pad_y':pad_top, 
                     'pad_x':pad_left, 
                     'gain': gain, 
-                    't_wh': (tile_height, tile_width), 
+                    't_wh': (tile_size, tile_size), 
                     'f_wh': (orig_H, orig_W),
                     'overlap':overlap
             }
 
             if c <= 3: 
                 if show_rect: 
-                    cv2.rectangle(tile, (overlap, overlap), (tile_width + overlap, tile_height + overlap), (255, 0, 0), 1) 
+                    cv2.rectangle(
+                        img=tile,
+                        pt1=(overlap, overlap), 
+                        pt2=(overlap + tile_size, overlap + tile_size), 
+                        thickness=1, 
+                        color=(255,0,0)
+                    )
                     
             tile = convert_from_uint(tile, dtype=dtype, min_val=min_val, max_val=max_val) 
             tiles.append((tile, meta)) 
@@ -194,6 +211,168 @@ def split_image(image,frame_id, tile_size=640, show_rect=False , show_tiles=Fals
     draw_tiles(tiles, grid, dtype, min_val, max_val) if show_tiles else None 
     
     return tiles
+
+
+def split_image_t(image, frame_id, tile_size, show_rect, show_tiles, overlap): 
+
+    if overlap <1.0: 
+        overlap = int(tile_size * overlap)
+
+    grid = get_grid(image, tile=tile_size, overlap=overlap)    
+    image = check_divisible(grid=grid, image=image)
+    dtype, max_val, min_val = check_image_type(image) 
+
+    H, W = image.shape[:2]
+    orig_H, orig_W = H, W
+
+    pad_top = max(0, tile_size - H) 
+    pad_left = max(0, tile_size - W) 
+
+    gain = 1 if tile_size == 640 else int(min(H/tile_size, W/tile_size)) 
+
+    if pad_top !=0 or pad_left!=0: 
+        image = pad_image(image, padding=(overlap, overlap, overlap))
+        H, W = image.shape[:2] 
+
+    c = image.shape[2] if len(image.shape) == 3 else 1 
+
+    tiles = [] 
+    xs, ys = tile_coords(W, H, tile_size=640, overlap=overlap) 
+
+    for x0 in xs: 
+        for y0 in ys: 
+            tile = extract_tile(image,x0=x0, y0=y0, tile_size=tile_size) 
+            meta = {
+                    'frame_id':frame_id, 
+                    'grid':grid, 
+                    'max_value':max_val, 
+                    'min_value':min_val, 
+                    'top_y':y0, 
+                    'left_x': x0, 
+                    'pad_y':pad_top, 
+                    'pad_x':pad_left, 
+                    'gain': gain, 
+                    't_wh': (tile_size, tile_size), 
+                    'f_wh': (orig_H, orig_W),
+                    'overlap':overlap
+            }
+            
+            if c <= 3: 
+                if show_rect:
+                    cv2.rectangle(
+                        img=tile,
+                        pt1=(overlap, overlap), 
+                        pt2=(overlap + tile_size, overlap + tile_size), 
+                        thickness=1, 
+                        color=(255,0,0)
+                    )
+
+            tile = torch.from_numpy(convert_from_uint(tile, dtype=dtype, min_val=min_val, max_val=max_val)) 
+            tiles.append((tile, meta))
+    
+    return tiles
+
+
+def split_image_gen(image:np.ndarray |torch.Tensor, frame_id:int, tile_size:int=640, overlap:float=0.15):
+ 
+    if overlap < 1.0 : 
+        overlap = int(tile_size*overlap)
+
+    grid = get_grid(image, tile=tile_size, overlap=overlap)
+    image = check_divisible(grid=grid, image=image)
+    dtype, max_val, min_val = check_image_type(image)
+    
+    H, W = image.shape[:2]
+    orig_H, orig_W = H, W 
+
+    pad_top = max(0, tile_size-H)
+    pad_left = max(0, tile_size-W)
+    gain = 1 if tile_size == 640 else int(min(H/tile_size, W/tile_size))
+    
+    if pad_top !=0 or pad_left != 0: 
+        image = pad_image(image, padding=(overlap, overlap, overlap)) 
+        H, W = image.shape[:2]
+    
+    stride = tile_size - overlap 
+
+    t_idx = 0
+    for i in range(grid[0]): 
+        ty = min(i*stride,  H-tile_size)
+
+        for j in range(grid[1]):
+            tx = min(j*stride, W-tile_size)
+            tile_img = image[ty:ty+tile_size, tx:tx+tile_size, :] 
+            meta = {
+                'frame_id':frame_id, 
+                't_idx':t_idx,
+                'grid':grid, 
+                'max_value':max_val, 
+                'min_value':min_val, 
+                'top_y':ty, 
+                'left_x': tx, 
+                'pad_y':pad_top, 
+                'pad_x':pad_left, 
+                'gain': gain, 
+                't_wh': (tile_size, tile_size), 
+                'f_wh': (orig_H, orig_W),
+                'overlap':overlap
+            }
+            tile_img = convert_from_uint(tile_img, dtype=dtype, min_val=min_val, max_val=max_val)
+            yield (tile_img, meta)
+            t_idx +=1 
+        
+
+def reconstruct_tiles(boxes_xyxy, tx, ty, orig_H, orig_W, gain=1, pad=(0,0)) : 
+
+    pw, ph = pad 
+    boxes_xyxy[:, 0::2] -= pw 
+    boxes_xyxy[:, 1::2] -= ph 
+    boxes_xyxy /= gain 
+
+    boxes_xyxy[:,0::2] += tx 
+    boxes_xyxy[:,1::2] += ty 
+
+    boxes_xyxy[:, 0::2] = boxes_xyxy[:, 0::2].clip(0, orig_W - 1) 
+    boxes_xyxy[:, 1::2] = boxes_xyxy[:, 1::2].clip(0, orig_H - 1) 
+
+    return boxes_xyxy 
+
+
+def next_microbatch(tile_stream, micro:int, host_buf: np.ndarray, metas_buf)->int: 
+    for k in range(micro): 
+        metas_buf[k] = None
+
+    n = 0 
+    try: 
+        while n < micro: 
+            tile_img, meta = next(tile_stream) 
+            host_buf[n][...] = tile_img 
+            metas_buf[n] = meta
+            n += 1 
+    except StopIteration: 
+        pass 
+    return n 
+
+
+def fill(host, metas, tile_queue, micro): 
+    n = 0 
+    while  n < micro and tile_queue: 
+        tile, meta = tile_queue.popleft() 
+        host[n][...] = tile 
+        metas[n] = meta 
+        n += 1 
+
+    for i in range(n, micro): 
+        metas[i] = None 
+       
+    return n, host, metas, tile_queue
+
+
+def flatten_tiles(tiles_batch): 
+    for fb in tiles_batch: 
+        fid = fb[0][1]['frame_id']
+        for t_idx, (tile, meta) in enumerate(fb): 
+            yield tile, {"frame_id":fid, "t_idx":t_idx, **meta}
 
 
 def draw_tiles(tiles, grid, dtype, min_val, max_val): 

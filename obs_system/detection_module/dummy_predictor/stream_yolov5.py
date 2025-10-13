@@ -124,13 +124,13 @@ class Yolov5Streamer(YOLOStreamer):
         super().setup_source(source)
 
     
-    def setup_model(self, model, verbose=True, opt='autoshape'):
+    def setup_model(self, model, opt='autoshape'):
         
         """Initialize YOLO model with given parameters and set it to evaluation mode if needed."""
         if self.model: 
             return self.model 
         
-        device = select_device(self.args.device, verbose=verbose)
+        device = select_device(self.args.device, verbose=self.args.verbose)
 
         if opt == "autoshape": 
             # self.model = torch.hub.load('ultralytics/yolov5', 'custom', path=model, force_reload=True)
@@ -147,7 +147,7 @@ class Yolov5Streamer(YOLOStreamer):
             self.model = YOLO(model)
             self.model = self.model.to(device)
             self.device = self.model.device
-            self.stride = 32 
+            self.stride = 32 if not self.args.half else 16 
 
 
     def non_max_suppression(self, detections,scores, iou):
