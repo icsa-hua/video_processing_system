@@ -4,6 +4,7 @@
 *.json
 *.jpg
 *.jpeg
+*.yaml
 Depth_Anything_ONNX/
 DepthAnythingV2/
 ByteTrack/
@@ -32,3 +33,10 @@ calibrate_camera.py
 *.engine 
 fish8k_test.py
 samples/highway.png
+samples/camera9_A_5.png
+samples/fisheye8k.png 
+samples/fisheye8k_small.mp4
+samples/labels/
+test_defish.py 
+process_dataset.py
+samples/calibration

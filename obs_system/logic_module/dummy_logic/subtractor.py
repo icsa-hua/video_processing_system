@@ -1,12 +1,17 @@
 from obs_system.logic_module.interface.event_extractor import EventExtractorInterface
+from obs_system.utils.global_config import TRIALS, HISTORY, THR_RATIO, K_CONSECUTIVE, HOLD_FRAMES, MIN_OBJ_AREA
+from obs_system.utils.logger import get_logger
 import numpy as np
 import cv2
 import os
+import pdb
 
 from collections import deque
 
+logger = get_logger("obs_system"+__name__)
+
 class Subtractor(EventExtractorInterface): 
-    def __init__(self, trials=10, history=500, threshold_ratio=0.02, detect_shadows=True, empty_background_image="", downscale=(320,320)):
+    def __init__(self, trials=TRIALS, history=HISTORY, threshold_ratio=THR_RATIO, detect_shadows=True, empty_background_image="", downscale=(320,320)):
         self.downscale = downscale
         self.threshold_ratio = float(threshold_ratio)
 
@@ -17,14 +22,14 @@ class Subtractor(EventExtractorInterface):
         self.static_bg = False 
 
         #Hysteresis 
-        k_consecutive = 3 # Number of consecutive frames 
-        self.hold_frames = 10 # Number of allowed frames to have movement.  
-        self._recent = deque(maxlen=k_consecutive)
+        self.hold_frames = HOLD_FRAMES # Number of allowed frames to have movement.  
+        self._recent = deque(maxlen=K_CONSECUTIVE)
         self._hold = 0 
 
         if empty_background_image: 
+            logger.debug("Empty Background traing for subtractor")
             empty_bg = cv2.imread(empty_background_image)
-
+            
             if empty_bg is not None: 
 
                 if self.downscale: 
@@ -42,8 +47,8 @@ class Subtractor(EventExtractorInterface):
             parent = os.getcwd()
             save_dir = f"{parent}/assets/background_check/"
             os.makedirs(save_dir, exist_ok = True)
+            logger.debug(f"Background Images saved in {save_dir}")
             self._save_idx = 0 
-
 
         motion_flags = [] 
         for frame in batch:
@@ -61,9 +66,18 @@ class Subtractor(EventExtractorInterface):
 
             flag = False 
             if len(contours) > 0:
+                # Edge Case single moving car will fail 
                 motion_pixels = cv2.countNonZero(mask)
-                threshold = int(self.threshold_ratio * (mask.shape[0] * mask.shape[1]))
-                flag = (motion_pixels > threshold)
+                total = mask.shape[0] * mask.shape[1] 
+
+                threshold = int(self.threshold_ratio * total)
+                    
+                # Object-aware threshold (largest contour area) 
+                max_obj_area = max((cv2.contourArea(c) for c in contours), default = 0) 
+
+                min_obj_area = MIN_OBJ_AREA * total
+
+                flag = (motion_pixels > threshold) or (max_obj_area > min_obj_area)
             
             self._recent.append(flag) 
             if self._hold > 0: 
@@ -76,21 +90,13 @@ class Subtractor(EventExtractorInterface):
                     self._hold = self.hold_frames 
 
             motion_flags.append(motion_flag)
-
             if save_img: 
                 idx = self._save_idx 
                 self._save_idx += 1 
-
-                cv2.imwrite(os.path.join(save_dir, f"{idx:06d}_mask.png"), mask)
+                
+                # cv2.imwrite(os.path.join(save_dir, f"{idx:06d}_mask.png"), mask)
                 motion_cutout = cv2.bitwise_and(frame,frame, mask=mask) 
                 cv2.imwrite(os.path.join(save_dir, f"{idx:06d}_motion.png"), motion_cutout)
-
-
-
-
-
-
-
 
         return motion_flags
         

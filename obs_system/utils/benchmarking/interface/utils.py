@@ -1,14 +1,14 @@
 
 import numpy as np 
 
-def _iou_xyxy(a: np.nd.array, b:np.ndarray) -> np.ndarray: 
+def _iou_xyxy(a: np.ndarray, b:np.ndarray) -> np.ndarray: 
     """
         Vectorized IoU between set of boxes in [x1, y1, x2,y2] 
         a: (A, 4), b:(B,4) -> (A,B) 
     """
 
     if a.size==0 or b.size==0: 
-        return np.zeros((a.shape[0], b.shape[0], dtype=np.float32))
+        return np.zeros((a.shape[0], b.shape[0]), dtype=np.float32)
 
 
     a = a.astype(np.float32, copy=False) 

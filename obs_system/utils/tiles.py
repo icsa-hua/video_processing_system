@@ -1,10 +1,11 @@
+from obs_system.utils.global_config import TILE_SIZE, TILE_OVERLAP
 import math 
 import cv2 
 import torch
 import numpy as np 
 
 
-def make_tiles(W, H, tile=640, overlap=0.2):
+def make_tiles(W, H, tile=TILE_SIZE, overlap=TILE_OVERLAP):
 
     if overlap < 1.0: 
         sx = int(tile * (1 - overlap))
@@ -27,7 +28,7 @@ def make_tiles(W, H, tile=640, overlap=0.2):
             yield x0, y0, tile, tile 
 
 
-def letterbox(img, new_shape=(640,640)): 
+def letterbox(img, new_shape=(TILE_SIZE,TILE_SIZE)): 
     H, W = img.shape[:2] 
 
     if (H,W) == new_shape: return img, (1.0,1.0), (0,0) 
@@ -97,7 +98,7 @@ def check_divisible(grid, image):
     return new_size 
 
 
-def get_grid(image, tile=640, overlap:int|float=0.0): 
+def get_grid(image, tile=TILE_SIZE, overlap:int|float=TILE_OVERLAP): 
     stride = tile - overlap 
     rows = 1 if image.shape[0] <= tile else math.ceil((image.shape[0] - tile)/stride) + 1 
     cols = 1 if image.shape[1] <= tile else math.ceil((image.shape[1] - tile)/stride) + 1  
@@ -111,7 +112,7 @@ def pad_image(image, padding):
         return np.pad(image,  ((padding[0], padding[1]), (padding[2], padding[3]), (0,0)), 'constant', constant_values=0) 
 
 
-def tile_coords(W, H, tile_size=640, overlap=0.15):
+def tile_coords(W, H, tile_size=TILE_SIZE, overlap=TILE_OVERLAP):
 
     if overlap < 1.0: 
         overlap = int(round(tile_size*overlap))
@@ -127,7 +128,7 @@ def tile_coords(W, H, tile_size=640, overlap=0.15):
     return xs, ys 
 
 
-def extract_tile(image, x0, y0, tile_size=640):
+def extract_tile(image, x0, y0, tile_size=TILE_SIZE):
     """
     Extract tile from the image, with 
     i (int): Row index of the tile 
@@ -140,7 +141,7 @@ def extract_tile(image, x0, y0, tile_size=640):
     return tile 
 
 
-def split_image(is_tensor, image,frame_id, tile_size=640, show_rect=False , show_tiles=False, overlap=0.15): 
+def split_image(is_tensor, image,frame_id, tile_size=TILE_SIZE, show_rect=False , show_tiles=False, overlap=TILE_OVERLAP): 
     
     if is_tensor: 
         return split_image_t(
@@ -166,7 +167,7 @@ def split_image(is_tensor, image,frame_id, tile_size=640, show_rect=False , show
     pad_top = max(0, tile_size - H) 
     pad_left = max(0, tile_size - W) 
 
-    gain = 1 if tile_size == 640 else int(min(H/tile_size, W/tile_size)) 
+    gain = 1 if tile_size == TILE_SIZE else int(min(H/tile_size, W/tile_size)) 
 
     if pad_top !=0 or pad_left!=0: 
         image = pad_image(image, padding=(overlap, overlap, overlap))
@@ -175,7 +176,7 @@ def split_image(is_tensor, image,frame_id, tile_size=640, show_rect=False , show
     c = image.shape[2] if len(image.shape) == 3 else 1 
 
     tiles = [] 
-    xs, ys = tile_coords(W, H, tile_size=640, overlap=overlap) 
+    xs, ys = tile_coords(W, H, tile_size=TILE_SIZE, overlap=overlap) 
 
     for x0 in xs: 
         for y0 in ys: 

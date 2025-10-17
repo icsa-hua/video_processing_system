@@ -1,3 +1,4 @@
+from obs_system.utils.benchmarking.metrics.pc_performance import ComputationalPerf
 from obs_system.utils.logger import get_logger 
 
 import time
@@ -11,6 +12,8 @@ class SetupError(RuntimeError):
         self.step = step 
         self.original = exc_value 
 
+perf = ComputationalPerf() 
+frame_list = [] 
 
 class StepContext(): 
 
@@ -38,6 +41,8 @@ class StepContext():
 
         if exc_value is None: 
             self.no_exception_found =True 
+            ms = (self.elapsed_time)*1000 
+            perf.tick(self.name, ms)
             if self.verbose: 
                 logger.info(f"[{self.name}] took {self.elapsed_time:.2f}ms")
             return False #Nothing to suppress 

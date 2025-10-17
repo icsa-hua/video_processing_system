@@ -9,8 +9,10 @@ from obs_system.logic_module.dummy_logic.subtractor import Subtractor
 from obs_system.logic_module.dummy_logic.fisheye import FishEyeProjection
 from obs_system.utils.common import check_nvidia_existence
 from obs_system.utils.logger import get_logger 
+from obs_system.utils.appraisal import perf, frame_list 
 
 import os 
+import numpy as np
 import psutil 
 import pynvml
 import time 
@@ -113,6 +115,7 @@ class Application:
 
         # Check for GPU (NVIDIA) to allow the program to run GPU statistics 
         self.gpu_enabled = check_nvidia_existence()
+
         if self.gpu_enabled:
             pynvml.nvmlInit()
             self.handle = pynvml.nvmlDeviceGetHandleByIndex(0)
@@ -122,13 +125,15 @@ class Application:
         self.source = os.path.join(self.parent_path, self.source) if os.path.isfile(self.source) else self.source
         self.mqtt = args.mqtt if args.mqtt is not None else False 
         self.start_time = time.time()
-        
+
         DEFAULT_CFG.show = args.show if args.show is not None else False
         DEFAULT_CFG.gui = args.gui if args.gui is not None else False
         DEFAULT_CFG.save = self.save_outputs
         DEFAULT_CFG.verbose = self.verbose_outputs
         DEFAULT_CFG.half = args.half
-        
+        DEFAULT_CFG.bench = args.bench 
+        DEFAULT_CFG.bench_labels = args.bench_labels
+
         tracemalloc.start()
 
 
@@ -141,7 +146,8 @@ class Application:
  
     def setup_logic_module(self, args): 
 
-        EMPTY_IMAGE_PATH = f"{self.parent_path}/samples/highway_back.png" 
+        # Change this based on your video. Get the first frame. 
+        EMPTY_IMAGE_PATH = f"{self.parent_path}/samples/camera9_A_5.png" 
         self.logic_module["SUBTRACTOR"] = Subtractor(empty_background_image=EMPTY_IMAGE_PATH)
 
         if args.roi: 
@@ -156,21 +162,32 @@ class Application:
             
 
         if args.fep: 
-            self.logic_module["FEP"] = FishEyeProjection()
+            self.logic_module["FEP"] = FishEyeProjection(crop=0.00)
 
         else: 
             self.logic_module["FEP"] = None
 
 
-        #if not args.roi and not args.DAV2: 
-        #    self.logic_module.clear()
-
-
     def run_app(self, producer_flag=None, queue=None): 
         self.statistics()
+
         process_video_func = self.process_stream
-        return process_video_func(model=self.model_name, producer_flag=producer_flag, queue=queue)
-          
+        process_video_func(model=self.model_name, producer_flag=producer_flag, queue=queue)
+        perf.finalize() 
+        stats = perf.results() 
+        # add FPS & percentiles for total frame time
+        ft = np.array(frame_list, dtype=np.float32)
+        stats.update({
+            "frame_p50_ms": float(np.percentile(ft, 50)) if ft.size else 0.0,
+            "frame_p95_ms": float(np.percentile(ft, 95)) if ft.size else 0.0,
+            "frame_p99_ms": float(np.percentile(ft, 99)) if ft.size else 0.0,
+            "FPS_mean": (1000.0 / float(ft.mean())) if ft.size else 0.0,
+        })
+
+        print(stats)
+
+        return 
+
 
     def process_stream(self, model, producer_flag=None, queue=None):
         logger.debug("-- Starting the video streaming process --")

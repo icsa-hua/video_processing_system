@@ -4,7 +4,9 @@ import cv2
 from typing import Any
 from shapely.geometry import Polygon
 from shapely.geometry.point import Point
-import platform 
+import platform
+
+from obs_system.utils.global_config import TILE_SIZE, ROI_X1, ROI_Y1, ROI_X2, ROI_Y2, REGION_COLOR
 
 class RegionSetter(EventExtractorInterface):
 
@@ -26,17 +28,17 @@ class RegionSetter(EventExtractorInterface):
         # NOTE: ROI in this case considers the road network exclusively. 
         original_height, original_width = image.shape[:2]
 
-        new_width = 640 
-        new_height = 640
+        new_width = TILE_SIZE
+        new_height = TILE_SIZE
 
         aspect_ratio_width = original_width / new_width
         aspect_ratio_height = original_height / new_height
 
         # NOTE: Change these values based on the camera feed.
-        x_start = int(0 * aspect_ratio_width)
-        x_end = int(430 * aspect_ratio_width)
-        y_start = int(639 * aspect_ratio_height)
-        y_end = int(300 * aspect_ratio_height)
+        x_start = int(ROI_X1 * aspect_ratio_width)
+        x_end = int(ROI_X2 * aspect_ratio_width)
+        y_start = int(ROI_Y1 * aspect_ratio_height)
+        y_end = int(ROI_Y2 * aspect_ratio_height)
 
         
         self.x_start, self.x_end = sorted([x_start, x_end])
@@ -47,7 +49,7 @@ class RegionSetter(EventExtractorInterface):
                     "polygon": Polygon([(x_start, y_start), (x_end, y_start), (x_end, y_end), (x_start, y_end)]),  # Polygon points
                     "counts": 0,
                     "dragging": False,
-                    "region_color": (255, 42, 4),  # BGR Value
+                    "region_color": REGION_COLOR,  # BGR Value
                     "text_color": (255, 255, 255),  # Region Text Color
                 },
         ]

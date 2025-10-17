@@ -43,7 +43,7 @@ class TensorRTYOLO:
         # Load TensorRT engine
         logger.debug(f"Loading TensorRT engine from {engine_path} ...")
         
-        save_path = os.getcwd() + f"/obs_system/compressed/yolo_trt_{'fp16' if self.__fp16 else 'nofp16'}_{'int8' if self.__int8 else 'noint8'}.engine"
+        save_path = os.getcwd() + f"/obs_system/compressed/yolo_mixed_batch_trt_{'fp16' if self.__fp16 else 'nofp16'}_{'int8' if self.__int8 else 'noint8'}.engine"
         if not os.path.exists(save_path): 
             self.__build_engine__(engine_path, save_path)
             self.__load_engine__(load_path=save_path)
@@ -102,6 +102,7 @@ class TensorRTYOLO:
 
             profile = builder.create_optimization_profile() 
             min_shape = [1] + self.__shape_input_model[-3:] 
+            # min_shape = [1,3,160,160]
             opt_shape = [int(self.__shape_input_model[0]/2)] + self.__shape_input_model[-3:] 
             max_shape = self.__shape_input_model
 
@@ -280,7 +281,6 @@ class TensorRTYOLO:
             torch_in = input_tensor 
         else : 
             raise ValueError("input_tensor must be np.ndarray or torch.Tensor")
-
     
         in_trt_dtype = self.__engine.get_tensor_dtype(self.__input_name) 
         in_torch_dtype = self.__trt_to_tensor_dtype(in_trt_dtype) 

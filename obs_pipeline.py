@@ -24,7 +24,7 @@ def main():
     logger.debug("--- Initializing Application ---")
     argparser = argparse.ArgumentParser(description=__doc__)
     argparser.add_argument('--model_name', metavar='M', default='trt', help='Model to use (Yolov5, Yolov8 (Default), MaskRCNN, ONNX (yolov5, yolov8))')
-    argparser.add_argument('--source', metavar='SO', default='samples/fisheye.mp4', help='Source to use - Local video path (.mp4) or stream index (key needs to be provided)')
+    argparser.add_argument('--source', metavar='SO', default='samples/highway.mp4', help='Source to use - Local video path (.mp4) or stream index (key needs to be provided)')
     argparser.add_argument('--type', metavar='T', default='tracking', help='Use tracking with bytetracker or simple detection (recommended to leave default value)')
     argparser.add_argument('--gui', metavar='G', action=argparse.BooleanOptionalAction, help='Use GUI to select video source and model')
     argparser.add_argument('--mqtt',metavar='M', action=argparse.BooleanOptionalAction, help='Use MQTT to send data to server')
@@ -37,13 +37,20 @@ def main():
     argparser.add_argument('--roi', metavar='R', action=argparse.BooleanOptionalAction, help='Use Region of Interest to detect obstacles')
     argparser.add_argument('--half', metavar='HF', action=argparse.BooleanOptionalAction, help='Use Half the available resources by reducing the data size (e.g. Float32 -> Float16)')
     argparser.add_argument('--fep', metavar='F', action=argparse.BooleanOptionalAction, help='Use of FishEye Projection based on camera')
-
+    argparser.add_argument('--bench', metavar='BM', action=argparse.BooleanOptionalAction, help='Benchmark the Performance of the model and hardware.')
+    argparser.add_argument('--bench-labels', metavar='BL', default='samples/labels', help="Submit the label path for GT")
 
     if len(sys.argv) < 1:
          argparser.print_help()
          return
     
     args = argparser.parse_args()
+
+    try: 
+        if args.bench and not os.path.exists(args.bench_labels): 
+            raise ValueError("Submit a correct path for the GT labels, that matches the video") 
+    except Exception as e: 
+        raise Exception(e) 
  
     if args.gui: 
         
@@ -141,8 +148,11 @@ def main():
 
 
     #TODO: Test these but next delete them 
-    args.fep = True 
-    args.roi = True 
+    # args.fep = True
+    # args.save = True 
+    # args.bench = False 
+    # args.model_name = 'trt'
+    # args.roi = False
 
     config = {
         'model_name':args.model_name,

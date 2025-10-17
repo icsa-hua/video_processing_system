@@ -151,8 +151,6 @@ class CompressedYOLO:
 
     def process_output(self, output):
         batch_images = output[0] 
-        logger.debug(f"Batch shape = {batch_images.shape} and boxes shape = {batch_images[0].shape}")
-        logger.debug(batch_images[0])
         all_boxes, all_scores, all_class_ids = [], [], [] 
         if isinstance(batch_images, torch.Tensor): 
             pred = torch.transpose(batch_images, 1, 2)

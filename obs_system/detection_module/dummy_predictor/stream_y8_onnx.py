@@ -2,9 +2,11 @@ from obs_system.compressed.interface.compressed_yolo import CompressedYOLO
 from obs_system.detection_module.interface.streaming import YOLOStreamer
 from obs_system.logic_module.dummy_logic.tracker_sv import TrackerHandler
 from obs_system.utils.tiles import *
-from obs_system.utils.appraisal import StepContext
-from obs_system.utils.common import get_frame_ids
+from obs_system.utils.appraisal import StepContext, frame_list
+from obs_system.utils.common import _empty_dets_numpy
 from obs_system.utils.logger import get_logger 
+from obs_system.utils.global_config import CONF_THR, NMS_IOU, TILE_SIZE, WARM_UP_SESSIONS, BATCH_SIZE, MIN_WH, MULTIPLIER
+
 
 import os 
 import gc
@@ -35,7 +37,7 @@ class OnnxY8Streamer(YOLOStreamer):
         self.source = ""
             
 
-    def warmup(self, imgsz=(1,3,640,640)): 
+    def warmup(self, imgsz=(1,3,TILE_SIZE,TILE_SIZE)): 
         return super().warmup(imgsz)
 
 
@@ -130,7 +132,7 @@ class OnnxY8Streamer(YOLOStreamer):
             model = YOLO('yolov8s.pt') 
             model.export(
                 format="onnx",
-                imgsz=(640), 
+                imgsz=(TILE_SIZE), 
                 dynamic=True,
                 simplify=True
             )
@@ -140,7 +142,7 @@ class OnnxY8Streamer(YOLOStreamer):
 
         device = select_device(self.args.device, verbose=self.args.verbose) 
 
-        model_path = 'obs_system/compressed/yolov8s.onnx'
+        model_path = 'obs_system/compressed/yolov8s_original.onnx'
 
         self.check_onnx_model(model_path, device)  
 
@@ -170,10 +172,10 @@ class OnnxY8Streamer(YOLOStreamer):
         self.source = source 
         with self._lock: 
             self.setup_source(source if source is not None else self.args.source)
-    
+            self.dataset.bs = BATCH_SIZE 
             self.frame_images = {} 
-            micro = 32
-            overlap_ratio = 0.15
+            micro = BATCH_SIZE
+            overlap_ratio = TILE_OVERLAP
             self.seen = 0 
             self.windows = [] 
             self.batch = None 
@@ -192,7 +194,7 @@ class OnnxY8Streamer(YOLOStreamer):
             # Warmup for Better Inference. Reduces Initial frames high inference time and is more stable. 
             with StepContext(name="Warmup Session", catch=(Exception, RuntimeError), verbose=self.args.verbose):
                 if not self.done_warmup: 
-                    self.model.warmup(micro=micro, warmup_sessions=4)
+                    self.model.warmup(micro=micro, warmup_sessions=WARM_UP_SESSIONS)
                     self.done_warmup = True
 
             use_roi = True if self.logic_module is not None and self.logic_module["ROI"] is not None else False 
@@ -207,12 +209,12 @@ class OnnxY8Streamer(YOLOStreamer):
 
             pending = {} 
             while True: 
+                t0 = time.perf_counter() 
                 n0 = next_microbatch(tile_stream, micro, host0, metas0)
-                if n0 == 0: 
-                    break 
+
+                if n0 == 0: break 
                 
-                if not self.batch or not self.batch[1]: 
-                    break 
+                if not self.batch or not self.batch[1]: break 
 
                 if self.seen >= len(self.batch[1]): 
                     self.seen = 0 
@@ -225,10 +227,10 @@ class OnnxY8Streamer(YOLOStreamer):
                 with profilers[1]:
                     if self.seen == 0 and self.args.verbose: 
                         with profile(activities=activities) as prof:
-                            i_boxes, i_scores, i_classes = self.model(tbuf[:n0], debug=self.args.verbose) 
+                            i_boxes, i_scores, i_classes = self.model(tbuf[:n0], debug=True) 
                         prof.export_chrome_trace(f"trace_{model}.json")
                     else: 
-                        i_boxes, i_scores, i_classes = self.model(tbuf[:n0], debug=self.args.verbose)
+                        i_boxes, i_scores, i_classes = self.model(tbuf[:n0], debug=True)
 
                 with profilers[2]: 
                     pass 
@@ -250,9 +252,7 @@ class OnnxY8Streamer(YOLOStreamer):
                         s['seen'].add(meta['t_idx'])
 
                         if det is None or len(det) == 0:
-                            mapped_boxes = np.empty((0,4), np.float32) 
-                            score = np.empty((0,), np.float32) 
-                            cls_ = np.empty((0,), np.int64) 
+                            mapped_boxes, score, cls_ = _empty_dets_numpy() 
 
                         else: 
                             mapped_boxes = reconstruct_tiles(
@@ -274,7 +274,6 @@ class OnnxY8Streamer(YOLOStreamer):
                                 C = np.empty((0,), np.float32) 
 
                             else: 
-                                pdb.set_trace()
                                 B = np.concatenate([p[0] for p in s["parts"]], 0)
                                 S = np.concatenate([p[1] for p in s["parts"]], 0) 
                                 C = np.concatenate([p[2] for p in s["parts"]], 0)               
@@ -298,7 +297,7 @@ class OnnxY8Streamer(YOLOStreamer):
                             boxes_t, 
                             scores_t, 
                             classes_t.long(), 
-                            iou_threshold=(1.0-self.args.iou)
+                            iou_threshold=(1.0-NMS_IOU)
                         )
 
                         keep = keep_pc if keep_pc.numel()==0 else keep_pc[nms(boxes_t[keep_pc],scores_t[keep_pc], iou_threshold=(1-self.args.iou))]
@@ -380,10 +379,10 @@ class OnnxY8Streamer(YOLOStreamer):
                         if self.seen == len(self.batch)-1 and self.args.verbose:
                             elapsed_time = time.perf_counter() - start_time 
                             logger.info(f"Time from Capturing batch to meaningfull inference is {elapsed_time:.2f}")
-                            pdb.set_trace()
 
                 self.run_callbacks("on_predict_postprocess_end")
                 self.run_callbacks("on_predict_batch_end")
+                frame_list.append((time.perf_counter() -t0) * 1000)
 
         for v in self.vid_writer.values(): 
             if isinstance(v, cv2.VideoWriter): 

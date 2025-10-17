@@ -2,7 +2,9 @@ from obs_system.logic_module.interface.event_extractor import EventExtractorInte
 import cv2 
 import numpy as np 
 
-from abc import ABC, abstractmethod 
+from abc import ABC, abstractmethod
+from typing import Dict, Tuple
+from obs_system.utils.global_config import DEFISH_ALPHA, DEFISH_BETA, DISTORTION_STRENGTH 
 
 
 class FishEyeProjection(EventExtractorInterface): 
@@ -21,8 +23,12 @@ class FishEyeProjection(EventExtractorInterface):
             u_fish  = distort_fisheye(x_norm; K, D)
     """
 
-    def __init__(self, fog_deg:float=90.0)->None: 
+    def __init__(self, fog_deg:float=90.0, crop=0.1, cx=None, cy=None)->None: 
         self.__fog_def = fog_deg
+        self.__crop=crop 
+        self.__cx = cx 
+        self.__cy = cy 
+        self.__map_cache:Dict[Tuple[int, int, float, float, float, float], Tuple[np.ndarray, np.ndarray, int, int,]] = {}
 
 
     def _build(self, 
@@ -149,15 +155,12 @@ class FishEyeProjection(EventExtractorInterface):
             mask = (view_id == v)
             if not np.any(mask):
                 continue
-            idx = np.nonzero(mask)[0]  # which boxes belong to view v
-            # Slice the 4 corners belonging to those boxes
+            idx = np.nonzero(mask)[0] 
             sel = np.repeat(idx * 4, 4) + np.tile(np.arange(4), idx.size)  # indices into (N*4)
-            hom_v = hom[sel]  # (idx.size*4, 3)
+            hom_v = hom[sel]  
 
             x_rect = (self._Knew_inv[v] @ hom_v.T).T  # (M,3)
-            # Rotate back to original camera: x_cam = R^T * x_rect
             x_cam = (self._R_list[v].T @ x_rect.T).T
-            # Normalize (project to z=1 plane)
             z = np.clip(x_cam[:, 2:3], 1e-9, None)
             x_norm = x_cam[:, 0:2] / z  # (M,2) normalized (undistorted) rays
 
@@ -198,3 +201,76 @@ class FishEyeProjection(EventExtractorInterface):
         boxes_fisheye = self.backproject_boxes(predictions)
         # 'save' flag left for your upstream use (e.g., dump debug images).
         return [boxes_fisheye]
+
+
+
+    def __build_maps(self, w:int, h:int, k:float, cx:float, cy:float): 
+        sx = max(cx, 1.0) 
+        sy = max(cy, 1.0) 
+        x = (np.arange(w, dtype=np.float32)-cx) / sx 
+        y = (np.arange(h, dtype=np.float32)-cy) / sy 
+        xv, yv = np.meshgrid(x, y, copy=False) 
+
+        r2 = xv * xv + yv * yv 
+        scale = 1.0 + k * r2 
+        np.maximum(scale, 1e-6, out=scale) 
+
+        src_x = (xv * scale) * sx + cx 
+        src_y = (yv * scale) * sy + cy 
+        return src_x.astype(np.float32), src_y.astype(np.float32)
+
+    
+    def __get_cropped_maps(self, w:int, h:int, k:float, cx:float, cy:float): 
+        key = (w, h, float(k), float(cx), float(cy), float(self.__crop))
+        cached = self.__map_cache.get(key) 
+        if cached is not None: 
+            return cached 
+
+        map_x_full, map_y_full = self.__build_maps(w,h,k,cx,cy) 
+    
+        if self.__crop > 0.0: 
+            ch = int(round(h*self.__crop)) 
+            cw = int(round(w*self.__crop))
+            
+            y0, y1 = ch, h-ch 
+            x0, x1 = cw, w-cw 
+            map_x = map_x_full[y0:y1, x0:x1] 
+            map_y = map_y_full[y0:y1, x0:x1] 
+            out_w, out_h = (x1-x0), (y1-y0) 
+        else: 
+            map_x, map_y = map_x_full, map_y_full 
+            out_w, out_h = w, h
+
+        self.__map_cache[key] = (map_x, map_y, out_w, out_h)
+        return self.__map_cache[key]
+
+
+
+    def _defish(self, imgs, k=DISTORTION_STRENGTH, border=cv2.BORDER_CONSTANT, apply_gain:bool=True):
+        """Simple fisheye correction without calibration.
+        Args:
+            img: input BGR image
+            k: distortion strength (-0.2 to -0.6 typical for fisheye)
+        """
+    
+        out = [] 
+        if not imgs: 
+            return out 
+
+        for img in imgs: 
+            h, w = img.shape[:2] 
+            cx = w / 2.0 if self.__cx is None else float(self.__cx) 
+            cy = h / 2.0 if self.__cy is None else float(self.__cy) 
+
+            map_x, map_y, out_w, out_y = self.__get_cropped_maps(w,h,k,cx,cy) 
+
+            undist = cv2.remap(img, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode= border)
+
+            if apply_gain and (DEFISH_ALPHA != 1.0 and DEFISH_BETA != 0.0): 
+                undist = cv2.convertScaleAbs(undist, alpha=DEFISH_ALPHA, beta=DEFISH_BETA)
+
+            out.append(undist)
+
+        return out 
+
+

@@ -1,5 +1,5 @@
 from obs_system.utils.benchmarking.interface.benchmark import BenchMark
-from obs_system.utils.benchmarking.utils import _iou_xyxy
+from obs_system.utils.benchmarking.interface.utils import _iou_xyxy
 
 import numpy as np 
 from typing import Dict, Optional, Iterable, Tuple, List
@@ -36,7 +36,9 @@ class ModelPerf(BenchMark):
         self._f1_tally = 0 
 
         self._results:Dict[str, float]={} 
-
+        self._fn_micro = 0 
+        self._fp_micro = 0 
+        self._tp_micro = 0
 
 
     def update(
@@ -55,7 +57,6 @@ class ModelPerf(BenchMark):
         gt_boxes_xyxy = np.asarray(gt_boxes_xyxy, dtype=np.float32).reshape(-1, 4)
         gt_classes = np.asarray(gt_classes, dtype=np.int64).reshape(-1)
 
-
         # Track class universe (optional)
         self._all_classes.update(classes.tolist())
         self._all_classes.update(gt_classes.tolist())
@@ -71,12 +72,12 @@ class ModelPerf(BenchMark):
         for i in range(gt_boxes_xyxy.shape[0]):
             c = idx_map[i]
             per_cls_gts.setdefault(c, []).append(gt_boxes_xyxy[i])
-        self._gt_by_img_cls[self._image_index] = per_cls_gts
+        self._GT_per_image_class[self._image_index] = per_cls_gts
         
         # Store detections per class (score, img_idx, box)
         for i in range(boxes_xyxy.shape[0]):
             c = int(classes[i])
-            self._det_by_cls.setdefault(c, []).append((float(det_scores[i]), self._image_index, det_boxes_xyxy[i]))
+            self._det_by_class.setdefault(c, []).append((float(scores[i]), self._image_index, boxes_xyxy[i]))
 
         # Micro P/R/F1 at fixed threshold (fast pass)
         self._accumulate_pr_fixed_threshold(
@@ -117,15 +118,15 @@ class ModelPerf(BenchMark):
             self._results[key] = ap_by_iou[i] if i < len(ap_by_iou) else 0.0
 
 
-    def results(self)->Dic[str,float]: 
+    def results(self)->Dict[str,float]: 
         return dict(self._results) 
 
 
     def reset(self) -> None:
         self._all_classes.clear()
         self._image_index = 0
-        self._det_by_cls.clear()
-        self._gt_by_img_cls.clear()
+        self._det_by_class.clear()
+        self._GT_per_image_class.clear()
         self._tp_micro = self._fp_micro = self._fn_micro = 0
         self._results = {}
 
@@ -186,18 +187,18 @@ class ModelPerf(BenchMark):
 
         
     def _ap_for_class(self, cls:int, iou_thr:float)->Optional[float]: 
-        dets = self._det_by_cls.get(cls, [])
+        dets = self._det_by_class.get(cls, [])
         if len(dets) == 0:
             # If class exists in GT, AP=0; if not present at all, we ignore it by returning None
             # Decide based on presence in GT:
-            present_in_gt = any(cls in g for g in self._gt_by_img_cls.values())
+            present_in_gt = any(cls in g for g in self._GT_per_image_class.values())
             return 0.0 if present_in_gt else None
 
         # Sort detections by score (desc)
         dets.sort(key=lambda t: t[0], reverse=True)
 
         # Build GT structures: for each image, list of boxes + matched flags
-        gt_by_img = self._gt_by_img_cls
+        gt_by_img = self._GT_per_image_class
         gt_boxes_per_img = {}
         gt_used_per_img = {}
         any_gt = False
