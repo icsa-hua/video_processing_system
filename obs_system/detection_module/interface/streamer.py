@@ -65,7 +65,7 @@ class Streamer(ABC):
         self.plotted_img: Any = None 
         self.batch: Any = None 
         self.source_type: Any = None 
-        self.results: Optional[List[Any]] = None 
+        self.results: Optional[List[Any]] = []
         self.txt_path: Optional[str] = None 
         self.proc_image: Optional[bool] = None 
         self.mqtt_interface:Any = None 

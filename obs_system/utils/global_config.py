@@ -21,7 +21,8 @@ DEFISH_BETA = 10
 
 #--------- Motion Gating ----------
 TRIALS = 10 
-HISTORY = 500 
+HISTORY = 300 
+VARTHRESHOLD = 16
 THR_RATIO = 0.2 
 K_CONSECUTIVE = 3 
 HOLD_FRAMES = 10
