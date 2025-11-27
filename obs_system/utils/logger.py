@@ -24,7 +24,7 @@ def jupyter_logger(level=logging.INFO)->logging.StreamHandler:
     return jupyter_handler
 
 
-def setup_logging(level=logging.DEBUG, log_dir="logs"):
+def setup_logging(level=logging.DEBUG, log_dir="assets/logs"):
     root = logging.getLogger("obs_system")
     root.setLevel(level)
     # if root.handlers:  # idempotent
