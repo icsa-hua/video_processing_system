@@ -3,7 +3,6 @@ from obs_system.detection_module.dummy_predictor.stream_yolov8 import Yolov8Stre
 from obs_system.detection_module.dummy_predictor.stream_y8_onnx import OnnxY8Streamer
 from obs_system.detection_module.dummy_predictor.stream_trt import TensorRTRTXStreamer
 from obs_system.communication_module.mqtt_com.message_transmitter import RealMQTT
-from obs_system.logic_module.dummy_logic.depth_imaging import DepthImageProcessor
 from obs_system.logic_module.dummy_logic.region_setter import RegionSetter
 from obs_system.logic_module.dummy_logic.subtractor import Subtractor
 from obs_system.logic_module.dummy_logic.fisheye import FishEyeProjection
@@ -154,12 +153,6 @@ class Application:
             self.logic_module["ROI"] = RegionSetter() 
         else: 
             self.logic_module["ROI"] = None 
-
-        if args.DAV2: 
-            self.logic_module["DAV2"] = DepthImageProcessor()
-        else : 
-            self.logic_module["DAV2"] = None
-            
 
         if args.fep: 
             self.logic_module["FEP"] = FishEyeProjection(crop=0.00)

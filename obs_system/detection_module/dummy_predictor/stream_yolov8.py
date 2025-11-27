@@ -59,8 +59,6 @@ class Yolov8Streamer(YOLOStreamer):
         except KeyboardInterrupt as ke: 
             if producer_flag is not None: 
                 producer_flag.value=False
-            if self.logic_module is not None and self.logic_module["DAV2"] is not None:
-                self.logic_module["DAV2"].deallocate_resources()
             cv2.destroyAllWindows()
             logger.exception(f"KeyboardInterrupt: {ke}")
             return 
