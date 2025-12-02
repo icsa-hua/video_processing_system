@@ -3,7 +3,6 @@ import datetime
 import os, sys
 
 
-
 def remove_logger(name=None): 
     logr = logging.getLogger(name) 
     logr.propagate = True 
