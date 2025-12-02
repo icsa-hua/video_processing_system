@@ -24,7 +24,7 @@ def main():
     logger.debug("--- Initializing Application ---")
     argparser = argparse.ArgumentParser(description=__doc__)
     argparser.add_argument('--model_name', metavar='M', default='trt', help='Model to use (Yolov5, Yolov8 (Default), MaskRCNN, ONNX (yolov5, yolov8))')
-    argparser.add_argument('--source', metavar='SO', default='samples/highway.mp4', help='Source to use - Local video path (.mp4) or stream index (key needs to be provided)')
+    argparser.add_argument('--source', metavar='SO', default='samples/fisheye8k_small.mp4', help='Source to use - Local video path (.mp4) or stream index (key needs to be provided)')
     argparser.add_argument('--type', metavar='T', default='tracking', help='Use tracking with bytetracker or simple detection (recommended to leave default value)')
     argparser.add_argument('--gui', metavar='G', action=argparse.BooleanOptionalAction, help='Use GUI to select video source and model')
     argparser.add_argument('--mqtt',metavar='M', action=argparse.BooleanOptionalAction, help='Use MQTT to send data to server')
@@ -52,6 +52,7 @@ def main():
     except Exception as e: 
         raise Exception(e) 
  
+    logger.warn("WARNING: If you change the input video source, adjust the background subtractor image. Otherwise, it will classify all frames without movement")
     if args.gui: 
         
         if sys.platform.startswith("win"):
