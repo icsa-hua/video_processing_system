@@ -1,4 +1,3 @@
-from torch.cuda import memory_allocated
 from obs_system.compressed.interface.compressed_yolo import CompressedYOLO 
 from obs_system.detection_module.interface.streaming_compressed import OptimizedStreamer
 from obs_system.logic_module.dummy_logic.tracker_sv import TrackerHandler

@@ -7,6 +7,7 @@ from obs_system.logic_module.dummy_logic.region_setter import RegionSetter
 from obs_system.logic_module.dummy_logic.subtractor import Subtractor
 from obs_system.logic_module.dummy_logic.fisheye import FishEyeProjection
 from obs_system.utils.common import check_nvidia_existence
+from obs_system.utils.global_config import EMPTY_IMAGE_PATH
 from obs_system.utils.logger import get_logger 
 from obs_system.utils.appraisal import perf, frame_list 
 
@@ -146,8 +147,8 @@ class Application:
     def setup_logic_module(self, args): 
 
         # Change this based on your video. Get the first frame. 
-        EMPTY_IMAGE_PATH = f"{self.parent_path}/samples/camera9_A_5.png" 
-        self.logic_module["SUBTRACTOR"] = Subtractor(empty_background_image=EMPTY_IMAGE_PATH)
+        empty_image = f"{self.parent_path}/{EMPTY_IMAGE_PATH}"
+        self.logic_module["SUBTRACTOR"] = Subtractor(empty_background_image=empty_image)
 
         if args.roi: 
             self.logic_module["ROI"] = RegionSetter() 
@@ -168,6 +169,7 @@ class Application:
         process_video_func(model=self.model_name, producer_flag=producer_flag, queue=queue)
         perf.finalize() 
         stats = perf.results() 
+
         # add FPS & percentiles for total frame time
         ft = np.array(frame_list, dtype=np.float32)
         stats.update({
@@ -177,7 +179,7 @@ class Application:
             "FPS_mean": (1000.0 / float(ft.mean())) if ft.size else 0.0,
         })
 
-        print(stats)
+        logger.debug(stats)
 
         return 
 

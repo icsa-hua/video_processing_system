@@ -2,6 +2,7 @@ from obs_system.utils.common import _get_gt, _empty_dets_numpy, _empty_results
 from obs_system.compressed.interface.compressed_yolo import CompressedYOLO
 from obs_system.compressed.interface.tensor_yolo import TensorRTYOLO
 from obs_system.detection_module.interface.streamer import Streamer
+from obs_system.utils.benchmarking.metrics.model_performance import ModelPerf
 from obs_system.utils.global_config import BATCH_SIZE
 from obs_system.utils.appraisal import StepContext
 from obs_system.utils.global_config import *
@@ -91,10 +92,14 @@ class OptimizedStreamer(Streamer):
 
     @smart_inference_mode()
     def stream_inference(self, source:str, model:str, producer_flag:Any, queue:Any, *args, **kwargs):
+
         self.source = source 
+
         if self.args.verbose : Streamer.logger.info(" ")
+
         with self._lock: 
             self.setup_source(source if source is not None else self.args.source)
+
             self.seen = 0 
             self.results = [] 
             self.batch = None 
@@ -105,13 +110,16 @@ class OptimizedStreamer(Streamer):
                 ops.Profile(device=self.device), 
                 ops.Profile(device=self.device), 
             )
+
             activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
             start_time = time.perf_counter() 
+
             for batch in self.dataset: 
                 _, im0s, _ = batch 
                 self.orig_height, self.orig_width = im0s[0].shape[:2] 
 
             self.dataset.bs = BATCH_SIZE
+
             tile_flag = True if (self.orig_width // TILE_SIZE) > 2 or (self.orig_height //TILE_SIZE) >= 2 else False  
             if tile_flag : 
                 Streamer.logger.info("Run Inference with Tiles")
@@ -193,9 +201,6 @@ class OptimizedStreamer(Streamer):
             if len(allowed_filter) == 0 : 
                 continue
 
-            # paths = [paths[i] for i in allowed_filter]
-            # s = [s[i] for i in allowed_filter]
-            # im0s = [im0s[i] for i in allowed_filter]
             for i, al in enumerate(allowed_filter): 
                 if not al: 
                     im0s[i] = empty_image(im0s[i])
@@ -219,12 +224,14 @@ class OptimizedStreamer(Streamer):
             for boxes, scores, cls_, orig_img in zip(i_boxes, i_scores, i_classes, im0s): 
                 if self.seen >= len(self.batch[1]): 
                     self.seen = 0
-                    self.results.clear()
+                    if self.results is not None: 
+                        self.results.clear()
 
                 if boxes is None or len(boxes) == 0: 
                     print("No detections for image : ", self.seen)
                     self.seen +=1
-                    self.results.append(_empty_results(orig_img))
+                    if self.results is not None: 
+                        self.results.append(_empty_results(orig_img))
                     continue
 
                 if isinstance(boxes, np.ndarray): 
@@ -279,7 +286,9 @@ class OptimizedStreamer(Streamer):
                     "postprocess": profilers[2].dt * 1e3 / len(self.batch),
                 }
 
-                self.results.append(results) 
+                if self.results is not None:
+                    self.results.append(results) 
+
                 if self.mp is not None and self.args.bench: 
                     gt_cls, gt_bbs = self.__gt_labels.pop(self.seen, (np.zeros((0,), np.int64),np.zeros((0,4), np.float32)))
                     self.mp.update(
@@ -311,7 +320,8 @@ class OptimizedStreamer(Streamer):
                     Streamer.logger.info(f"Time from capturing batch to meaningful information: {elapsed_time:.2f}")
             
             self.run_callbacks("on_predict_batch_end")
-            yield from self.results
+            if self.results is not None: 
+                yield from self.results
 
         
         if self.args.bench and self.mp is not None: 

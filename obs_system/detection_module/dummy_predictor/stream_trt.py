@@ -83,7 +83,6 @@ class TensorRTRTXStreamer(OptimizedStreamer):
 
 
     def setup_model(self, model, opt='tracking'): 
-
         device = select_device(self.args.device, verbose=self.args.verbose) 
 
         model_path = 'obs_system/compressed/yolov8s_original.onnx'
@@ -161,7 +160,8 @@ class TensorRTRTXStreamer(OptimizedStreamer):
 
             if self.seen >= len(self.batch[1]): 
                 self.seen = 0 
-                self.results.clear()
+                if self.results is not None: 
+                    self.results.clear()
 
             with profilers[0]:
                 tb = (self.preprocess(host0[:n0])).to(self.device, non_blocking=True) 
@@ -378,7 +378,7 @@ class TensorRTRTXStreamer(OptimizedStreamer):
 
     @mem_profile
     def _stream_inference_impl(self, **kwargs): 
-        super()._stream_inference_impl(**kwargs) 
+        return super()._stream_inference_impl(**kwargs) 
 
 
 

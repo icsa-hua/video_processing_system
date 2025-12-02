@@ -21,6 +21,7 @@ remove_logger("matplotlib.font_manager")
 
 
 def main():
+
     logger.debug("--- Initializing Application ---")
     argparser = argparse.ArgumentParser(description=__doc__)
     argparser.add_argument('--model_name', metavar='M', default='trt', help='Model to use (Yolov5, Yolov8 (Default), MaskRCNN, ONNX (yolov5, yolov8))')
@@ -33,7 +34,6 @@ def main():
     argparser.add_argument('--port', metavar='P', default=8503, help='Port for Streamlit service interface')
     argparser.add_argument('--host_server', metavar='H' , default= 'localhost', help='Host server for both streamlit and fastapi')
     argparser.add_argument('--save', metavar='SA', action=argparse.BooleanOptionalAction, help='Save inference results to file')
-    argparser.add_argument('--DAV2', metavar='D', action=argparse.BooleanOptionalAction, help='Use depth imaging to detect obstacles') 
     argparser.add_argument('--roi', metavar='R', action=argparse.BooleanOptionalAction, help='Use Region of Interest to detect obstacles')
     argparser.add_argument('--half', metavar='HF', action=argparse.BooleanOptionalAction, help='Use Half the available resources by reducing the data size (e.g. Float32 -> Float16)')
     argparser.add_argument('--fep', metavar='F', action=argparse.BooleanOptionalAction, help='Use of FishEye Projection based on camera')
@@ -146,7 +146,6 @@ def main():
             shutdown_handler(None ,None)
 
         return 
-
 
     #TODO: Test these but next delete them 
     # args.fep = True

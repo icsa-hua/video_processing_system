@@ -192,10 +192,6 @@ class YOLOStreamer(Streamer):
 
                 n = len(images)
 
-                if self.logic_module is not None and self.logic_module["DAV2"] is not None: 
-                    fps = self.dataset.fps if self.dataset.mode == "video" else 30 
-                    self.logic_module["DAV2"].detect(images, fps, "runs/detect/DI_results/dav2_detections" )
-
                 for i in range(n):
                     self.seen += 1
                     if isinstance(self.results[i], Results):

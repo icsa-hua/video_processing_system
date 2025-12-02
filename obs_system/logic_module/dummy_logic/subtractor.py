@@ -1,7 +1,7 @@
-from torchvision.utils import save_image
 from obs_system.logic_module.interface.event_extractor import EventExtractorInterface
 from obs_system.utils.global_config import TRIALS, HISTORY, VARTHRESHOLD,THR_RATIO, K_CONSECUTIVE, HOLD_FRAMES, MIN_OBJ_AREA, VARTHRESHOLD
 from obs_system.utils.logger import get_logger
+
 import numpy as np
 import cv2
 import os
@@ -12,7 +12,16 @@ from collections import deque
 logger = get_logger("obs_system"+__name__)
 
 class Subtractor(EventExtractorInterface): 
-    def __init__(self, trials=TRIALS, history=HISTORY, threshold_ratio=THR_RATIO, detect_shadows=True, empty_background_image="", downscale=(320,320), accum_time:int=500, save_path:str="lanes_final.png"):
+    def __init__(self,
+                 trials=TRIALS,
+                 history=HISTORY,
+                 threshold_ratio=THR_RATIO,
+                 detect_shadows=True,
+                 empty_background_image="",
+                 downscale=(320,320),
+                 accum_time:int=500,
+                 save_path:str="lanes_final.png"
+    ):
         self.downscale = downscale
         self.threshold_ratio = float(threshold_ratio)
         self.accum_time = accum_time
@@ -29,16 +38,19 @@ class Subtractor(EventExtractorInterface):
                     varThreshold=VARTHRESHOLD,
                     detectShadows=False)
 
+        self.kernel3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
+        self.kernel5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
+        self.kernel15 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15,15))
+
         self.static_bg = False 
 
-        self.acc_mask = np.empty(1)
-        self.prev_mask = np.empty(1) 
+        self.acc_mask = None
+        self.prev_mask = None
 
         #Hysteresis 
         self.hold_frames = HOLD_FRAMES # Number of allowed frames to have movement.  
         self._recent = deque(maxlen=K_CONSECUTIVE)
         self._hold = 0 
-        self._save_idx = 0
 
         self.__calibration_started = False
         self.__calibration_ended = False
@@ -54,42 +66,48 @@ class Subtractor(EventExtractorInterface):
 
                 for _ in range(trials): 
                     self.bg_subtractor.apply(empty_bg, learningRate=1.0) 
+
                 self.static_bg = True #Shows that we entered the first time. 
 
     
-    def detect(self, batch, save_img=False): 
+    def detect(self, batch, save_img:bool=False): 
 
-        save_dir = "" 
+        if not batch: return []
+
+        save_dir = None
         if save_img: 
             parent = os.getcwd()
             save_dir = f"{parent}/assets/background_check/"
-            os.makedirs(save_dir, exist_ok = True)
+            os.makedirs(save_dir, exist_ok=True)
             logger.debug(f"Background Images saved in {save_dir}")
-            self._save_idx = 0 
+            save_idx = 0 
+        else: 
+            save_idx = None
         
         h, w = batch[0].shape[:2] 
+
         if not self.__calibration_started: 
             self.acc_mask = np.zeros((h, w), np.float32) 
             self.prev_mask = np.zeros((h,w), np.float32)
-            
-        self.__calibration_started = True 
+            self.__calibration_started = True 
 
         motion_flags = [] 
-        last_frame = batch[0]
+        last_frame = batch[-1]
 
         for frame in batch:
-            last_frame = frame.copy()
 
-            motion_flag = self.__call_subtractor(frame, save_dir, save_img=save_img)
+            if self.downscale: 
+                frame = cv2.resize(frame, self.downscale, interpolation=cv2.INTER_AREA)
+
+            motion_flag = self.__call_subtractor(frame, save_dir=save_dir, save_img=save_img, save_idx=save_idx)
 
             motion_flags.append(motion_flag)
 
-            if not motion_flag: 
-                continue
+            if save_img and save_idx is not None: 
+                save_idx += 1 
 
-            if self.accum_time > 0:
+            if motion_flag and self.accum_time > 0:
                 self.__cal_calibrator(frame, size=(h,w))
-
 
         if self.accum_time == 0 and self.__calibration_ended :
             self.__apply_calibration(last_frame, save_img=save_img)
@@ -98,23 +116,19 @@ class Subtractor(EventExtractorInterface):
         return motion_flags
         
 
-
-    def __call_subtractor(self, frame, save_dir=None, save_img=False): 
+    def __call_subtractor(self, frame, save_dir=None, save_img=False, save_idx:int=0): 
      
-        if self.downscale: 
-            frame = cv2.resize(frame, self.downscale, interpolation=cv2.INTER_AREA) 
-        
+        # Learning rate: 0 if static pre-trained background, default otherwise
         lr = 0.0 if self.static_bg else -1 
         mask = self.bg_subtractor.apply(frame, learningRate=lr) 
 
-        subtractor_mask = (mask==255).astype(np.uint8)* 255
-        subtractor_mask = cv2.morphologyEx(subtractor_mask, cv2.MORPH_OPEN, np.ones((3,3),np.uint8))
-        subtractor_mask = cv2.morphologyEx(subtractor_mask, cv2.MORPH_CLOSE, np.ones((3,3),np.uint8))
-        contours, _ = cv2.findContours(subtractor_mask,cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-        cv2.drawContours(subtractor_mask, contours, -1, (0, 255, 0), 3)
+        _,subtractor_mask = cv2.threshold(mask, 254, 255, cv2.THRESH_BINARY)
+        subtractor_mask = cv2.morphologyEx(subtractor_mask, cv2.MORPH_OPEN, self.kernel3)
+        subtractor_mask = cv2.morphologyEx(subtractor_mask, cv2.MORPH_CLOSE, self.kernel3)
+        contours, _ = cv2.findContours(subtractor_mask,cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         flag = False 
-        if len(contours)>0:  
+        if contours:  
             
             # Edge case single moving car will fail 
             motion_pixels = cv2.countNonZero(subtractor_mask) 
@@ -127,6 +141,7 @@ class Subtractor(EventExtractorInterface):
             min_obj_area = MIN_OBJ_AREA * total 
             flag = (motion_pixels > threshold) or (max_obj_area > min_obj_area) 
 
+        # Hysteresis
         self._recent.append(flag) 
 
         if self._hold > 0: 
@@ -137,16 +152,13 @@ class Subtractor(EventExtractorInterface):
             if len(self._recent) == self._recent.maxlen and all(self._recent): 
                 self._hold = self.hold_frames 
         
-        if save_dir is not None and save_img: 
-            self.__save_subtractor(frame, subtractor_mask, save_dir)
+        if save_dir is not None and save_img and save_idx is not None: 
+            self.__save_subtractor(frame, subtractor_mask, save_dir, save_idx)
 
         return motion_flag 
 
             
-    def __save_subtractor(self, frame, mask, save_dir:str=""): 
-        idx = self._save_idx
-        self._save_idx += 1 
-
+    def __save_subtractor(self, frame, mask, save_dir:str, idx:int): 
         motion_cutout = cv2.bitwise_and(frame, frame, mask=mask) 
         cv2.imwrite(os.path.join(save_dir, f"{idx:06d}_motion.png"), motion_cutout) 
                     
@@ -159,17 +171,17 @@ class Subtractor(EventExtractorInterface):
 
         h, w = kwargs["size"]
 
-        frame_resized = cv2.resize(frame, (0,0), fx=0.6, fy=0.6) 
-        fg_mask = self.fgbg.apply(frame_resized, learningRate=0.01) 
+        fg_mask = self.fgbg.apply(frame, learningRate=0.01) 
         _, fgmask_threshold = cv2.threshold(fg_mask, 180, 255, cv2.THRESH_BINARY) 
 
-        kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
-        fgmask_clean = cv2.morphologyEx(fgmask_threshold, cv2.MORPH_OPEN, kernel_small, iterations=2) 
-        fgmask_clean = cv2.morphologyEx(fgmask_clean, cv2.MORPH_CLOSE, kernel_small, iterations=2)
+        fgmask_clean = cv2.morphologyEx(fgmask_threshold, cv2.MORPH_OPEN, self.kernel5, iterations=2) 
+        fgmask_clean = cv2.morphologyEx(fgmask_clean, cv2.MORPH_CLOSE, self.kernel5, iterations=2)
 
         mask_resized = cv2.resize(fgmask_clean, (w,h))
         blended = cv2.addWeighted(mask_resized.astype(np.float32), 0.6, self.prev_mask, 0.4, 0)
-        self.prev_mask = blended.copy() 
+
+
+        self.prev_mask = blended
         self.acc_mask = cv2.add(self.acc_mask, blended) 
 
         if not self.__calibration_ended: 
@@ -179,16 +191,17 @@ class Subtractor(EventExtractorInterface):
             self.__calibration_ended = True 
 
 
-
     def __apply_calibration(self, frame, **kwargs): 
 
-        save_img = kwargs["save_img"]
+        save_img = kwargs.get("save_img", False)
 
-        acc_mask_norm = cv2.normalize(self.acc_mask, None, 0, 255, cv2.NORM_MINMAX) if self.acc_mask is not None else None
-        acc_uint8 = acc_mask_norm.astype(np.uint8) if acc_mask_norm is not None else None
+        if self.acc_mask is None: 
+            return None
 
-        kernel_large = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15)) 
-        lanes_closed = cv2.morphologyEx(acc_uint8, cv2.MORPH_CLOSE, kernel_large, iterations=3)
+        acc_mask_norm = cv2.normalize(self.acc_mask, None, 0, 255, cv2.NORM_MINMAX)
+        acc_uint8 = acc_mask_norm.astype(np.uint8)
+
+        lanes_closed = cv2.morphologyEx(acc_uint8, cv2.MORPH_CLOSE, self.kernel15, iterations=3)
 
         _, labels, stats, _ = cv2.connectedComponentsWithStats(lanes_closed, connectivity=8)
 
@@ -205,7 +218,7 @@ class Subtractor(EventExtractorInterface):
         lanes_smooth = cv2.GaussianBlur(lanes_clean, (11,11), 0) 
         _, lanes_final = cv2.threshold(lanes_smooth, 50, 255, cv2.THRESH_BINARY) 
         
-        if save_img and self.save_path is not None: 
+        if save_img and self.save_path: 
             self.__save_calibration(frame, lanes_final)
         
         return lanes_final
@@ -213,14 +226,15 @@ class Subtractor(EventExtractorInterface):
 
 
     def __save_calibration(self, last_frame, lanes_final): 
-        if last_frame is not None: 
+        if last_frame is None: 
+            return 
 
-            cv2.imwrite(self.save_path, lanes_final)
-            calb_contours, _ = cv2.findContours(lanes_final, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(last_frame, calb_contours, -1, (0,255,0), 2) 
-            cv2.imshow("Lanes Overlay", last_frame) 
-            cv2.waitKey(0) 
-            # cv2.destroyAllWindows() 
+        cv2.imwrite(self.save_path, lanes_final)
+        # calb_contours, _ = cv2.findContours(lanes_final, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # cv2.drawContours(last_frame, calb_contours, -1, (0,255,0), 2) 
+        # cv2.imshow("Lanes Overlay", last_frame) 
+        # cv2.waitKey(0) 
+        # cv2.destroyAllWindows() 
 
             
 

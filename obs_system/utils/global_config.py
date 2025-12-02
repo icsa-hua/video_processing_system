@@ -27,7 +27,7 @@ THR_RATIO = 0.2
 K_CONSECUTIVE = 3 
 HOLD_FRAMES = 10
 MIN_OBJ_AREA = 0.003
-
+EMPTY_IMAGE_PATH = "samples/fisheye8k.png" 
 
 #--------- Frame Batching ---------
 BATCH_SIZE = 16
@@ -47,3 +47,5 @@ REGION_COLOR = (255, 42, 4)
 #-------- False Positives -------
 MIN_WH = 16 
 MULTIPLIER = 0.8
+
+
