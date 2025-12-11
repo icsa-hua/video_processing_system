@@ -1,3 +1,4 @@
+from obs_system.logic_module.dummy_logic.obstacle_filtering import classification_obstacles
 from obs_system.utils.common import _get_gt, _empty_dets_numpy, _empty_results
 from obs_system.compressed.interface.compressed_yolo import CompressedYOLO
 from obs_system.compressed.interface.tensor_yolo import TensorRTYOLO
@@ -40,7 +41,7 @@ class OptimizedStreamer(Streamer):
         self.mqtt_interface = mqtt_broker 
         self.args.stream_buffer = True 
         self.logic_module = logic_module 
-
+        self.lanes_final = None
         try: 
             self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if os.path.isfile(source) else source, 
                 model=model, 
@@ -52,9 +53,6 @@ class OptimizedStreamer(Streamer):
 
             if producer_flag is not None: 
                 producer_flag.value=False 
-
-            if self.logic_module is not None and self.logic_module["DAV2"] is not None: 
-                self.logic_module["DAV2"].deallocate_resources() 
 
             cv2.destroyAllWindows() 
             Streamer.logger.exception(f"KeyboardInterrupt: {ke}")
@@ -180,7 +178,10 @@ class OptimizedStreamer(Streamer):
 
             with StepContext(name="BackGround Subtractor (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
                 # Motion gate (vectorized over the mini batch) 
-                mfgs = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False)
+                mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False)
+                if lanes_final is not None: 
+                    self.lanes_final = lanes_final
+                    Streamer.logger.debug(f"Lane Contours {self.lanes_final}")
                 Streamer.logger.info(mfgs) 
 
             if use_roi and ("frame_1" in s[0] or self.seen == 0): 
@@ -222,6 +223,7 @@ class OptimizedStreamer(Streamer):
 
             self.run_callbacks("on_predict_postprocess_end")
             for boxes, scores, cls_, orig_img in zip(i_boxes, i_scores, i_classes, im0s): 
+
                 if self.seen >= len(self.batch[1]): 
                     self.seen = 0
                     if self.results is not None: 
@@ -252,6 +254,7 @@ class OptimizedStreamer(Streamer):
                     
                 keep = keep_pc if keep_pc.numel()==0 else keep_pc[nms(boxes_t[keep_pc],scores_t[keep_pc], iou_threshold=(1-NMS_IOU))]
                 boxes_t, scores_t, classes_t = boxes_t[keep], scores_t[keep], classes_t[keep] 
+               
                 inf_results = torch.stack(
                     (
                         boxes_t[:,0], 
@@ -323,7 +326,6 @@ class OptimizedStreamer(Streamer):
             if self.results is not None: 
                 yield from self.results
 
-        
         if self.args.bench and self.mp is not None: 
             self.mp.finalize() 
             Streamer.logger.info(self.mp.results())
@@ -345,20 +347,6 @@ class OptimizedStreamer(Streamer):
             Streamer.logger.info(f"Results saved to {colorstr('bold', self.save_dir)}{s}")
         
         self.run_callbacks("on_predict_end")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
     @abstractmethod 
@@ -405,7 +393,10 @@ class OptimizedStreamer(Streamer):
 
             with StepContext(name="BackGround Subtractor (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
                 # Motion gate (vectorized over the mini batch) 
-                mfgs = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False) 
+                mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False) 
+                print(lanes_final) 
+                if  lanes_final is not None and len(lanes_final) != 0 : 
+                    self.lanes_final = lanes_final
 
             if self.args.bench and self.mp is not None: 
  

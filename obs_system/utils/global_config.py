@@ -27,7 +27,7 @@ THR_RATIO = 0.2
 K_CONSECUTIVE = 3 
 HOLD_FRAMES = 10
 MIN_OBJ_AREA = 0.003
-EMPTY_IMAGE_PATH = "samples/fisheye8k.png" 
+EMPTY_IMAGE_PATH = "samples/highway.png" 
 
 #--------- Frame Batching ---------
 BATCH_SIZE = 16
@@ -49,3 +49,9 @@ MIN_WH = 16
 MULTIPLIER = 0.8
 
 
+#-------- Object Vocabulary -----
+VOCAB = ['car', 'bus', 'bike',
+         'motorbike', 'motorcycle',
+         'truck', 'cyclist', 'motorcyclist']
+
+RED = (0, 0, 255)

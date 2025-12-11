@@ -29,7 +29,7 @@ class ConverterResults:
 
         if len(rectBoxes) == 0: 
             return Results(
-                orig_img=np.ndarray(0,0), 
+                orig_img=np.ndarray(0), 
                 boxes=[],
                 path="", 
                 names=[], 

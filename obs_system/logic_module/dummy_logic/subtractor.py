@@ -92,6 +92,7 @@ class Subtractor(EventExtractorInterface):
             self.__calibration_started = True 
 
         motion_flags = [] 
+        lanes_final = None
         last_frame = batch[-1]
 
         for frame in batch:
@@ -110,10 +111,10 @@ class Subtractor(EventExtractorInterface):
                 self.__cal_calibrator(frame, size=(h,w))
 
         if self.accum_time == 0 and self.__calibration_ended :
-            self.__apply_calibration(last_frame, save_img=save_img)
+            lanes_final = self.__apply_calibration(last_frame, save_img=save_img)
             self.accum_time = -1
 
-        return motion_flags
+        return motion_flags, lanes_final
         
 
     def __call_subtractor(self, frame, save_dir=None, save_img=False, save_idx:int=0): 

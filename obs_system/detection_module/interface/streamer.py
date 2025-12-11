@@ -1,4 +1,5 @@
 from obs_system.compressed.interface.convert_to_Results import ConverterResults 
+from obs_system.logic_module.dummy_logic.obstacle_filtering import classification_obstacles
 from obs_system.utils.logger import get_logger
 from obs_system.utils.common import *
 
@@ -63,6 +64,7 @@ class Streamer(ABC):
         self.device: Any = None 
         self.dataset: Any = None
         self.plotted_img: Any = None 
+        self.lanes_final: Any = None
         self.batch: Any = None 
         self.source_type: Any = None 
         self.results: Optional[List[Any]] = []
@@ -182,6 +184,9 @@ class Streamer(ABC):
     def write_results(self, i: Any, p: Any, im:Any, original_images:Any, s:Any)->str: 
         """Write inference results to a file or directory."""
         
+        if self.results is None: 
+            raise RuntimeError("No results were captured.., but tried to save them")
+
         string = "" 
 
         # Ensure batch dimension
@@ -202,7 +207,30 @@ class Streamer(ABC):
         string += "%gx%g " % im.shape[2:]
 
         #Get the batch size pictures 
-        result = self.results[i] 
+        result = self.results[i]  
+
+        # Obstacle Detection
+        updated_labels, orig_classes_updated = classification_obstacles(
+            boxes=result.boxes, 
+            classes=result.boxes.cls, 
+            lanes_final=self.lanes_final, 
+            orig_shape=self.imgsz, 
+            orig_classes=self.converter.class_names
+
+        )
+
+        if len(self.converter.class_names) != len(orig_classes_updated) and orig_classes_updated is not None: 
+            self.converter.class_names = orig_classes_updated
+
+            result.names.clear() 
+            for i, name in enumerate(self.converter.class_names): 
+                result.names[i] = name
+            pdb.set_trace()
+
+        if result.boxes.cls.numel() == updated_labels.numel(): 
+            result.boxes.cls[:] = updated_labels
+
+
         if isinstance(result, torch.Tensor):
             raise ValueError("Not using pytorch and the ultralytics.Results class")
         

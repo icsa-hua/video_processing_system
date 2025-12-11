@@ -183,7 +183,6 @@ class TensorRTRTXStreamer(OptimizedStreamer):
                 for det, score, cls_, meta in zip(i_boxes, i_scores, i_classes, metas0[:n0]): 
 
                     if meta is None:
-
                         continue 
 
                     f_id = int(meta["frame_id"])
