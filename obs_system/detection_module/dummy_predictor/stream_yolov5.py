@@ -1,4 +1,4 @@
-from obs_system.detection_module.interface.streaming import YOLOStreamer 
+from obs_system.detection_module.interface.streaming_default import YOLOStreamer 
 from obs_system.utils.logger import get_logger
 import torch 
 import numpy as np

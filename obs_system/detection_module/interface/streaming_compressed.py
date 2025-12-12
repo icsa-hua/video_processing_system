@@ -1,4 +1,3 @@
-from obs_system.logic_module.dummy_logic.obstacle_filtering import classification_obstacles
 from obs_system.utils.common import _get_gt, _empty_dets_numpy, _empty_results
 from obs_system.compressed.interface.compressed_yolo import CompressedYOLO
 from obs_system.compressed.interface.tensor_yolo import TensorRTYOLO
@@ -96,7 +95,8 @@ class OptimizedStreamer(Streamer):
         if self.args.verbose : Streamer.logger.info(" ")
 
         with self._lock: 
-            self.setup_source(source if source is not None else self.args.source)
+            with StepContext(name="Set up Dataloader Process", catch=(RuntimeError, ), verbose=True):
+                self.setup_source(source if source is not None else self.args.source)
 
             self.seen = 0 
             self.results = [] 
@@ -230,7 +230,6 @@ class OptimizedStreamer(Streamer):
                         self.results.clear()
 
                 if boxes is None or len(boxes) == 0: 
-                    print("No detections for image : ", self.seen)
                     self.seen +=1
                     if self.results is not None: 
                         self.results.append(_empty_results(orig_img))
@@ -394,7 +393,6 @@ class OptimizedStreamer(Streamer):
             with StepContext(name="BackGround Subtractor (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
                 # Motion gate (vectorized over the mini batch) 
                 mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False) 
-                print(lanes_final) 
                 if  lanes_final is not None and len(lanes_final) != 0 : 
                     self.lanes_final = lanes_final
 

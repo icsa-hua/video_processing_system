@@ -157,7 +157,6 @@ class Streamer(ABC):
         )
         
         self.source_type = self.dataset.source_type
-
         if not getattr(self,"stream", True ) and (
             self.source_type.stream
             or self.source_type.screenshot

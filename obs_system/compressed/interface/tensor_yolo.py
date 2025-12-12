@@ -216,7 +216,7 @@ class TensorRTYOLO:
             # Stream is now initiallized with torch.
     
             try: 
-                self.__context.set_optimnization_profile_async(0, self.__stream.cuda_stream) 
+                self.__context.set_optimization_profile_async(0, self.__stream.cuda_stream) 
             except Exception as e: 
                 pass 
 
