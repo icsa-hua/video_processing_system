@@ -15,9 +15,40 @@ import time
 logger = get_logger("obs_system."+__name__)
 
 
+class YOLOInt8Calibrator(trt.IInt8Calibrator):
+    def __init__(self, calibration_data):
+        trt.IInt8Calibrator.__init__(self)
+        self.cache_file = "calibration.cache"
+        self.calibration_data = calibration_data  # list of np arrays [1,3,H,W]
+        self.current_index = 0
+
+    def get_batch(self, names):
+        if self.current_index >= len(self.calibration_data):
+            return None
+        batch = self.calibration_data[self.current_index]
+        self.current_index += 1
+        return [batch]
+
+    def get_batch_size(self):
+        return 1
+
+    def read_calibration_cache(self):
+        if os.path.exists(self.cache_file):
+            with open(self.cache_file, "rb") as f:
+                return f.read()
+        return None
+
+    def write_calibration_cache(self, cache):
+        with open(self.cache_file, "wb") as f:
+            f.write(cache)
+
+
 class TensorRTYOLO:
 
-    def __init__(self, engine_path, conf_thres=0.5, iou_thres=0.5, fp16=False, int8=False, strip_weights=False):
+    def __init__(self, engine_path, conf_thres=0.5, iou_thres=0.5, fp16=False, int8=False, strip_weights=False, calibration_data=None):
+        
+        if int8 and calibration_data is None:
+            raise ValueError("calibration_data must be provided for INT8 mode")
         
         self.conf_threshold = conf_thres
         self.iou_threshold = iou_thres
@@ -38,6 +69,7 @@ class TensorRTYOLO:
         self.__int8 = int8
         self.__strip_weights = strip_weights
         self.__TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
+        self.calibrator = YOLOInt8Calibrator(calibration_data) if int8 else None
 
         # Runtime Phase: As per https://docs.nvidia.com/deeplearning/tensorrt-rtx/latest/inference-library/python-api-docs.html#create-network-python
 
@@ -119,7 +151,8 @@ class TensorRTYOLO:
             if self.__fp16: 
                 config.set_flag(trt.BuilderFlag.FP16) 
             elif self.__int8: 
-                config.set_flag(trt.BuilderFlag.INT8) 
+                config.set_flag(trt.BuilderFlag.INT8)
+                config.int8_calibrator = self.calibrator 
 
             if self.__strip_weights: 
                 config.set_flag(trt.BuilderFlag.STRIP_PLAN) 
@@ -264,7 +297,8 @@ class TensorRTYOLO:
         # Scale input pixel values to 0 and 1 
         input_img = input_img / 255.0
         input_img = input_img.transpose(2, 0, 1)
-        input_tensor = np.expand_dims(input_img, axis=0).astype(np.float16)
+        dtype = np.float16 if self.__fp16 else np.float32
+        input_tensor = np.expand_dims(input_img, axis=0).astype(dtype)
         return input_tensor
 
 
@@ -589,7 +623,7 @@ class TensorRTYOLO:
 
         finite = torch.isfinite(boxes).all(dim=1) & torch.isfinite(scores) 
         if finite.sum().item() != boxes.size(0): 
-            boxes, scores, class_ids = boxes[finite], scores[finites] , class_ids[finite] 
+            boxes, scores, class_ids = boxes[finite], scores[finite] , class_ids[finite] 
 
         if boxes.numel() == 0: 
             return torch.empty((0,), dtype=torch.long, device=dev)

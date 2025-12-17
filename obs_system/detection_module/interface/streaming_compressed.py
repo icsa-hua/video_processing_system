@@ -38,7 +38,7 @@ class OptimizedStreamer(Streamer):
         super().__init__(cfg=cfg, overrides=overrides, _callbacks=_callbacks)
         
 
-    def __call__(self, source:str, model:str, logic_module=None, mqtt_broker=None, producer_flag=None, queue=None, *args, **kwargs)->None:
+    def __call__(self, source:str, model:str, logic_module=None, mqtt_broker=None, producer_flag=None, queue_list=None, *args, **kwargs)->None:
         self.mqtt_interface = mqtt_broker 
         self.args.stream_buffer = True 
         self.logic_module = logic_module 
@@ -47,7 +47,7 @@ class OptimizedStreamer(Streamer):
             self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if os.path.isfile(source) else source, 
                 model=model, 
                 producer_flag=producer_flag, 
-                queue=queue
+                queue_list=queue_list
             )
 
         except KeyboardInterrupt as ke: 
@@ -90,7 +90,7 @@ class OptimizedStreamer(Streamer):
 
 
     @smart_inference_mode()
-    def stream_inference(self, source:str, model:str, producer_flag:Any, queue:Any, *args, **kwargs):
+    def stream_inference(self, source:str, model:str, producer_flag:Any, queue_list:Any, *args, **kwargs):
 
         self.source = source 
 
@@ -121,12 +121,14 @@ class OptimizedStreamer(Streamer):
             self.dataset.bs = BATCH_SIZE
 
             tile_flag = True if (self.orig_width // TILE_SIZE) > TILE_THR or (self.orig_height //TILE_SIZE) >= TILE_THR else False  
+            Streamer.logger.info(f"Tile Flag : {tile_flag} | Orig WxH: {self.orig_width}x{self.orig_height} | Tile Size: {TILE_SIZE} | Tile THR: {TILE_THR}")
+            pdb.set_trace()
             if tile_flag : 
                 Streamer.logger.info("Run Inference with Tiles")
                 return self._stream_inference_impl_tiles(
                     model=model,
                     producer_flag = producer_flag, 
-                    queue=queue, 
+                    queue_list=queue_list, 
                     profilers=profilers, 
                     activities=activities, 
                     start_time=start_time
@@ -136,7 +138,7 @@ class OptimizedStreamer(Streamer):
             return self._stream_inference_impl(
                   model=model,
                   producer_flag = producer_flag, 
-                  queue=queue, 
+                  queue_list=queue_list, 
                   profilers=profilers, 
                   activities=activities, 
                   start_time=start_time  
@@ -148,7 +150,7 @@ class OptimizedStreamer(Streamer):
     def _stream_inference_impl(self, **kwargs): 
         model = kwargs["model"] 
         producer_flag  = kwargs["producer_flag"] 
-        queue = kwargs["queue"]
+        queue_list = kwargs["queue_list"]
         profilers=kwargs["profilers"] 
         activities=kwargs["activities"] 
 
@@ -339,11 +341,11 @@ class OptimizedStreamer(Streamer):
                         if producer_flag is not None: 
                             producer_flag.value = True
 
-                        if self.proc_image is not None and queue is not None:
-                            queue.put(self.proc_image)
+                        if self.proc_image is not None and queue_list is not None:
+                            queue_list.put(self.proc_image)
 
-                        elif self.proc_image is None and queue is not None: 
-                            queue.put(None)    
+                        elif self.proc_image is None and queue_list is not None: 
+                            queue_list.put(None)    
 
                         self.capture_object_boxes(orig_img, results, cropped_dirname=self.cropped_image_dirname)
 

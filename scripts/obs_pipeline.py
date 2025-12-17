@@ -48,18 +48,11 @@ def main():
     except Exception as e: 
         raise Exception(e) 
  
-    logger.warn("WARNING: If you change the input video source, adjust the background subtractor image. Otherwise, it will classify all frames without movement")
+    logger.warning("WARNING: If you change the input video source, adjust the background subtractor image. Otherwise, it will classify all frames without movement")
 
     if args.gui: 
         gui_connector(args.host_address, args.port_address)   
      
-    #TODO: Test these but next delete them 
-    # args.fep = True
-    # args.save = True 
-    # args.bench = False 
-    # args.model_name = 'trt'
-    # args.roi = False
-
     config = {
         'model_name':args.model_name,
         'stream':True, 

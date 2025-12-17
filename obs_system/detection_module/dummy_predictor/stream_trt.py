@@ -39,8 +39,8 @@ class TensorRTRTXStreamer(OptimizedStreamer):
         self.__gt_labels = None if self.args.bench is None else defaultdict()
 
 
-    def __call__(self, source=None, model=None, logic_module=None, mqtt_broker=None,producer_flag=None, queue=None, *args, **kwargs): 
-        super().__call__(source, model, logic_module, mqtt_broker, producer_flag, queue , *args, **kwargs)
+    def __call__(self, source=None, model=None, logic_module=None, mqtt_broker=None,producer_flag=None, queue_list=None, *args, **kwargs): 
+        super().__call__(source, model, logic_module, mqtt_broker, producer_flag, queue_list , *args, **kwargs)
 
 
     def pre_transform(self, im): 
@@ -86,8 +86,8 @@ class TensorRTRTXStreamer(OptimizedStreamer):
         device = select_device(self.args.device, verbose=self.args.verbose) 
 
         model_path = 'obs_system/compressed/yolov8s_original.onnx'
-
-        self.model = TensorRTYOLO(engine_path=model_path)
+        pdb.set_trace()
+        self.model = TensorRTYOLO(engine_path=model_path, fp16=True)
 
         [self.height, self.width] = self.model.input_height, self.model.input_width 
 
@@ -102,15 +102,15 @@ class TensorRTRTXStreamer(OptimizedStreamer):
 
 
     @smart_inference_mode()
-    def stream_inference(self, source, model, producer_flag, queue, *args, **kwargs): 
-        return super().stream_inference(source, model, producer_flag, queue, *args, **kwargs) 
+    def stream_inference(self, source, model, producer_flag, queue_list, *args, **kwargs): 
+        return super().stream_inference(source, model, producer_flag, queue_list, *args, **kwargs) 
 
 
     @mem_profile
     def _stream_inference_impl_tiles(self, **kwargs): 
         model = kwargs["model"] 
         producer_flag  = kwargs["producer_flag"] 
-        queue = kwargs["queue"]
+        queue_list = kwargs["queue_list"]
         profilers=kwargs["profilers"] 
         activities=kwargs["activities"] 
         start_time = kwargs["start_time"]
@@ -325,10 +325,10 @@ class TensorRTRTXStreamer(OptimizedStreamer):
                     if producer_flag is not None : 
                        producer_flag.value = True 
 
-                    if self.proc_image is not None and queue is not None: 
-                        queue.put(self.proc_image) 
-                    elif self.proc_image is None and queue is not None: 
-                        queue.put(None) 
+                    if self.proc_image is not None and queue_list is not None: 
+                        queue_list[0].put(self.proc_image) 
+                    elif self.proc_image is None and queue_list is not None: 
+                        queue_list[0].put(None) 
 
                     with StepContext(name="Crop Objects to Image", catch=(RuntimeError,), verbose=self.args.verbose):
                         try: 

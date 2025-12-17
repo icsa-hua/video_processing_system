@@ -106,7 +106,7 @@ class Streamer(ABC):
 
 
     @abstractmethod
-    def __call__(self, source:str, model:str, logic_module=None, mqtt_broker=None, producer_flag=None, queue=None, *args, **kwargs)->None:
+    def __call__(self, source:str, model:str, logic_module=None, mqtt_broker=None, producer_flag=None, queue_list=None, *args, **kwargs)->None:
         pass
 
 
@@ -127,7 +127,7 @@ class Streamer(ABC):
 
 
     @final
-    def predict_cli(self, source:str, model:str, producer_flag:Any=None, queue:Any=None)->None: 
+    def predict_cli(self, source:str, model:str, producer_flag:Any=None, queue_list:Any=None)->None: 
         """
         Method used for Command Line Interface (CLI) prediction.
 
@@ -139,7 +139,7 @@ class Streamer(ABC):
             Do not modify this function or remove the generator. The generator ensures that no outputs are
             accumulated in memory, which is critical for preventing memory issues during long-running predictions.
         """
-        gen = self.stream_inference(source=source, model=model, producer_flag=producer_flag, queue=queue)
+        gen = self.stream_inference(source=source, model=model, producer_flag=producer_flag, queue_list=queue_list)
         for _ in gen: 
             pass 
 
