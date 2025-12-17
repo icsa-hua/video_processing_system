@@ -108,7 +108,6 @@ class TensorRTRTXStreamer(OptimizedStreamer):
 
     @mem_profile
     def _stream_inference_impl_tiles(self, **kwargs): 
-
         model = kwargs["model"] 
         producer_flag  = kwargs["producer_flag"] 
         queue = kwargs["queue"]
@@ -127,7 +126,6 @@ class TensorRTRTXStreamer(OptimizedStreamer):
         else: 
             self.mp = None 
         
-        self.frame_images = {} 
         micro = BATCH_SIZE
         overlap_ratio = TILE_OVERLAP
         
@@ -170,14 +168,15 @@ class TensorRTRTXStreamer(OptimizedStreamer):
             with profilers[1]:
                 if self.seen == 0 and self.args.verbose: 
                     with profile(activities=activities) as prof:
-                        i_boxes, i_scores, i_classes = self.model(tbuf[:n0], debug=True) 
+                        (i_boxes, i_scores, i_classes), event = self.model(tbuf[:n0], debug=True) 
                     prof.export_chrome_trace(f"trace_{model}.json")
                 else: 
-                    i_boxes, i_scores, i_classes = self.model(tbuf[:n0], debug=True)
+                    (i_boxes, i_scores, i_classes), event = self.model(tbuf[:n0], debug=True)
 
             with profilers[2]: 
                 pass 
 
+            torch.cuda.current_stream().wait_event(event)
             with StepContext(name="Post Process", catch=(Exception, RuntimeError), verbose=self.args.verbose): 
                 frames_out = {} 
                 for det, score, cls_, meta in zip(i_boxes, i_scores, i_classes, metas0[:n0]): 
@@ -208,6 +207,8 @@ class TensorRTRTXStreamer(OptimizedStreamer):
                             gain=meta['gain'], 
                             pad=(meta['pad_x'],meta['pad_y'])
                         )
+
+
                         mapped_boxes = mapped_boxes.cpu().numpy() if isinstance(mapped_boxes,torch.Tensor) else mapped_boxes
                         score = score.cpu().numpy() if isinstance(score, torch.Tensor) else score
                         cls_ = cls_.cpu().numpy() if isinstance(cls_, torch.Tensor) else cls_

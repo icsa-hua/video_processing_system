@@ -16,6 +16,8 @@ import time
 import glob
 import torch 
 import numpy as np
+import queue
+import threading
 
 from typing import Union, List, Any
 from pathlib import Path 
@@ -118,7 +120,7 @@ class OptimizedStreamer(Streamer):
 
             self.dataset.bs = BATCH_SIZE
 
-            tile_flag = True if (self.orig_width // TILE_SIZE) > 2 or (self.orig_height //TILE_SIZE) >= 2 else False  
+            tile_flag = True if (self.orig_width // TILE_SIZE) > TILE_THR or (self.orig_height //TILE_SIZE) >= TILE_THR else False  
             if tile_flag : 
                 Streamer.logger.info("Run Inference with Tiles")
                 return self._stream_inference_impl_tiles(
@@ -149,6 +151,7 @@ class OptimizedStreamer(Streamer):
         queue = kwargs["queue"]
         profilers=kwargs["profilers"] 
         activities=kwargs["activities"] 
+
         start_time = kwargs["start_time"]
         
         if self.args.bench: 
@@ -171,32 +174,55 @@ class OptimizedStreamer(Streamer):
         use_roi = True if self.logic_module is not None and self.logic_module["ROI"] is not None else False 
         first_batch = True
 
-        for self.batch in self.dataset: 
+        # Asynchronous batch loading to avoid stalls
+        batch_queue = queue.Queue(maxsize=2)
+
+        def producer():
+            try:
+                for batch in self.dataset:
+                    batch_queue.put(batch)
+            except Exception as e:
+                Streamer.logger.error(f"Error in batch producer: {e}")
+            finally:
+                batch_queue.put(None)  # sentinel
+
+        producer_thread = threading.Thread(target=producer, daemon=True)
+        producer_thread.start()
+
+        while True:
+            self.batch = batch_queue.get()
+            if self.batch is None:
+                break
 
             self.run_callbacks("on_predict_batch_start")
             paths, im0s, s = self.batch
 
-            with StepContext(name="BackGround Subtractor (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
-                # Motion gate (vectorized over the mini batch) 
-                mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False)
-                if lanes_final is not None: 
-                    self.lanes_final = lanes_final
-                    Streamer.logger.debug(f"Lane Contours {self.lanes_final}")
-                Streamer.logger.info(mfgs) 
+    #         with StepContext(name="BackGround Subtractor (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
+    #             # Motion gate (vectorized over the mini batch) 
+    #             mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False)
+    #             if lanes_final is not None: 
+    #                 self.lanes_final = lanes_final
+    #                 Streamer.logger.debug(f"Lane Contours {self.lanes_final}")
+    #             Streamer.logger.info(mfgs) 
+    # 
+    #         if use_roi and ("frame_1" in s[0] or self.seen == 0): 
+    #             self.logic_module['ROI'].set_regions(im0s[0]) 
+    #
+    #         with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
+    #             if use_roi: 
+    #                 Streamer.logger.debug("ROI enabled")
+    #                 im0s = self.logic_module['ROI'].crop(im0s)
+    #
+    #         with StepContext(name="FishEyE Processing (Defish)", catch=(RuntimeError, ), verbose=self.args.verbose):    
+    #             # Defish FishEye camera frames to increase accuracy
+    #             if self.logic_module["FEP"] is not None: 
+    #                 Streamer.logger.debug("FEP enabled")
+    #                 im0s = self.logic_module["FEP"]._defish(im0s)  
 
-            if use_roi and ("frame_1" in s[0] or self.seen == 0): 
-                self.logic_module['ROI'].set_regions(im0s[0]) 
-
-            with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
-                if use_roi: 
-                    Streamer.logger.debug("ROI enabled")
-                    im0s = self.logic_module['ROI'].crop(im0s)
-
-            with StepContext(name="FishEyE Processing (Defish)", catch=(RuntimeError, ), verbose=self.args.verbose):    
-                # Defish FishEye camera frames to increase accuracy
-                if self.logic_module["FEP"] is not None: 
-                    Streamer.logger.debug("FEP enabled")
-                    im0s = self.logic_module["FEP"]._defish(im0s)  
+            mfgs = [True, True, True, True, 
+                    True, True, True, True, 
+                    True, True, True, True, 
+                    True, True, True, True]
 
             allowed_filter = [i for i, val in enumerate(mfgs) if val] 
             if len(allowed_filter) == 0 : 
@@ -212,14 +238,18 @@ class OptimizedStreamer(Streamer):
             with profilers[1]: 
                 if first_batch: 
                     with profile(activities=activities) as prof: 
-                        i_boxes, i_scores, i_classes = self.model(images, debug=self.args.verbose) 
+                        (i_boxes, i_scores, i_classes), event = self.model(images, debug=self.args.verbose) 
                     prof.export_chrome_trace(f"trace_{model}.json")
                     first_batch = False
                 else: 
-                    i_boxes, i_scores, i_classes = self.model(images, debug=self.args.verbose) 
+                    (i_boxes, i_scores, i_classes), event = self.model(images, debug=self.args.verbose) 
+                 
+
+            if model=='engine': 
+                torch.cuda.current_stream().wait_event(event)
                 
             with profilers[2]: 
-                pass 
+                pass  
 
             self.run_callbacks("on_predict_postprocess_end")
             for boxes, scores, cls_, orig_img in zip(i_boxes, i_scores, i_classes, im0s): 
@@ -273,6 +303,7 @@ class OptimizedStreamer(Streamer):
                     speed={}, 
                 )
 
+
                 if self.tracker_model is not None:
                     results = self.tracker_model.detect(
                         predictions=results, 
@@ -324,6 +355,8 @@ class OptimizedStreamer(Streamer):
             self.run_callbacks("on_predict_batch_end")
             if self.results is not None: 
                 yield from self.results
+
+        producer_thread.join()
 
         if self.args.bench and self.mp is not None: 
             self.mp.finalize() 

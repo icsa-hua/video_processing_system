@@ -65,6 +65,7 @@ class TrackerHandler(EventExtractorInterface):
                 boxes=torch.zeros((0,6), dtype=torch.float32), 
                 speed={},
             )
+
         xyxy = torch.from_numpy(detections.xyxy).to(torch.float32)
         scores_t = torch.from_numpy(detections.confidence).to(torch.float32) 
         class_t = torch.from_numpy(detections.class_id).to(torch.int64) 

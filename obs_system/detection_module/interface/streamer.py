@@ -224,7 +224,6 @@ class Streamer(ABC):
             result.names.clear() 
             for i, name in enumerate(self.converter.class_names): 
                 result.names[i] = name
-            pdb.set_trace()
 
         if result.boxes.cls.numel() == updated_labels.numel(): 
             result.boxes.cls[:] = updated_labels
