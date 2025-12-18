@@ -18,7 +18,6 @@ DISTORTION_STRENGTH = -0.20
 DEFISH_ALPHA = 0.5
 DEFISH_BETA = 10
 
-
 #--------- Motion Gating ----------
 TRIALS = 10 
 HISTORY = 300 

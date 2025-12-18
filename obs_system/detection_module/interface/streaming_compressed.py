@@ -120,6 +120,30 @@ class OptimizedStreamer(Streamer):
             _, im0s, _ = first_batch
             self.orig_height, self.orig_width = im0s[0].shape[:2] 
 
+            empty_image = f"{EMPTY_IMAGE_PATH}"
+            if not os.path.exists(empty_image):
+                raise FileNotFoundError(f"Empty image path for background subtraction does not exist: {empty_image}")
+
+            #use_roi = True if self.args.roi and self.logic_module["ROI"] is not None else False 
+            use_roi = True
+            if use_roi :
+                with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
+                    
+                    self.logic_module['ROI'].set_regions(im0s[0]) 
+                    cropped_frame = self.logic_module['ROI'].crop_image(im0s[0])
+                    
+                    if self.args.show: 
+                        self.logic_module['ROI']._show_regions(cropped_frame.copy())
+                    
+                    self.orig_height, self.orig_width = cropped_frame.shape[:2]
+                empty_image = cv2.imread(empty_image)
+                self.logic_module['SUBTRACTOR'].warm_up(empty_image, trials=TRIALS)
+            
+            else: 
+                self.logic_module['SUBTRACTOR'].warm_up(empty_image, trials=TRIALS)
+            
+            pdb.set_trace()
+
             tile_flag = True if (self.orig_width // TILE_SIZE) > TILE_THR or (self.orig_height //TILE_SIZE) >= TILE_THR else False  
 
             if tile_flag : 
@@ -142,7 +166,6 @@ class OptimizedStreamer(Streamer):
                   activities=activities, 
                   start_time=start_time  
             )
-
 
     @abstractmethod
     @mem_profile
@@ -172,8 +195,6 @@ class OptimizedStreamer(Streamer):
                 self.model.warmup(micro=BATCH_SIZE, warmup_sessions=WARM_UP_SESSIONS)
                 self.done_warmup = True
 
-        use_roi = True if self.logic_module is not None and self.logic_module["ROI"] is not None else False 
-
         # Asynchronous batch loading to avoid stalls
         batch_queue = queue.Queue(maxsize=2)
 
@@ -198,19 +219,20 @@ class OptimizedStreamer(Streamer):
 
             paths, im0s, s = self.batch
 
+            #use_roi = True if self.args.roi and self.logic_module["ROI"] is not None else False 
+            use_roi = True
+            if use_roi :
+                with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
+                    im0s = self.logic_module['ROI'].crop_image(im0s)
+
+
             with StepContext(name="BackGround Subtractor (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
                 # Motion gate (vectorized over the mini batch) 
                 mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False)
                 if lanes_final is not None: 
                     self.lanes_final = lanes_final
     
-            if use_roi and ("frame_1" in s[0] or self.seen == 0): 
-                self.logic_module['ROI'].set_regions(im0s[0]) 
-    
-            with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
-                if use_roi: 
-                    Streamer.logger.debug("ROI enabled")
-                    im0s = self.logic_module['ROI'].crop(im0s)
+
     
             with StepContext(name="FishEyE Processing (Defish)", catch=(RuntimeError, ), verbose=self.args.verbose):    
                 # Defish FishEye camera frames to increase accuracy
@@ -418,15 +440,10 @@ class OptimizedStreamer(Streamer):
 
             _, im0s, s = self.batch 
             frame_ids = get_frame_ids(labels=s) 
-
-            # One-time ROI init on first frame if needed 
-            if use_roi and ("frame_1" in s[0] or self.seen == 0): 
-                self.logic_module['ROI'].set_regions(im0s[0]) 
-                # self.orig_height, self.orig_width = im0s[0].shape[:2] 
  
             with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
                 if use_roi: 
-                    im0s = self.logic_module['ROI'].crop(im0s)
+                    im0s = self.logic_module['ROI'].crop_image(im0s)
 
             with StepContext(name="FishEyE Processing (Defish)", catch=(RuntimeError, ), verbose=self.args.verbose):    
                 # Defish FishEye camera frames to increase accuracy

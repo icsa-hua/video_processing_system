@@ -56,8 +56,12 @@ class RegionSetter(EventExtractorInterface):
     
 
     def crop_image(self, images):
-        return [image[self.y_start:self.y_end, self.x_start:self.x_end] for image in images]
-
+        if len(images) > 1 and isinstance(images, list): 
+            return [image[self.y_start:self.y_end, self.x_start:self.x_end] for image in images]
+        elif isinstance(images, np.ndarray): 
+            return images[self.y_start:self.y_end, self.x_start:self.x_end]
+        else: 
+            raise ValueError("No images to crop in crop_image method of RegionSetter.")
 
 
     def count_regions(self, bbox) -> None:
@@ -110,3 +114,5 @@ class RegionSetter(EventExtractorInterface):
             cv2.putText(im, region_label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, region_text_color, 2)
             cv2.polylines(im, [polygon_coords], isClosed=True, color=region_color, thickness=2)
         
+        cv2.imshow("Regions", im)
+        cv2.waitKey(1)

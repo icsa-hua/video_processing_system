@@ -133,6 +133,7 @@ class Application:
         DEFAULT_CFG.half = args.half
         DEFAULT_CFG.bench = args.bench 
         DEFAULT_CFG.bench_labels = args.bench_labels
+        DEFAULT_CFG.roi = args.roi if args.roi is not None else False
 
         tracemalloc.start()
 
@@ -147,17 +148,12 @@ class Application:
     def setup_logic_module(self, args): 
 
         # Change this based on your video. Get the first frame. 
-        empty_image = f"{self.parent_path}/{EMPTY_IMAGE_PATH}"
-        self.logic_module["SUBTRACTOR"] = Subtractor(empty_background_image=empty_image)
+        self.logic_module["SUBTRACTOR"] = Subtractor()
 
-        if args.roi: 
-            self.logic_module["ROI"] = RegionSetter() 
-        else: 
-            self.logic_module["ROI"] = None 
-
+        self.logic_module["ROI"] = RegionSetter() 
+        
         if args.fep: 
             self.logic_module["FEP"] = FishEyeProjection(crop=0.00)
-
         else: 
             self.logic_module["FEP"] = None
 

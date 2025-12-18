@@ -8,6 +8,7 @@ import os
 import pdb
 
 from collections import deque
+from typing import Optional
 
 logger = get_logger("obs_system"+__name__)
 
@@ -55,21 +56,32 @@ class Subtractor(EventExtractorInterface):
         self.__calibration_started = False
         self.__calibration_ended = False
 
-        if empty_background_image: 
-            logger.debug("Empty Background traing for subtractor")
+
+    def warm_up(self, empty_background_image:Optional[np.ndarray], trials:int=TRIALS):
+        if empty_background_image is None:
+            raise ValueError("Empty background image is required for warm_up of Subtractor.")
+
+        if isinstance(empty_background_image, str): 
+            logger.debug("Empty Background training for subtractor")
             empty_bg = cv2.imread(empty_background_image)
-            
-            if empty_bg is not None: 
 
-                if self.downscale: 
-                    empty_bg = cv2.resize(empty_bg, self.downscale, interpolation=cv2.INTER_AREA)
+        elif isinstance(empty_background_image, np.ndarray):
+            empty_bg = empty_background_image    
 
-                for _ in range(trials): 
-                    self.bg_subtractor.apply(empty_bg, learningRate=1.0) 
+        else: 
+            raise ValueError("Invalid type for empty_background_image in warm_up of Subtractor.")
+        
+        if empty_bg is not None: 
 
-                self.static_bg = True #Shows that we entered the first time. 
+            if self.downscale: 
+                empty_bg = cv2.resize(empty_bg, self.downscale, interpolation=cv2.INTER_AREA)
 
-    
+            for _ in range(trials): 
+                self.bg_subtractor.apply(empty_bg, learningRate=1.0) 
+
+            self.static_bg = True #Shows that we entered the first time. 
+
+
     def detect(self, batch, save_img:bool=False): 
 
         if not batch: return []
