@@ -314,6 +314,7 @@ class OptimizedStreamer(Streamer):
 
                 if self.results is not None:
                     self.results.append(results) 
+                    
 
                 if self.mp is not None and self.args.bench: 
                     gt_cls, gt_bbs = self.__gt_labels.pop(self.seen, (np.zeros((0,), np.int64),np.zeros((0,4), np.float32)))
@@ -324,7 +325,7 @@ class OptimizedStreamer(Streamer):
                         gt_boxes_xyxy=gt_bbs.astype(np.float32), 
                         gt_classes = gt_cls.astype(np.int64)
                     ) 
-                
+
                 if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
                     if mfgs[self.seen]: 
                         s[self.seen] += self.write_results(self.seen, Path(paths[self.seen]), images, im0s, s)
@@ -344,12 +345,16 @@ class OptimizedStreamer(Streamer):
                 if self.seen == len(self.batch)-1 and self.args.verbose: 
                     elapsed_time=time.perf_counter() - start_time 
                     Streamer.logger.info(f"Time from capturing batch to meaningful information: {elapsed_time:.2f}")
-            
+           
+
             self.run_callbacks("on_predict_batch_end")
             if self.results is not None: 
                 yield from self.results
 
         producer_thread.join()
+
+        self.save_queue.put(None)
+        self.save_thread.join()
 
         if self.args.bench and self.mp is not None: 
             self.mp.finalize() 
