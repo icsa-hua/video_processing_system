@@ -70,7 +70,7 @@ class TensorRTYOLO:
         self.__strip_weights = strip_weights
         self.__TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
         self.calibrator = YOLOInt8Calibrator(calibration_data) if int8 else None
-        self.__synchronization_flag =  False
+        #self.__synchronization_flag =  False
         # Runtime Phase: As per https://docs.nvidia.com/deeplearning/tensorrt-rtx/latest/inference-library/python-api-docs.html#create-network-python
 
         # Load TensorRT engine
@@ -254,7 +254,7 @@ class TensorRTYOLO:
             except Exception as e: 
                 pass 
 
-            self.__context.set_input_shape(self.__input_name, runtime_input_shape) 
+            # self.__context.set_input_shape(self.__input_name, runtime_input_shape)  # Moved to inference
 
             in_trt_dtype = self.__engine.get_tensor_dtype(self.__input_name) 
             in_torch_dtype = self.__trt_to_tensor_dtype(in_trt_dtype)
@@ -326,9 +326,9 @@ class TensorRTYOLO:
 
         shape = tuple(int(x) for x in torch_in.shape) 
         
-        if (self.__in_dev is None) or (tuple(self.__in_dev.shape) != shape) and (self.__synchronization_flag==False): 
-            self.__synchronization_flag = True
-            pdb.set_trace()
+        self.__context.set_input_shape(self.__input_name, shape)
+        
+        if (self.__in_dev is None) or (tuple(self.__in_dev.shape) != shape): 
             self.__set_stream(shape) 
 
         if torch_in.device != self.__device: 
@@ -369,10 +369,11 @@ class TensorRTYOLO:
 
     def detect_objects(self, im, debug=False):
 
+        original_batch_size = im.shape[0]
+
         if isinstance(im, torch.Tensor):
 
             self.img_height, self.img_width = im.shape[2], im.shape[3]
-            original_batch_size = im.shape[0]
             if original_batch_size < 16:
                 pad_size = 16 - original_batch_size
                 pad = torch.zeros((pad_size, *im.shape[1:]), dtype=im.dtype, device=im.device)
