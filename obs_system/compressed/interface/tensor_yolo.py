@@ -324,9 +324,12 @@ class TensorRTYOLO:
 
         shape = tuple(int(x) for x in torch_in.shape) 
         
-        if (self.__in_dev is None) or (tuple(self.__in_dev.shape) != shape) or (self.__synchronization_flag==False): 
-            self.__synchronization_flag = True
+        if (self.__in_dev is None) or (tuple(self.__in_dev.shape) != shape): 
             self.__set_stream(shape) 
+
+        # if (self.__in_dev is None) or (tuple(self.__in_dev.shape) != shape) or (self.__synchronization_flag==False): 
+        #     self.__synchronization_flag = True
+        #     self.__set_stream(shape) 
 
         if torch_in.device != self.__device: 
             torch_in = torch_in.to(self.__device, non_blocking=True)
@@ -336,16 +339,9 @@ class TensorRTYOLO:
             self.__in_dev.copy_(torch_in, non_blocking=True) 
             self.__context.execute_async_v3(stream_handle=self.__stream_handler())
 
-        # Record an event that fires when TRT is done
+        # Record an event that fires when TRT is done 
         event = torch.cuda.Event()
         event.record(self.__stream)
-
-        # logger.debug(f"exec on device {self.__device}, stream {int(self.__stream.cuda_stream)}")
-        # for n,t in self.__out_devs.items():
-        #     logger.debug(f"{n}: dev={t.device}, ptr={t.data_ptr()}")
-        # logger.debug(f"in_dev: dev={self.__in_dev.device}, ptr={self.__in_dev.data_ptr()}")
-        #
-
 
         """
             Performance here involves the batch size (16)
@@ -363,67 +359,12 @@ class TensorRTYOLO:
             return outs_np
 
         else: 
-
-            # self.__stream.synchronize() 
+            
+            # self.__stream.synchronize() # This only adds delay (Event handling works) 
             if verbose: 
                 logger.debug(f"Inference time: {(time.perf_counter() - start)*1000:.2f} ms")
+
             return outputs_gpu, event
-
-
-        #     if input_tensor.dtype == torch.float32: 
-        #         input_tensor = input_tensor.to(dtype=torch.float16) 
-        #     input_tensor = input_tensor.detach().cpu().numpy()
-        # else: 
-        #     if input_tensor.dtype not in (np.float16, np.float32) : 
-        #         input_tensor = input_tensor.astype(np.float16, copy=False) 
-        #     input_tensor = np.ascontiguousarray(input_tensor)
-
-        # shape = tuple(input_tensor.shape)
-        
-        # if tuple(self.__context.get_tensor_shape(self.__input_name))!= shape: 
-        #     self.__context.set_input_shape(self.__input_name, shape)
-        #
-        #     in_bytes = int(trt.volume(shape)) * np.dtype(trt.nptype(self.__engine.get_tensor_dtype(self.__input_name))).itemsize
-        #     if not hasattr(self, "d_input") or getattr(self.__d_input, "size", 0) < in_bytes: 
-        #         if hasattr(self, "d_input"): self.__d_input.free() 
-        #         self.__d_input = cuda.mem_alloc(in_bytes) 
-        #
-        #     self.__context.set_tensor_address(self.__input_name, int(self.__d_input))
-        #     self.__host_outputs, self.__d_outputs = [], [] 
-        #
-        #     for name in self.__output_names:
-        #         oshape = tuple(self.__context.get_tensor_shape(name))
-        #         odtype = trt.nptype(self.__engine.get_tensor_dtype(name))
-        #         h_out = np.empty(oshape, dtype=odtype) 
-        #         d_out = cuda.mem_alloc(h_out.nbytes) 
-        #         self.__host_outputs.append(h_out)
-        #         self.__d_outputs.append(d_out) 
-        #         self.__context.set_tensor_address(name, int(d_out))
-            
-        # # Copy input to GPU, common to enqueue asynchronous transfered before and after the kernels to move data to the GPU
-        # cuda.memcpy_htod_async(self.__d_input, input_tensor, self.__stream)
-        # 
-        # # Run inference
-        # self.__context.execute_async_v3( stream_handle=self.__stream.handle)
-        #
-        # # Copy outputs back
-        # for (h_out,d_out) in (zip(self.__host_outputs, self.__d_outputs)):
-        #     cuda.memcpy_dtoh_async(h_out, d_out, self.__stream)
-        #
-        # # Determine when inference (and asynchronous transfers) are complete
-        # self.__stream.synchronize()
-        #
-        # outputs = [torch.from_numpy(out) for out in self.__host_outputs]
-        #
-        # if verbose:
-        #     logger.debug(f"Inference time: {(time.perf_counter() - start)*1000:.2f} ms")
-        #
-        # if return_numpy:
-        #     return [out.numpy() for out in outputs]
-
-        return outputs
-
-
 
 
     def detect_objects(self, im, debug=False):
@@ -517,7 +458,7 @@ class TensorRTYOLO:
                     all_class_ids.append(torch.empty((0,), dtype=torch.int32))
                     continue 
 
-                predictions = predictions[conf_mask] 
+                predictions = predictions[conf_mask,:] 
                 sel_scores = scores[conf_mask] 
                 sel_cls = torch.argmax(predictions[:,4:], dim=1)  
                 boxes = self.extract_boxes(predictions) 

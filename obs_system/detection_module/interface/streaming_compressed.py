@@ -43,7 +43,7 @@ class OptimizedStreamer(Streamer):
         self.args.stream_buffer = True 
         self.logic_module = logic_module 
         self.lanes_final = None
-        
+
         try: 
             self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if os.path.isfile(source) else source, 
                 model=model, 
@@ -108,8 +108,7 @@ class OptimizedStreamer(Streamer):
 
             profilers = (
                 ops.Profile(device=self.device), 
-                ops.Profile(device=self.device), 
-                ops.Profile(device=self.device), 
+                ops.Profile(device=self.device)
             )
 
             activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
@@ -197,34 +196,28 @@ class OptimizedStreamer(Streamer):
                 break
 
             self.run_callbacks("on_predict_batch_start")
+
             paths, im0s, s = self.batch
 
-    #         with StepContext(name="BackGround Subtractor (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
-    #             # Motion gate (vectorized over the mini batch) 
-    #             mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False)
-    #             if lanes_final is not None: 
-    #                 self.lanes_final = lanes_final
-    #                 Streamer.logger.debug(f"Lane Contours {self.lanes_final}")
-    #             Streamer.logger.info(mfgs) 
-    # 
-    #         if use_roi and ("frame_1" in s[0] or self.seen == 0): 
-    #             self.logic_module['ROI'].set_regions(im0s[0]) 
-    #
-    #         with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
-    #             if use_roi: 
-    #                 Streamer.logger.debug("ROI enabled")
-    #                 im0s = self.logic_module['ROI'].crop(im0s)
-    #
-    #         with StepContext(name="FishEyE Processing (Defish)", catch=(RuntimeError, ), verbose=self.args.verbose):    
-    #             # Defish FishEye camera frames to increase accuracy
-    #             if self.logic_module["FEP"] is not None: 
-    #                 Streamer.logger.debug("FEP enabled")
-    #                 im0s = self.logic_module["FEP"]._defish(im0s)  
-
-            mfgs = [True, True, True, True, 
-                    True, True, True, True, 
-                    True, True, True, True, 
-                    True, True, True, True]
+            with StepContext(name="BackGround Subtractor (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
+                # Motion gate (vectorized over the mini batch) 
+                mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False)
+                if lanes_final is not None: 
+                    self.lanes_final = lanes_final
+    
+            if use_roi and ("frame_1" in s[0] or self.seen == 0): 
+                self.logic_module['ROI'].set_regions(im0s[0]) 
+    
+            with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
+                if use_roi: 
+                    Streamer.logger.debug("ROI enabled")
+                    im0s = self.logic_module['ROI'].crop(im0s)
+    
+            with StepContext(name="FishEyE Processing (Defish)", catch=(RuntimeError, ), verbose=self.args.verbose):    
+                # Defish FishEye camera frames to increase accuracy
+                if self.logic_module["FEP"] is not None: 
+                    Streamer.logger.debug("FEP enabled")
+                    im0s = self.logic_module["FEP"]._defish(im0s)  
 
             allowed_filter = [i for i, val in enumerate(mfgs) if val] 
             if len(allowed_filter) == 0 : 
@@ -239,19 +232,18 @@ class OptimizedStreamer(Streamer):
 
             with profilers[1]: 
                 if first_batch: 
-                    with profile(activities=activities) as prof: 
-                        (i_boxes, i_scores, i_classes), event = self.model(images, debug=self.args.verbose) 
+                    with profile(activities=activities) as prof:
+                        (i_boxes, i_scores, i_classes), event = self.model(images, debug=self.args.verbose)
                     prof.export_chrome_trace(f"trace_{model}.json")
                     first_batch = False
                 else: 
-                    (i_boxes, i_scores, i_classes), event = self.model(images, debug=self.args.verbose) 
-                 
+                    (i_boxes, i_scores, i_classes), event = self.model(images, debug=self.args.verbose)
 
-            if model=='engine': 
+            if model=='engine':
+                # End event and synchronize the engine after we don't need the tensors anymore 
+                # Transfer them into the CPU stream 
                 torch.cuda.current_stream().wait_event(event)
                 
-            with profilers[2]: 
-                pass  
 
             self.run_callbacks("on_predict_postprocess_end")
             for boxes, scores, cls_, orig_img in zip(i_boxes, i_scores, i_classes, im0s): 
@@ -305,7 +297,6 @@ class OptimizedStreamer(Streamer):
                     speed={}, 
                 )
 
-
                 if self.tracker_model is not None:
                     results = self.tracker_model.detect(
                         predictions=results, 
@@ -318,7 +309,7 @@ class OptimizedStreamer(Streamer):
                 results.speed = {
                     "preprocess": profilers[0].dt * 1e3/len(self.batch),
                     "inference": profilers[1].dt * 1e3/len(self.batch),
-                    "postprocess": profilers[2].dt * 1e3 / len(self.batch),
+                    "postprocess": (time.perf_counter() - start_time) * 1e3/len(self.batch)
                 }
 
                 if self.results is not None:
