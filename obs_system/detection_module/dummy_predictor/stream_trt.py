@@ -15,7 +15,7 @@ import torch
 import cv2
 import numpy as np 
 
-from typing import Any. Generator, Optional
+from typing import Any, Generator, Optional
 from memory_profiler import profile as mem_profile
 from pathlib import Path 
 from ultralytics import YOLO

@@ -312,9 +312,11 @@ class TensorRTYOLO:
         
         if isinstance(input_tensor, np.ndarray): 
             torch_in = torch.from_numpy(input_tensor) 
+
         elif isinstance(input_tensor, torch.Tensor): 
             torch_in = input_tensor 
-        else : 
+
+        else: 
             raise ValueError("input_tensor must be np.ndarray or torch.Tensor")
     
         in_trt_dtype = self.__engine.get_tensor_dtype(self.__input_name) 
@@ -324,12 +326,10 @@ class TensorRTYOLO:
 
         shape = tuple(int(x) for x in torch_in.shape) 
         
-        if (self.__in_dev is None) or (tuple(self.__in_dev.shape) != shape): 
+        if (self.__in_dev is None) or (tuple(self.__in_dev.shape) != shape) and (self.__synchronization_flag==False): 
+            self.__synchronization_flag = True
+            pdb.set_trace()
             self.__set_stream(shape) 
-
-        # if (self.__in_dev is None) or (tuple(self.__in_dev.shape) != shape) or (self.__synchronization_flag==False): 
-        #     self.__synchronization_flag = True
-        #     self.__set_stream(shape) 
 
         if torch_in.device != self.__device: 
             torch_in = torch_in.to(self.__device, non_blocking=True)
@@ -372,6 +372,11 @@ class TensorRTYOLO:
         if isinstance(im, torch.Tensor):
 
             self.img_height, self.img_width = im.shape[2], im.shape[3]
+            original_batch_size = im.shape[0]
+            if original_batch_size < 16:
+                pad_size = 16 - original_batch_size
+                pad = torch.zeros((pad_size, *im.shape[1:]), dtype=im.dtype, device=im.device)
+                im = torch.cat([im, pad], dim=0)
             color_convert = False  
 
             def check_tensor(im): 
@@ -395,6 +400,11 @@ class TensorRTYOLO:
         outputs, event = self.inference(im, return_numpy=False, verbose=debug)
         with StepContext(name="Process Outputs inside tensor_yolo.py", catch=((RuntimeError, )), verbose=True):
             boxes, scores, class_ids = self.process_output(outputs, debug=debug)
+
+        if original_batch_size < 16:
+            boxes = boxes[:original_batch_size]
+            scores = scores[:original_batch_size]
+            class_ids = class_ids[:original_batch_size]
 
         return (boxes, scores, class_ids), event
 
