@@ -214,6 +214,30 @@ class Streamer(ABC):
         #Get the batch size pictures 
         result = self.results[i]  
 
+        if result.boxes is None or  result.boxes.xyxy.numel() == 0:
+            # still plot/save frame if needed
+            if self.mqtt_interface is not None:
+                self.mqtt_interface.publish(self.mqtt_interface.topic, str(result.speed))
+
+            if self.args.save or self.args.show:
+                self.plotted_img = result.plot(
+                    line_width=self.args.line_width,
+                    boxes=self.args.show_boxes,
+                    conf=self.args.show_conf,
+                    labels=self.args.show_labels,
+                )
+
+            try:
+                string += f"{result.verbose()}{result.speed['inference']:.1f}ms" 
+            except Exception as e: 
+                Streamer.logger.exception(f"Error getting inference speed: {e}")
+                pdb.set_trace()
+
+            if self.args.save:
+                self.save_predicted_images(str(self.save_dir / p.name), int(frame))
+            
+            return string
+
         # Obstacle Detection
         updated_labels, orig_classes_updated = classification_obstacles(
             boxes=result.boxes, 
@@ -221,7 +245,6 @@ class Streamer(ABC):
             lanes_final=self.lanes_final, 
             orig_shape=self.imgsz, 
             orig_classes=self.converter.class_names
-
         )
 
         if len(self.converter.class_names) != len(orig_classes_updated) and orig_classes_updated is not None: 

@@ -106,6 +106,9 @@ class OptimizedStreamer(Streamer):
             self.results = [] 
             self.batch = None 
             self.mp = None 
+                       
+            #self.use_roi = True if self.args.roi and self.logic_module["ROI"] is not None else False 
+            self.use_roi = False 
 
             profilers = (
                 ops.Profile(device=self.device), 
@@ -124,9 +127,7 @@ class OptimizedStreamer(Streamer):
             if not os.path.exists(empty_image):
                 raise FileNotFoundError(f"Empty image path for background subtraction does not exist: {empty_image}")
 
-            #use_roi = True if self.args.roi and self.logic_module["ROI"] is not None else False 
-            use_roi = True
-            if use_roi :
+            if self.use_roi :
                 with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
                     
                     self.logic_module['ROI'].set_regions(im0s[0]) 
@@ -142,8 +143,6 @@ class OptimizedStreamer(Streamer):
             else: 
                 self.logic_module['SUBTRACTOR'].warm_up(empty_image, trials=TRIALS)
             
-            pdb.set_trace()
-
             tile_flag = True if (self.orig_width // TILE_SIZE) > TILE_THR or (self.orig_height //TILE_SIZE) >= TILE_THR else False  
 
             if tile_flag : 
@@ -166,6 +165,7 @@ class OptimizedStreamer(Streamer):
                   activities=activities, 
                   start_time=start_time  
             )
+
 
     @abstractmethod
     @mem_profile
@@ -220,33 +220,34 @@ class OptimizedStreamer(Streamer):
             paths, im0s, s = self.batch
 
             #use_roi = True if self.args.roi and self.logic_module["ROI"] is not None else False 
-            use_roi = True
+            use_roi = False
             if use_roi :
                 with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
                     im0s = self.logic_module['ROI'].crop_image(im0s)
-
 
             with StepContext(name="BackGround Subtractor (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
                 # Motion gate (vectorized over the mini batch) 
                 mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False)
                 if lanes_final is not None: 
                     self.lanes_final = lanes_final
-    
 
-    
             with StepContext(name="FishEyE Processing (Defish)", catch=(RuntimeError, ), verbose=self.args.verbose):    
                 # Defish FishEye camera frames to increase accuracy
                 if self.logic_module["FEP"] is not None: 
                     Streamer.logger.debug("FEP enabled")
                     im0s = self.logic_module["FEP"]._defish(im0s)  
 
-            allowed_filter = [i for i, val in enumerate(mfgs) if val] 
-            if len(allowed_filter) == 0 :
-                print("All frames filtered by motion gating") 
-                continue
+            # allowed_filter = [i for i, val in enumerate(mfgs) if val] 
+            # if len(allowed_filter) == 0 :
+            #     Streamer.logger.debug("All frames filtered out by motion gating.")
+            #     continue
 
-            for i, al in enumerate(allowed_filter): 
-                if not al: 
+            # for i, al in enumerate(allowed_filter): 
+            #     if not al: 
+            #         im0s[i] = empty_image(im0s[i])
+
+            for i, keep in enumerate(mfgs):
+                if not keep:
                     im0s[i] = empty_image(im0s[i])
 
             with profilers[0]: 
@@ -265,12 +266,14 @@ class OptimizedStreamer(Streamer):
                 # Transfer them into the CPU stream 
                 torch.cuda.current_stream().wait_event(event)
 
-            for boxes, scores, cls_, orig_img in zip(i_boxes, i_scores, i_classes, im0s): 
+            for bni, (boxes, scores, cls_, orig_img) in enumerate(zip(i_boxes, i_scores, i_classes, im0s)): 
 
-                if self.seen >= len(self.batch[1]): 
-                        self.seen = 0
+                self.seen = bni
 
                 if boxes is None or len(boxes) == 0: 
+                    inf_results = _empty_results(orig_image=orig_img)
+                    if self.results is not None:
+                        self.results.append(inf_results)
                     continue
 
                 if isinstance(boxes, np.ndarray): 
@@ -321,9 +324,9 @@ class OptimizedStreamer(Streamer):
                     )
                 
                 results.speed = {
-                    "preprocess": profilers[0].dt * 1e3/len(self.batch),
-                    "inference": profilers[1].dt * 1e3/len(self.batch),
-                    "postprocess": (time.perf_counter() - start_time) * 1e3/len(self.batch)
+                    "preprocess": profilers[0].dt * 1e3/len(im0s),
+                    "inference": profilers[1].dt * 1e3/len(im0s),
+                    "postprocess": (time.perf_counter() - start_time) * 1e3/len(im0s)
                 }
 
                 if self.results is not None:
@@ -341,18 +344,18 @@ class OptimizedStreamer(Streamer):
                 
                 yield results
 
-                if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
-                    filename=Path(self.batch[0][self.seen])
-                    if not filename: 
-                            Streamer.logger.warning("[WARNING]: filename to save image is invalid")
-                        
-                    self.batch[2][self.seen] += self.write_results(
-                            i = self.seen, 
-                            p = filename,  
-                            im= images,
-                            original_images=self.batch[1], 
-                            s = self.batch[2]
-                        )
+                # if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
+                filename=Path(paths[self.seen])
+                if not filename: 
+                        Streamer.logger.warning("[WARNING]: filename to save image is invalid")
+
+                self.batch[2][self.seen] += self.write_results(
+                        i = self.seen, 
+                        p = filename,  
+                        im= images,
+                        original_images=self.batch[1], 
+                        s = self.batch[2]
+                    )
 
                 if producer_flag is not None: 
                     producer_flag.value = True
@@ -374,12 +377,10 @@ class OptimizedStreamer(Streamer):
                         except IndexError as ie: 
                             Streamer.logger.exception(ie)
                 
-                self.seen += 1 
-                if self.seen >= len(self.batch[1]): 
-                    self.seen = 0
+                if self.seen >= len(im0s): 
                     self.results.clear()
 
-                if self.seen == len(self.batch)-1 and self.args.verbose: 
+                if self.seen == len(im0s)-1 and self.args.verbose: 
                     elapsed_time=time.perf_counter() - start_time 
                     Streamer.logger.info(f"Time from capturing batch to meaningful information: {elapsed_time:.2f}")
             

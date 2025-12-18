@@ -11,7 +11,7 @@ import torch
 from typing import List
 from pathlib import Path
 from torchvision.ops import batched_nms, nms
-from typing import Dict, Any, Iterable
+from typing import Dict, Any, Optional
 
 from ultralytics.engine.model import Results
 
@@ -387,13 +387,15 @@ def _get_gt(stem: str, gt_by_stem:dict):
     return (np.zeros((0,), np.float32),np.zeros((0,4), np.float32))
 
 
-def _empty_results(orig_image): 
+def _empty_results(orig_image, class_names:Optional[List[str]]=None, frame_id:int=0, device:str="cpu") -> Results: 
+    empty = torch.zeros((0, 6), dtype=torch.float32, device=device)  # or device consistent with rest
+   
     return Results(
             orig_img=orig_image, 
-            boxes=None, 
-            names=None, 
-            speed={}, 
-            path="",
+            boxes=empty, 
+            names=class_names if class_names is not None else [], 
+            speed={'preprocess':0.0, 'inference':0.0, 'postprocess':0.0}, 
+            path=f"image_{frame_id}.jpg",
     )
 
 
