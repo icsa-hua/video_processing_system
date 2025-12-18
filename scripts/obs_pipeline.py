@@ -78,10 +78,10 @@ def main():
         verbose=config['verbose']
     )
 
-    with StepContext(name='Setup Process', catch=(KeyError, ModuleNotFoundError), verbose=True):
+    with StepContext(name='Setup Process', catch=(KeyError, ModuleNotFoundError)):
         app.setup_process(args) 
 
-    with StepContext(name='Setup Model', catch=(OSError,ValueError), verbose=True):
+    with StepContext(name='Setup Model', catch=(OSError,ValueError)):
         app.setup_model(
             stream=config['stream'],
             opt=config['opt']
@@ -94,10 +94,10 @@ def main():
         data.release()
         cv2.destroyAllWindows()
 
-    with StepContext(name='Setup Logic',catch=(KeyError,IndexError), verbose=True):
+    with StepContext(name='Setup Logic',catch=(KeyError,IndexError)):
         app.setup_logic_module(args) 
 
-    with StepContext(name='Setup MQTT', catch=(ConnectionError, TimeoutError), verbose=True): 
+    with StepContext(name='Setup MQTT', catch=(ConnectionError, TimeoutError)): 
         if app.mqtt:
             app.setup_mqtt(
                 topic="test/topic", 
@@ -107,7 +107,7 @@ def main():
         else:
             logger.debug("[MQTT] interface is disabled") 
 
-    with StepContext(name='Run_App', catch=(RuntimeError,), verbose=True): 
+    with StepContext(name='Run_App', catch=(RuntimeError,)): 
     # Simulate publishing messages in intervals
          app.run_app()
          app.close_app()

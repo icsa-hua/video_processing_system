@@ -70,7 +70,7 @@ class TensorRTYOLO:
         self.__strip_weights = strip_weights
         self.__TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
         self.calibrator = YOLOInt8Calibrator(calibration_data) if int8 else None
-
+        self.__synchronization_flag =  False
         # Runtime Phase: As per https://docs.nvidia.com/deeplearning/tensorrt-rtx/latest/inference-library/python-api-docs.html#create-network-python
 
         # Load TensorRT engine
@@ -324,7 +324,8 @@ class TensorRTYOLO:
 
         shape = tuple(int(x) for x in torch_in.shape) 
         
-        if (self.__in_dev is None) or (tuple(self.__in_dev.shape) != shape): 
+        if (self.__in_dev is None) or (tuple(self.__in_dev.shape) != shape) or (self.__synchronization_flag==False): 
+            self.__synchronization_flag = True
             self.__set_stream(shape) 
 
         if torch_in.device != self.__device: 
@@ -423,6 +424,8 @@ class TensorRTYOLO:
         return outputs
 
 
+
+
     def detect_objects(self, im, debug=False):
 
         if isinstance(im, torch.Tensor):
@@ -465,6 +468,8 @@ class TensorRTYOLO:
 
         for _ in range(warmup_sessions):
             self.inference(dummy_batch, return_numpy=False)
+
+
 
 
     def process_output(self, output, debug=False):

@@ -86,8 +86,7 @@ class TensorRTRTXStreamer(OptimizedStreamer):
         device = select_device(self.args.device, verbose=self.args.verbose) 
 
         model_path = 'obs_system/compressed/yolov8s_original.onnx'
-        pdb.set_trace()
-        self.model = TensorRTYOLO(engine_path=model_path, fp16=True)
+        self.model = TensorRTYOLO(engine_path=model_path, fp16=False)
 
         [self.height, self.width] = self.model.input_height, self.model.input_width 
 
@@ -116,7 +115,6 @@ class TensorRTRTXStreamer(OptimizedStreamer):
         start_time = kwargs["start_time"]
 
         if self.args.bench :
-
              self.mp = ModelPerf(
                 class_ids=[i for i, _ in enumerate(self.converter.class_names)], 
                 iou_thresholds=np.arange(0.50, 0.96, 0.05), 

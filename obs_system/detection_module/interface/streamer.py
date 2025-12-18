@@ -11,6 +11,7 @@ import logging
 import platform
 import threading 
 import numpy as np 
+import queue 
 
 from pathlib import Path
 from io import StringIO
@@ -48,6 +49,10 @@ class Streamer(ABC):
         self.save_dir = get_save_dir(self.args)
         self.docker_flag = False 
         self.done_warmup = False
+        
+        self.save_queue = queue.Queue(maxsize=10)
+        self.save_thread = threading.Thread(target=self._save_worker, daemon=True)
+        self.save_thread.start()
         
         self.seen = 0 
         self.speed = {} 
@@ -240,6 +245,7 @@ class Streamer(ABC):
         try:
             string += f"{result.verbose()}{result.speed['inference']:.1f}ms" 
         except Exception as e: 
+            Streamer.logger.exception(f"Error getting inference speed: {e}")
             pdb.set_trace()
         
         try:  
@@ -276,55 +282,69 @@ class Streamer(ABC):
     def save_predicted_images(self, save_path:str, frame:int) ->None: 
         im = self.plotted_img 
         
-        if im is None : return 
+        if im is not None: 
+            self.save_queue.put((save_path, frame, im.copy()))
 
-        out_path  = Path(save_path).expanduser() 
-        
-        if out_path.name == "": 
 
+    def _save_worker(self):
+        while True:
+            task = self.save_queue.get()
+            if task is None:
+                break
+            self._do_save(task)
+
+
+    def _do_save(self, task):
+        save_path, frame, im = task
+        if im is None:
+            return
+
+        out_path = Path(save_path).expanduser()
+
+        if out_path.name == "":
             Streamer.logger.error(f"Save predicted images: empty save path {save_path}")
-            return 
+            return
 
-        ensure_dir(out_path.parent) 
+        ensure_dir(out_path.parent)
 
-        if im.ndim==3 and im.shape[2]==3: 
+        if im.ndim == 3 and im.shape[2] == 3:
             bgr = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
-        else: 
-            bgr = im 
-        
+        else:
+            bgr = im
+
         is_stream_or_video = getattr(self.dataset, "mode", None) in {"stream", "video"}
 
-        if is_stream_or_video: 
-            fps = self.dataset.fps if self.dataset.mode == "video" else 30 
-            h, w = bgr.shape[:2] 
+        if is_stream_or_video:
+            fps = self.dataset.fps if self.dataset.mode == "video" else 30
+            h, w = bgr.shape[:2]
 
-            if h <= 0 or w <= 0: 
+            if h <= 0 or w <= 0:
                 Streamer.logger.error("Invalid frame size")
-                return 
+                return
 
             vid_key = str(out_path.resolve())
 
-            vw = self.vid_writer.get(vid_key) 
+            vw = self.vid_writer.get(vid_key)
 
-            if vw is None: 
-                vw, opened_path, fourcc_used = open_writer(out_path, fps=fps, size_hw=(h,w))
+            if vw is None:
+                vw, opened_path, fourcc_used = open_writer(out_path, fps=fps, size_hw=(h, w))
 
-                if vw is None: 
+                if vw is None:
                     Streamer.logger.error("VideoWriter failed to open for %s (fps=%s, size=%sx%s). "
                              "Check codec support in your OpenCV build.",
                              out_path, fps, w, h)
                     return
 
-                self.vid_writer[vid_key] = vw 
+                self.vid_writer[vid_key] = vw
 
                 Streamer.logger.info("Opened VideoWriter: %s (fourcc=%s)", opened_path, fourcc_used)
 
-                if self.args.save_frames: 
+                if self.args.save_frames:
                     frames_dir = opened_path.with_suffix("").parent / (opened_path.stem + "_frames")
                     ensure_dir(frames_dir)
                     self._frames_dir_cache = getattr(self, "_frames_dir_cache", {})
                     self._frames_dir_cache[vid_key] = frames_dir
-            
+
             self.vid_writer[vid_key].write(bgr)
 
             if getattr(self.args, "save_frames", False):

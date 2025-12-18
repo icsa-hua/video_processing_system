@@ -43,6 +43,7 @@ class OptimizedStreamer(Streamer):
         self.args.stream_buffer = True 
         self.logic_module = logic_module 
         self.lanes_final = None
+        
         try: 
             self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if os.path.isfile(source) else source, 
                 model=model, 
@@ -121,8 +122,7 @@ class OptimizedStreamer(Streamer):
             self.dataset.bs = BATCH_SIZE
 
             tile_flag = True if (self.orig_width // TILE_SIZE) > TILE_THR or (self.orig_height //TILE_SIZE) >= TILE_THR else False  
-            Streamer.logger.info(f"Tile Flag : {tile_flag} | Orig WxH: {self.orig_width}x{self.orig_height} | Tile Size: {TILE_SIZE} | Tile THR: {TILE_THR}")
-            pdb.set_trace()
+
             if tile_flag : 
                 Streamer.logger.info("Run Inference with Tiles")
                 return self._stream_inference_impl_tiles(
