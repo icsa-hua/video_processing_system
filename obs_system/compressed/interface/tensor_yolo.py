@@ -86,8 +86,8 @@ class TensorRTYOLO:
             # self.__set_stream(runtime_input_shape=(32,3,640,640))
         
 
-    def __call__(self, image, debug=False):
-        return self.detect_objects(image, debug=debug)
+    def __call__(self, image, orig_imgs=None, debug=False):
+        return self.detect_objects(image, orig_imgs, debug=debug)
 
 
     def __stream_handler(self): 
@@ -367,13 +367,18 @@ class TensorRTYOLO:
             return outputs_gpu, event
 
 
-    def detect_objects(self, im, debug=False):
+    def detect_objects(self, im, orig_imgs=None, debug=False):
 
-        original_batch_size = im.shape[0]
+        if orig_imgs is not None:
+            self.orig_shapes = [img.shape[:2] for img in orig_imgs]
+        else:
+            self.orig_shapes = None
+
+        original_batch_size = im.shape[0] if isinstance(im, torch.Tensor) else 1
 
         if isinstance(im, torch.Tensor):
 
-            self.img_height, self.img_width = im.shape[2], im.shape[3]
+            self.img_height, self.img_width = self.orig_shapes[0] if self.orig_shapes else im.shape[2], im.shape[3]
             if original_batch_size < 16:
                 pad_size = 16 - original_batch_size
                 pad = torch.zeros((pad_size, *im.shape[1:]), dtype=im.dtype, device=im.device)
@@ -425,16 +430,13 @@ class TensorRTYOLO:
 
 
     def process_output(self, output, debug=False):
-        outputs = [o.cpu() if isinstance(o, torch.Tensor) else torch.from_numpy(o).cpu() for o in output] 
+        outputs = [o if isinstance(o, torch.Tensor) else torch.from_numpy(o) for o in output] 
         all_boxes, all_scores, all_class_ids = [], [], []
 
         if len(outputs) == 1: 
-
             #Raw Head
             batch_images = outputs[0] 
-
-            #No need for contiguous tensor here. Slicing doesn't require it.
-            pred = batch_images.permute(0,2,1)
+            pred = torch.transpose(batch_images, 1,2)  
 
             if pred.dim() != 3: 
                 if debug: 
@@ -444,39 +446,96 @@ class TensorRTYOLO:
             if pred.shape[1] in (84,85) and pred.shape[2] not in (84,85):
                 preds = pred.permute(0,2,1).contiguous()
                 CLS = preds.shape[1] 
-
             elif pred.shape[2] in (84,85): 
                 CLS = pred.shape[2] 
-
             else: 
                 if debug: logger.debug("Cannot Identify channel axis") 
                 return  [torch.empty((0,4))], [torch.empty(0)], [torch.empty(0, dtype=torch.int32)]
 
             if CLS == 85: 
                 objs = pred[..., 4:5] 
+                # obj = torch.sigmoid(objs_logits)
             else: 
                 objs = 1
-                
-            scores_all = pred[:,:,4:].max(dim=-1).values *  (objs if np.isscalar(objs)==False else 1.0)  # [B, HW]
 
-            for b in range(batch_images.shape[0]): 
-                scores = scores_all[b]
+            for b, predictions in enumerate(batch_images): 
+
+                predictions = predictions.T
+                scores = predictions[:,4:].max(dim=-1).values * (objs if np.isscalar(objs)==False else 1.0)
+
                 conf_mask = scores > self.conf_threshold
-                predictions = batch_images[b].permute(1, 0)
                 if not torch.any(conf_mask): 
-                    all_boxes.append(torch.empty((0, 4), dtype=torch.float32))
-                    all_scores.append(torch.empty((0,), dtype=torch.float32))
+                    all_boxes.append(torch.empty((0, 4), dtype=torch.float16))
+                    all_scores.append(torch.empty((0,), dtype=torch.float16))
                     all_class_ids.append(torch.empty((0,), dtype=torch.int32))
                     continue 
 
-                predictions = predictions[conf_mask,:] 
+                predictions = predictions[conf_mask, :] 
                 sel_scores = scores[conf_mask] 
-                sel_cls = torch.argmax(predictions[:,4:], dim=1)  
+                sel_cls = torch.argmax(predictions[:,4:],dim=1)  
                 boxes = self.extract_boxes(predictions) 
-
                 all_boxes.append(boxes)
                 all_scores.append(sel_scores)
                 all_class_ids.append(sel_cls)
+                
+                # keep = self.multi_class_nms(boxes, sel_scores, sel_cls, self.iou_threshold) 
+                
+                # if keep is not None and len(keep) > 0:
+                #     all_boxes.append(boxes[keep])
+                #     all_scores.append(sel_scores[keep])
+                #     all_class_ids.append(sel_cls[keep])
+                    
+                # else:
+                #     all_boxes.append(torch.empty((0, 4), dtype=torch.float16))
+                #     all_scores.append(torch.empty((0,), dtype=torch.float16))
+                #     all_class_ids.append(torch.empty((0,), dtype=torch.int32))
+            # #Raw Head
+            # batch_images = outputs[0] 
+
+            # #No need for contiguous tensor here. Slicing doesn't require it.
+            # pred = batch_images.permute(0,2,1)
+
+            # if pred.dim() != 3: 
+            #     if debug: 
+            #         logger.debug(f"Unexpected raw head dim: {pred.shape}") 
+            #     return [torch.empty((0,4))], [torch.empty(0)], [torch.empty(0, dtype=torch.int32)]
+
+            # if pred.shape[1] in (84,85) and pred.shape[2] not in (84,85):
+            #     preds = pred.permute(0,2,1).contiguous()
+            #     CLS = preds.shape[1] 
+
+            # elif pred.shape[2] in (84,85): 
+            #     CLS = pred.shape[2] 
+
+            # else: 
+            #     if debug: logger.debug("Cannot Identify channel axis") 
+            #     return  [torch.empty((0,4))], [torch.empty(0)], [torch.empty(0, dtype=torch.int32)]
+
+            # if CLS == 85: 
+            #     objs = pred[..., 4:5] 
+            # else: 
+            #     objs = 1
+                
+            # scores_all = pred[:,:,4:].max(dim=-1).values *  (objs if np.isscalar(objs)==False else 1.0)  # [B, HW]
+
+            # for b in range(batch_images.shape[0]): 
+            #     scores = scores_all[b]
+            #     conf_mask = scores > self.conf_threshold
+            #     predictions = batch_images[b].permute(1, 0)
+            #     if not torch.any(conf_mask): 
+            #         all_boxes.append(torch.empty((0, 4), dtype=torch.float32))
+            #         all_scores.append(torch.empty((0,), dtype=torch.float32))
+            #         all_class_ids.append(torch.empty((0,), dtype=torch.int32))
+            #         continue 
+
+            #     predictions = predictions[conf_mask,:] 
+            #     sel_scores = scores[conf_mask] 
+            #     sel_cls = torch.argmax(predictions[:,4:], dim=1)  
+            #     boxes = self.extract_boxes(predictions) 
+
+            #     all_boxes.append(boxes)
+            #     all_scores.append(sel_scores)
+            #     all_class_ids.append(sel_cls)
 
 
                 """ Check performance with this Additional NMS
@@ -542,24 +601,44 @@ class TensorRTYOLO:
 
 
     def rescale_boxes(self, boxes):
-        if isinstance(boxes, torch.Tensor):
-            input_shape = torch.tensor(
-                [self.input_width, self.input_height, self.input_width, self.input_height], 
-                device=boxes.device, dtype=boxes.dtype
-            )
-            boxes = torch.div(boxes, input_shape)
-            boxes *= torch.tensor(
-                [self.img_width, self.img_height, self.img_width, self.img_height], 
-                device=boxes.device, dtype=boxes.dtype
-            )
+        if self.orig_shapes:
+            orig_h, orig_w = self.orig_shapes[0]
+            input_h, input_w = self.input_height, self.input_width  # 640, 640
+            scale = min(input_w / orig_w, input_h / orig_h)
+            pad_w = (input_w - orig_w * scale) / 2
+            pad_h = (input_h - orig_h * scale) / 2
+            if isinstance(boxes, torch.Tensor):
+                boxes = boxes.clone()
+                boxes[:, 0] = (boxes[:, 0] - pad_w) / scale
+                boxes[:, 1] = (boxes[:, 1] - pad_h) / scale
+                boxes[:, 2] = boxes[:, 2] / scale
+                boxes[:, 3] = boxes[:, 3] / scale
+            else:
+                boxes = boxes.copy()
+                boxes[:, 0] = (boxes[:, 0] - pad_w) / scale
+                boxes[:, 1] = (boxes[:, 1] - pad_h) / scale
+                boxes[:, 2] = boxes[:, 2] / scale
+                boxes[:, 3] = boxes[:, 3] / scale
         else:
-            input_shape = np.array(
-                [self.input_width, self.input_height, self.input_width, self.input_height]
-            )
-            boxes = np.divide(boxes, input_shape, dtype=np.float16)
-            boxes *= np.array(
-                [self.img_width, self.img_height, self.img_width, self.img_height]
-            )
+            # Fallback to simple scaling (for cases without orig_shapes)
+            if isinstance(boxes, torch.Tensor):
+                input_shape = torch.tensor(
+                    [self.input_width, self.input_height, self.input_width, self.input_height], 
+                    device=boxes.device, dtype=boxes.dtype
+                )
+                boxes = torch.div(boxes, input_shape)
+                boxes *= torch.tensor(
+                    [self.img_width, self.img_height, self.img_width, self.img_height], 
+                    device=boxes.device, dtype=boxes.dtype
+                )
+            else:
+                input_shape = np.array(
+                    [self.input_width, self.input_height, self.input_width, self.input_height]
+                )
+                boxes = np.divide(boxes, input_shape, dtype=np.float32)
+                boxes *= np.array(
+                    [self.img_width, self.img_height, self.img_width, self.img_height]
+                )
         return boxes
 
      

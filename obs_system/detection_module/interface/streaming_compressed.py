@@ -4,7 +4,7 @@ from obs_system.compressed.interface.tensor_yolo import TensorRTYOLO
 from obs_system.detection_module.interface.streamer import Streamer
 from obs_system.utils.benchmarking.metrics.model_performance import ModelPerf
 from obs_system.utils.global_config import BATCH_SIZE
-from obs_system.utils.appraisal import StepContext
+from obs_system.utils.appraisal import StepContext, frame_list
 from obs_system.utils.global_config import *
 from obs_system.utils.common import *
 from obs_system.utils.tiles import * 
@@ -100,6 +100,7 @@ class OptimizedStreamer(Streamer):
         with self._lock: 
             with StepContext(name="Set up Dataloader Process", catch=(RuntimeError, ), verbose=True):
                 self.setup_source(source if source is not None else self.args.source)
+                self.dataset.bs = BATCH_SIZE
 
             self.seen = 0 
             self.results = [] 
@@ -108,17 +109,16 @@ class OptimizedStreamer(Streamer):
 
             profilers = (
                 ops.Profile(device=self.device), 
+                ops.Profile(device=self.device),
                 ops.Profile(device=self.device)
             )
 
             activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
             start_time = time.perf_counter() 
 
-            for batch in self.dataset: 
-                _, im0s, _ = batch 
-                self.orig_height, self.orig_width = im0s[0].shape[:2] 
-
-            self.dataset.bs = BATCH_SIZE
+            first_batch = next(iter(self.dataset)) #Keeps the original pointer without moving it "peeking" to the first frame 
+            _, im0s, _ = first_batch
+            self.orig_height, self.orig_width = im0s[0].shape[:2] 
 
             tile_flag = True if (self.orig_width // TILE_SIZE) > TILE_THR or (self.orig_height //TILE_SIZE) >= TILE_THR else False  
 
@@ -173,7 +173,6 @@ class OptimizedStreamer(Streamer):
                 self.done_warmup = True
 
         use_roi = True if self.logic_module is not None and self.logic_module["ROI"] is not None else False 
-        first_batch = True
 
         # Asynchronous batch loading to avoid stalls
         batch_queue = queue.Queue(maxsize=2)
@@ -220,7 +219,8 @@ class OptimizedStreamer(Streamer):
                     im0s = self.logic_module["FEP"]._defish(im0s)  
 
             allowed_filter = [i for i, val in enumerate(mfgs) if val] 
-            if len(allowed_filter) == 0 : 
+            if len(allowed_filter) == 0 :
+                print("All frames filtered by motion gating") 
                 continue
 
             for i, al in enumerate(allowed_filter): 
@@ -231,32 +231,24 @@ class OptimizedStreamer(Streamer):
                 images = self.preprocess(im0s) 
 
             with profilers[1]: 
-                if first_batch: 
+                if self.seen == 0 and self.args.verbose: 
                     with profile(activities=activities) as prof:
-                        (i_boxes, i_scores, i_classes), event = self.model(images, debug=self.args.verbose)
+                        (i_boxes, i_scores, i_classes), event = self.model(images, orig_imgs=im0s, debug=self.args.verbose)
                     prof.export_chrome_trace(f"trace_{model}.json")
-                    first_batch = False
                 else: 
-                    (i_boxes, i_scores, i_classes), event = self.model(images, debug=self.args.verbose)
+                    (i_boxes, i_scores, i_classes), event = self.model(images, orig_imgs=im0s, debug=self.args.verbose)
 
             if model=='engine':
                 # End event and synchronize the engine after we don't need the tensors anymore 
                 # Transfer them into the CPU stream 
                 torch.cuda.current_stream().wait_event(event)
-                
 
-            self.run_callbacks("on_predict_postprocess_end")
             for boxes, scores, cls_, orig_img in zip(i_boxes, i_scores, i_classes, im0s): 
 
                 if self.seen >= len(self.batch[1]): 
-                    self.seen = 0
-                    if self.results is not None: 
-                        self.results.clear()
+                        self.seen = 0
 
                 if boxes is None or len(boxes) == 0: 
-                    self.seen +=1
-                    if self.results is not None: 
-                        self.results.append(_empty_results(orig_img))
                     continue
 
                 if isinstance(boxes, np.ndarray): 
@@ -314,7 +306,6 @@ class OptimizedStreamer(Streamer):
 
                 if self.results is not None:
                     self.results.append(results) 
-                    
 
                 if self.mp is not None and self.args.bench: 
                     gt_cls, gt_bbs = self.__gt_labels.pop(self.seen, (np.zeros((0,), np.int64),np.zeros((0,4), np.float32)))
@@ -325,31 +316,53 @@ class OptimizedStreamer(Streamer):
                         gt_boxes_xyxy=gt_bbs.astype(np.float32), 
                         gt_classes = gt_cls.astype(np.int64)
                     ) 
+                
+                yield results
 
                 if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
-                    if mfgs[self.seen]: 
-                        s[self.seen] += self.write_results(self.seen, Path(paths[self.seen]), images, im0s, s)
-                    
-                        if producer_flag is not None: 
-                            producer_flag.value = True
+                    filename=Path(self.batch[0][self.seen])
+                    if not filename: 
+                            Streamer.logger.warning("[WARNING]: filename to save image is invalid")
+                        
+                    self.batch[2][self.seen] += self.write_results(
+                            i = self.seen, 
+                            p = filename,  
+                            im= images,
+                            original_images=self.batch[1], 
+                            s = self.batch[2]
+                        )
 
-                        if self.proc_image is not None and queue_list is not None:
-                            queue_list.put(self.proc_image)
+                if producer_flag is not None: 
+                    producer_flag.value = True
 
-                        elif self.proc_image is None and queue_list is not None: 
-                            queue_list.put(None)    
+                if self.proc_image is not None and queue_list is not None:
+                    queue_list.put(self.proc_image)
 
-                        self.capture_object_boxes(orig_img, results, cropped_dirname=self.cropped_image_dirname)
+                elif self.proc_image is None and queue_list is not None: 
+                    queue_list.put(None)    
 
+                with StepContext(name="Crop Objects to Image", catch=(RuntimeError,), verbose=self.args.verbose):
+                        try: 
+                            self.capture_object_boxes(
+                                    image=self.batch[1][self.seen],
+                                    results=self.results[self.seen],
+                                    cropped_dirname=self.cropped_image_dirname,
+                                    save=self.args.save
+                            )
+                        except IndexError as ie: 
+                            Streamer.logger.exception(ie)
+                
                 self.seen += 1 
+                if self.seen >= len(self.batch[1]): 
+                    self.seen = 0
+                    self.results.clear()
+
                 if self.seen == len(self.batch)-1 and self.args.verbose: 
                     elapsed_time=time.perf_counter() - start_time 
                     Streamer.logger.info(f"Time from capturing batch to meaningful information: {elapsed_time:.2f}")
-           
-
+            
+            self.run_callbacks("on_predict_postprocess_end")
             self.run_callbacks("on_predict_batch_end")
-            if self.results is not None: 
-                yield from self.results
 
         producer_thread.join()
 

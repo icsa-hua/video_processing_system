@@ -174,7 +174,9 @@ class TensorRTRTXStreamer(OptimizedStreamer):
             with profilers[2]: 
                 pass 
 
-            torch.cuda.current_stream().wait_event(event)
+            if model=='engine':
+                torch.cuda.current_stream().wait_event(event)
+            
             with StepContext(name="Post Process", catch=(Exception, RuntimeError), verbose=self.args.verbose): 
                 frames_out = {} 
                 for det, score, cls_, meta in zip(i_boxes, i_scores, i_classes, metas0[:n0]): 
@@ -283,8 +285,9 @@ class TensorRTRTXStreamer(OptimizedStreamer):
                             f_id=f_id, 
                             class_names=self.converter.class_names
                         )
-                    
-                    self.results.append(results)                                             
+                    if self.results is not None: 
+                        self.results.append(results)     
+                                                                
                     self.frame_images.pop(f_id,None)
 
                     if self.mp is not None and self.args.bench: 
@@ -351,7 +354,10 @@ class TensorRTRTXStreamer(OptimizedStreamer):
             self.run_callbacks("on_predict_postprocess_end")
             self.run_callbacks("on_predict_batch_end")
             frame_list.append((time.perf_counter() - t0) * 1000)
-                    
+
+        self.save_queue.put(None)
+        self.save_thread.join() 
+
         if self.args.bench and self.mp is not None: 
             self.mp.finalize() 
             logger.info(self.mp.results())

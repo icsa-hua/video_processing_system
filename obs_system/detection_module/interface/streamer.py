@@ -11,6 +11,7 @@ import logging
 import platform
 import threading 
 import numpy as np 
+import time 
 import queue 
 
 from pathlib import Path
@@ -239,6 +240,9 @@ class Streamer(ABC):
         
         if self.mqtt_interface is not None:
             self.mqtt_interface.publish(self.mqtt_interface.topic, str(result.speed))
+
+        # Add delay to have stable fps readings 
+        time.sleep(0.01) 
 
         result.save_dir = self.save_dir.__str__() 
         
