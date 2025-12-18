@@ -181,7 +181,7 @@ class Streamer(ABC):
 
     @abstractmethod 
     @smart_inference_mode()
-    def stream_inference(self, **kwargs)->Generator[Optional[Any], None, None]: 
+    def stream_inference(self, source:str, model:str, producer_flag:Any, queue_list:Any, *args, **kwargs)->Generator[Optional[Any], None, None]: 
         raise NotImplemented
 
 
@@ -268,7 +268,7 @@ class Streamer(ABC):
             result.save_txt(f"{self.txt_path}.txt", save_conf=self.args.save_conf)
         
         if self.args.save_crop:
-            result.save_crop(save_dir=self.save_dir / "crops", file_name=self.txt_path.stem)
+            result.save_crop(save_dir=self.save_dir / "crops", file_name=self.txt_path.stem if self.txt_path is not None else Path("unknown"))
         
         if self.args.show:
             self.show(p)
@@ -339,7 +339,7 @@ class Streamer(ABC):
 
                 Streamer.logger.info("Opened VideoWriter: %s (fourcc=%s)", opened_path, fourcc_used)
 
-                if self.args.save_frames:
+                if self.args.save_frames and opened_path is not None:
                     frames_dir = opened_path.with_suffix("").parent / (opened_path.stem + "_frames")
                     ensure_dir(frames_dir)
                     self._frames_dir_cache = getattr(self, "_frames_dir_cache", {})

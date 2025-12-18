@@ -15,7 +15,7 @@ import torch
 import cv2
 import numpy as np 
 
-from typing import Any
+from typing import Any. Generator, Optional
 from memory_profiler import profile as mem_profile
 from pathlib import Path 
 from ultralytics import YOLO
@@ -106,7 +106,7 @@ class TensorRTRTXStreamer(OptimizedStreamer):
 
 
     @mem_profile
-    def _stream_inference_impl_tiles(self, **kwargs): 
+    def _stream_inference_impl_tiles(self, **kwargs)->Generator[Optional[Any], None, None]: 
         model = kwargs["model"] 
         producer_flag  = kwargs["producer_flag"] 
         queue_list = kwargs["queue_list"]

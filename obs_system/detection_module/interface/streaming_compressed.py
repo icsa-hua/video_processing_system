@@ -19,7 +19,7 @@ import numpy as np
 import queue
 import threading
 
-from typing import Union, List, Any
+from typing import Union, List, Any, Generator, Optional
 from pathlib import Path 
 from memory_profiler import profile as mem_profile
 from torch.profiler import profile
@@ -91,7 +91,7 @@ class OptimizedStreamer(Streamer):
 
 
     @smart_inference_mode()
-    def stream_inference(self, source:str, model:str, producer_flag:Any, queue_list:Any, *args, **kwargs):
+    def stream_inference(self, source:str, model:str, producer_flag:Any, queue_list:Any, *args, **kwargs)->Generator[Optional[Any], None, None]:
 
         self.source = source 
 
@@ -369,14 +369,13 @@ class OptimizedStreamer(Streamer):
         if self.args.save or self.args.save_txt or self.args.save_crop:
             nl = len(list(self.save_dir.glob("labels/*.txt")))  # number of labels
             s = f"\n{nl} label{'s' * (nl > 1)} saved to {self.save_dir / 'labels'}" if self.args.save_txt else ""
-            Streamer.logger.info(f"Results saved to {colorstr('bold', self.save_dir)}{s}")
         
         self.run_callbacks("on_predict_end")
 
 
     @abstractmethod 
     @mem_profile
-    def _stream_inference_impl_tiles(**kwargs): 
+    def _stream_inference_impl_tiles(self, **kwargs)->Generator[Optional[Any], None, None]: 
         pass
 
 
