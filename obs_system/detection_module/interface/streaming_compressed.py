@@ -82,8 +82,8 @@ class OptimizedStreamer(Streamer):
         return super().preprocess(im)
 
     
-    def postprocess(self, preds:Any, img:Any, orig_imgs:Any)->Any : 
-        return super().postprocess(preds, img, orig_imgs) 
+    def postprocess(self, preds:Any)->Any : 
+        return super().postprocess(preds) 
 
 
     def setup_model(self, model:str, opt:str)->None:
@@ -103,7 +103,7 @@ class OptimizedStreamer(Streamer):
                 self.dataset.bs = BATCH_SIZE
 
             self.seen = 0 
-            self.results = [] 
+            results = [] 
             self.batch = None 
             self.mp = None 
                        
@@ -127,6 +127,7 @@ class OptimizedStreamer(Streamer):
             if not os.path.exists(empty_image):
                 raise FileNotFoundError(f"Empty image path for background subtraction does not exist: {empty_image}")
 
+            empty_image = cv2.imread(empty_image)
             if self.use_roi :
                 with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
                     
@@ -137,7 +138,6 @@ class OptimizedStreamer(Streamer):
                         self.logic_module['ROI']._show_regions(cropped_frame.copy())
                     
                     self.orig_height, self.orig_width = cropped_frame.shape[:2]
-                empty_image = cv2.imread(empty_image)
                 self.logic_module['SUBTRACTOR'].warm_up(empty_image, trials=TRIALS)
             
             else: 
@@ -177,6 +177,9 @@ class OptimizedStreamer(Streamer):
         activities=kwargs["activities"]
         start_time = kwargs["start_time"]
         
+
+        results = [] 
+
         if self.args.bench: 
             self.mp = ModelPerf(
                 class_ids=[i for i, _ in enumerate(self.converter.class_names)], 
@@ -217,6 +220,7 @@ class OptimizedStreamer(Streamer):
             self.run_callbacks("on_predict_batch_start")
 
             paths, im0s, s = self.batch
+            frame_ids = get_frame_ids(labels=s)
 
             #use_roi = True if self.args.roi and self.logic_module["ROI"] is not None else False 
             if self.use_roi :
@@ -235,20 +239,20 @@ class OptimizedStreamer(Streamer):
                     Streamer.logger.debug("FEP enabled")
                     im0s = self.logic_module["FEP"]._defish(im0s)  
 
-
             # Speeds up the process when no motion is detected in the incoming batch. 
             if not any(mfgs):
-                yield return_no_motion_frames(
+                preds = return_no_motion_frames(
                     im0s=im0s,
                     batch_size=BATCH_SIZE 
                 )
+                yield preds 
 
-                # here normally the MQTT should update with no detections the publisher. 
+                self.__publish_mqtt_message_no_detection(preds=preds, frame_index=frame_ids)
+                continue # to the next batch 
                 
-
-            for i, keep in enumerate(mfgs):
-                if not keep:
-                    print("Empty movement detected, skipping frame.")
+                
+            for i, keep_frame in enumerate(mfgs):
+                if not keep_frame:
                     im0s[i] = empty_image(im0s[i])
 
             with profilers[0]: 
@@ -271,10 +275,12 @@ class OptimizedStreamer(Streamer):
 
                 self.seen = bni
 
+                # No result returned from the object detection model
                 if boxes is None or len(boxes) == 0: 
                     inf_results = _empty_results(orig_image=orig_img)
-                    if self.results is not None:
-                        self.results.append(inf_results)
+                    if results is not None:
+                        results.append(inf_results)
+                        yield inf_results
                     continue
 
                 if isinstance(boxes, np.ndarray): 
@@ -307,31 +313,33 @@ class OptimizedStreamer(Streamer):
                     )
                 )
 
-                results = Results(
+                preds = Results(
                     orig_img=orig_img, 
-                    path=f"image_{self.seen}.jpg", 
+                    path=f"image_{frame_ids[self.seen]}.jpg", 
                     names=self.converter.class_names, 
                     boxes=inf_results.T, 
                     speed={}, 
                 )
 
                 if self.tracker_model is not None:
-                    results = self.tracker_model.detect(
-                        predictions=results, 
+                    preds = self.tracker_model.detect(
+                        predictions=preds, 
                         save=False, 
                         orig_frame=orig_img, 
                         f_id=self.seen, 
                         class_names=self.converter.class_names
                     )
                 
-                results.speed = {
+                with profilers[2]:
+                    preds = self.postprocess(preds)
+
+                preds.speed = {
                     "preprocess": profilers[0].dt * 1e3/len(im0s),
                     "inference": profilers[1].dt * 1e3/len(im0s),
-                    "postprocess": (time.perf_counter() - start_time) * 1e3/len(im0s)
+                    "postprocess":profilers[2].dt * 1e3/len(im0s)
                 }
 
-                if self.results is not None:
-                    self.results.append(results) 
+                results.append(preds) 
 
                 if self.mp is not None and self.args.bench: 
                     gt_cls, gt_bbs = self.__gt_labels.pop(self.seen, (np.zeros((0,), np.int64),np.zeros((0,4), np.float32)))
@@ -351,10 +359,10 @@ class OptimizedStreamer(Streamer):
                             Streamer.logger.warning("[WARNING]: filename to save image is invalid")
 
                     self.batch[2][self.seen] += self.write_results(
+                            preds=results[self.seen], 
                             i = self.seen, 
                             p = filename,  
-                            im= images,
-                            original_images=self.batch[1], 
+                            im= im0s,
                             s = self.batch[2]
                         )
 
@@ -363,28 +371,18 @@ class OptimizedStreamer(Streamer):
 
                 if self.proc_image is not None and queue_list is not None:
                     queue_list.put(self.proc_image)
-
                 elif self.proc_image is None and queue_list is not None: 
                     queue_list.put(None)    
-
-                with StepContext(name="Crop Objects to Image", catch=(RuntimeError,), verbose=self.args.verbose):
-                        try: 
-                            self.capture_object_boxes(
-                                    image=self.batch[1][self.seen],
-                                    results=self.results[self.seen],
-                                    cropped_dirname=self.cropped_image_dirname,
-                                    save=self.args.save
-                            )
-                        except IndexError as ie: 
-                            Streamer.logger.exception(ie)
                 
                 if self.seen >= len(im0s): 
-                    self.results.clear()
+                    results.clear()
 
                 if self.seen == len(im0s)-1 and self.args.verbose: 
                     elapsed_time=time.perf_counter() - start_time 
                     Streamer.logger.info(f"Time from capturing batch to meaningful information: {elapsed_time:.2f}")
             
+                self.__publish_mqtt_message(preds=preds, frame_index=self.seen) 
+
             self.run_callbacks("on_predict_postprocess_end")
             self.run_callbacks("on_predict_batch_end")
 

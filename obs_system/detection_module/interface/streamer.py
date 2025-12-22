@@ -11,7 +11,7 @@ import logging
 import platform
 import threading 
 import numpy as np 
-import time 
+import time, json
 import queue 
 
 from pathlib import Path
@@ -127,8 +127,50 @@ class Streamer(ABC):
 
 
     @abstractmethod
-    def postprocess(self, preds:Any, img:Any, orig_imgs:Any)->Any : 
-        """Post-processes predictions for an image and returns them."""
+    def postprocess(self, preds:Any, orig_image:Any)->Any : 
+        
+        if not isinstance(preds, Results): 
+            raise ValueError("Not using ultralytics.Results class in postprocess of Streamer.") 
+        
+        if preds.results is not None and preds.boxes.xyxy.numel() == 0: 
+            updated_labels, orig_classes_updated = classification_obstacles(
+                boxes=preds.boxes, 
+                classes=preds.boxes.cls, 
+                lanes_final=self.lanes_final, 
+                orig_shape=self.imgsz, 
+                orig_classes=self.converter.class_names
+            )
+
+            if len(self.converter.class_names) != len(orig_classes_updated) and orig_classes_updated is not None: 
+                self.converter.class_names = orig_classes_updated
+
+                preds.names.clear() 
+                for i, name in enumerate(self.converter.class_names): 
+                    preds.names[i] = name
+
+            if preds.boxes.cls.numel() == updated_labels.numel(): 
+                preds.boxes.cls[:] = updated_labels
+
+        preds.save_dir = self.save_dir.__str__() 
+
+        try:  
+            self.points.clear()
+        except: 
+            pass
+
+        self.points = self.tracker_model.update_tracker_history(preds, logic_module=self.logic_module)
+        
+        try: 
+            self.capture_object_boxes(
+                    image=orig_image,
+                    results=preds,
+                    cropped_dirname=self.cropped_image_dirname,
+                    save=self.args.save
+            )
+        except IndexError as ie: 
+            Streamer.logger.exception(ie)
+
+
         return preds
 
 
@@ -186,18 +228,18 @@ class Streamer(ABC):
         raise NotImplemented
 
 
-    def write_results(self, i: Any, p: Any, im:Any, original_images:Any, s:Any)->str: 
+    def write_results(self, preds:Any, i: Any, p: Any, im:Any, s:Any)->str: 
         """Write inference results to a file or directory."""
-        
-        if self.results is None: 
-            raise RuntimeError("No results were captured.., but tried to save them")
 
         string = "" 
 
         # Ensure batch dimension
+        if isinstance(im, list): 
+            im = np.array(im) 
+            
         if len(im.shape) == 3:
             im = im[None]  
-        
+
         # Determine frame index
         if self.source_type.stream or self.source_type.from_img or self.source_type.tensor:  # batch_size >= 1
             string += f"{i}: "
@@ -209,99 +251,19 @@ class Streamer(ABC):
         self.txt_path = self.save_dir / "labels" / (
             p.stem + ("" if self.dataset.mode == "image" else f"_{frame}")
         )
+
         string += "%gx%g " % im.shape[2:]
 
-        #Get the batch size pictures 
-        result = self.results[i]  
+        self.__optional_save_or_show(preds, p)
 
-        if result.boxes is None or  result.boxes.xyxy.numel() == 0:
-            # still plot/save frame if needed
-            if self.mqtt_interface is not None:
-                self.mqtt_interface.publish(self.mqtt_interface.topic, str(result.speed))
-
-            if self.args.save or self.args.show:
-                self.plotted_img = result.plot(
-                    line_width=self.args.line_width,
-                    boxes=self.args.show_boxes,
-                    conf=self.args.show_conf,
-                    labels=self.args.show_labels,
-                )
-
-            try:
-                string += f"{result.verbose()}{result.speed['inference']:.1f}ms" 
-            except Exception as e: 
-                Streamer.logger.exception(f"Error getting inference speed: {e}")
-                pdb.set_trace()
-
-            if self.args.save:
-                self.save_predicted_images(str(self.save_dir / p.name), int(frame))
-            
-            return string
-
-        # Obstacle Detection
-        updated_labels, orig_classes_updated = classification_obstacles(
-            boxes=result.boxes, 
-            classes=result.boxes.cls, 
-            lanes_final=self.lanes_final, 
-            orig_shape=self.imgsz, 
-            orig_classes=self.converter.class_names
-        )
-
-        if len(self.converter.class_names) != len(orig_classes_updated) and orig_classes_updated is not None: 
-            self.converter.class_names = orig_classes_updated
-
-            result.names.clear() 
-            for i, name in enumerate(self.converter.class_names): 
-                result.names[i] = name
-
-        if result.boxes.cls.numel() == updated_labels.numel(): 
-            result.boxes.cls[:] = updated_labels
-
-
-        if isinstance(result, torch.Tensor):
-            raise ValueError("Not using pytorch and the ultralytics.Results class")
-        
-        if self.mqtt_interface is not None:
-            self.mqtt_interface.publish(self.mqtt_interface.topic, str(result.speed))
-
-        # Add delay to have stable fps readings 
-        time.sleep(0.01) 
-
-        result.save_dir = self.save_dir.__str__() 
-        
-        try:
-            string += f"{result.verbose()}{result.speed['inference']:.1f}ms" 
-        except Exception as e: 
-            Streamer.logger.exception(f"Error getting inference speed: {e}")
-            pdb.set_trace()
-        
-        try:  
-            self.points.clear()
-        except: 
-            pass
-
-        self.points = self.tracker_model.update_tracker_history(result, logic_module=self.logic_module)
-        
-        if self.args.save or self.args.show:
-            self.plotted_img = result.plot(
-                    line_width=self.args.line_width,
-                    boxes=self.args.show_boxes,
-                    conf=self.args.show_conf,
-                    labels=self.args.show_labels,
-            )
-
+        string += f"{preds.verbose()}{preds.speed['inference']:.1f}ms" 
+          
         # Save results
         if self.args.save_txt:
-            result.save_txt(f"{self.txt_path}.txt", save_conf=self.args.save_conf)
+            preds.save_txt(f"{self.txt_path}.txt", save_conf=self.args.save_conf)
         
         if self.args.save_crop:
-            result.save_crop(save_dir=self.save_dir / "crops", file_name=self.txt_path.stem if self.txt_path is not None else Path("unknown"))
-        
-        if self.args.show:
-            self.show(p)
-        
-        if self.args.save:
-            self.save_predicted_images(str(self.save_dir / p.name), int(frame))
+            preds.save_crop(save_dir=self.save_dir / "crops", file_name=self.txt_path.stem if self.txt_path is not None else Path("unknown"))
 
         return string
 
@@ -335,7 +297,7 @@ class Streamer(ABC):
         ensure_dir(out_path.parent)
 
         if im.ndim == 3 and im.shape[2] == 3:
-            bgr = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
+            bgr = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
         else:
             bgr = im
 
@@ -477,3 +439,55 @@ class Streamer(ABC):
         save_cropped_img = f"{image_dir}/masked_frame_{np.random.randint(10000)}.jpg"
         if save:
             cv2.imwrite(save_cropped_img, mask) 
+
+
+    def __optional_save_or_show(self, preds:Any, p:Any)-> None: 
+
+        if self.args.save or self.args.show: 
+            self.plotted_img = preds.plot(
+                    line_width=self.args.line_width,
+                    boxes=self.args.show_boxes,
+                    conf=self.args.show_conf,
+                    labels=self.args.show_labels,
+            )
+
+        if self.args.show:
+            self.show(p)     
+
+        if self.args.save:
+            self.save_predicted_images(str(self.save_dir / p.name), int(self.dataset.count))    
+
+
+    def __generate_mqtt_message(self, preds:Any, frame_index:int)->str: 
+            return json.dumps({
+                "frame_id":frame_index, 
+                "classes":preds.boxes.cls.tolist(), 
+                "boxes": preds.boxes.xyxy.tolist(), 
+                "tm_ms":time.time()*1000, 
+                "track_ids": preds.boxes.id.tolist(), 
+            })
+    
+    def __generate_mqtt_message_no_motion(self, preds:Any, frame_index:list)->str: 
+        messages = [] 
+        for idx, frame_id in enumerate(frame_index): 
+            boxes = preds[idx].boxes
+            message = {
+                "frame_id":frame_id, 
+                "classes":boxes.cls.tolist(), 
+                "boxes": boxes.xyxy.tolist(), 
+                "tm_ms":time.time()*1000, 
+                "track_ids": boxes.id.tolist(), 
+            }
+            messages.append(message)
+        return json.dumps(messages)
+    
+
+    def __publish_mqtt_message(self, preds, frame_index)->None: 
+        if self.mqtt_interface is not None: 
+            message = self.__generate_mqtt_message(preds, frame_index)
+            self.mqtt_interface.publish(self.mqtt_interface.topic, message)
+
+    def __publish_mqtt_message_no_detection(self, preds, frame_index)->None: 
+        if self.mqtt_interface is not None: 
+            message = self.__generate_mqtt_message_no_motion(preds, frame_index)
+            self.mqtt_interface.publish(self.mqtt_interface.topic, message)
