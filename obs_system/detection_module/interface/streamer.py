@@ -132,6 +132,7 @@ class Streamer(ABC):
         if not isinstance(preds, Results): 
             raise ValueError("Not using ultralytics.Results class in postprocess of Streamer.") 
         
+        pdb.set_trace()
         if preds.results is not None and preds.boxes.xyxy.numel() == 0: 
             updated_labels, orig_classes_updated = classification_obstacles(
                 boxes=preds.boxes, 
@@ -264,6 +265,10 @@ class Streamer(ABC):
         
         if self.args.save_crop:
             preds.save_crop(save_dir=self.save_dir / "crops", file_name=self.txt_path.stem if self.txt_path is not None else Path("unknown"))
+
+
+
+
 
         return string
 
@@ -481,13 +486,14 @@ class Streamer(ABC):
             messages.append(message)
         return json.dumps(messages)
     
-
-    def __publish_mqtt_message(self, preds, frame_index)->None: 
+    @abstractmethod
+    def _publish_mqtt_message(self, preds, frame_index)->None: 
         if self.mqtt_interface is not None: 
             message = self.__generate_mqtt_message(preds, frame_index)
             self.mqtt_interface.publish(self.mqtt_interface.topic, message)
 
-    def __publish_mqtt_message_no_detection(self, preds, frame_index)->None: 
+    @abstractmethod
+    def _publish_mqtt_message_no_detection(self, preds, frame_index)->None: 
         if self.mqtt_interface is not None: 
             message = self.__generate_mqtt_message_no_motion(preds, frame_index)
             self.mqtt_interface.publish(self.mqtt_interface.topic, message)

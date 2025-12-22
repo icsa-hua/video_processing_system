@@ -78,8 +78,8 @@ class TensorRTRTXStreamer(OptimizedStreamer):
         return im
 
 
-    def postprocess(self, preds, img, orig_imgs): 
-        return super().postprocess(preds, img, orig_imgs) 
+    def postprocess(self, preds, orig_image)->Any: 
+        return super().postprocess(preds, orig_image) 
 
 
     def setup_model(self, model, opt='tracking'): 
@@ -384,7 +384,11 @@ class TensorRTRTXStreamer(OptimizedStreamer):
     def _stream_inference_impl(self, **kwargs): 
         return super()._stream_inference_impl(**kwargs) 
 
+    def _publish_mqtt_message(self, preds, frame_index)->None: 
+        super()._publish_mqtt_message(preds, frame_index)
 
+    def _publish_mqtt_message_no_detection(self, preds, frame_index)->None: 
+        super()._publish_mqtt_message_no_detection(preds, frame_index)
 
 
 

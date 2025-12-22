@@ -1,4 +1,5 @@
 from obs_system.logic_module.interface.event_extractor import EventExtractorInterface 
+from obs_system.utils.common import _empty_results
 
 import torch
 import numpy as np
@@ -51,39 +52,22 @@ class TrackerHandler(EventExtractorInterface):
             raise RuntimeError("Invalid tracker state")
 
 
-    def detect(self, predictions, save:bool, orig_frame, f_id:int, class_names:list): 
-        if not isinstance(predictions, Results): 
-            raise ValueError("Predictions must be in Results format")
+    def detect(self, predictions, save:bool, orig_frame, f_id:int, class_names:list, speed:dict={}) -> Any: 
 
         detections = self._detect(predictions, save=save, orig_img=orig_frame)
-        detections = detections[detections.tracker_id != -1]
+        detections = detections[detections.tracker_id != -1] if isinstance(detections, sv.Detections) else [] 
+        
         if len(detections) == 0: 
-            return Results(
-                orig_img = orig_frame, 
-                path="", 
-                names=class_names, 
-                boxes=torch.zeros((0,6), dtype=torch.float32), 
-                speed={},
-            )
+            return _empty_results(orig_image=orig_frame, frame_id=f_id, class_names=class_names)
 
         xyxy = torch.from_numpy(detections.xyxy).to(torch.float32)
         scores_t = torch.from_numpy(detections.confidence).to(torch.float32) 
         class_t = torch.from_numpy(detections.class_id).to(torch.int64) 
         ids_t = torch.from_numpy(detections.tracker_id).to(torch.int64) 
         
-        inf_results = torch.stack((xyxy[:,0],xyxy[:,1],xyxy[:,2],xyxy[:,3],
-            ids_t.view(-1),
-            scores_t.view(-1), 
-            class_t.view(-1), 
-        ))
+        results = torch.stack((xyxy[:,0],xyxy[:,1],xyxy[:,2],xyxy[:,3],ids_t.view(-1),scores_t.view(-1), class_t.view(-1)))
 
-        return Results(
-            orig_img=orig_frame, 
-            path=f"image_{f_id}.jpg", 
-            names=class_names, 
-            boxes=inf_results.T, 
-            speed={}, 
-        )
+        return Results(orig_img=orig_frame, path=f"image_{f_id}.jpg", names=class_names, boxes=results.T, speed=speed)
 
     
     def update_tracker_history(self,results, logic_module:Any): 

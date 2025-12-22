@@ -82,8 +82,9 @@ class OptimizedStreamer(Streamer):
         return super().preprocess(im)
 
     
-    def postprocess(self, preds:Any)->Any : 
-        return super().postprocess(preds) 
+    def postprocess(self, preds:Any, orig_image:Any)->Any : 
+        pdb.set_trace()
+        return super().postprocess(preds, orig_image=orig_image) 
 
 
     def setup_model(self, model:str, opt:str)->None:
@@ -102,13 +103,12 @@ class OptimizedStreamer(Streamer):
                 self.setup_source(source if source is not None else self.args.source)
                 self.dataset.bs = BATCH_SIZE
 
-            self.seen = 0 
-            results = [] 
+            self.seen = 0  
             self.batch = None 
             self.mp = None 
                        
             #self.use_roi = True if self.args.roi and self.logic_module["ROI"] is not None else False 
-            self.use_roi = False 
+            self.use_roi = True
 
             profilers = (
                 ops.Profile(device=self.device), 
@@ -176,8 +176,6 @@ class OptimizedStreamer(Streamer):
         profilers=kwargs["profilers"] 
         activities=kwargs["activities"]
         start_time = kwargs["start_time"]
-        
-
         results = [] 
 
         if self.args.bench: 
@@ -212,6 +210,8 @@ class OptimizedStreamer(Streamer):
         producer_thread = threading.Thread(target=producer, daemon=True)
         producer_thread.start()
 
+        last_frame_id = None
+
         while True:
             self.batch = batch_queue.get()
             if self.batch is None:
@@ -241,15 +241,15 @@ class OptimizedStreamer(Streamer):
 
             # Speeds up the process when no motion is detected in the incoming batch. 
             if not any(mfgs):
-                preds = return_no_motion_frames(
+                print("No motion detected in the batch - skipping inference")
+                empty_preds = return_no_motion_frames(
                     im0s=im0s,
                     batch_size=BATCH_SIZE 
                 )
-                yield preds 
+                yield empty_preds 
 
-                self.__publish_mqtt_message_no_detection(preds=preds, frame_index=frame_ids)
+                self._publish_mqtt_message_no_detection(preds=empty_preds, frame_index=frame_ids)
                 continue # to the next batch 
-                
                 
             for i, keep_frame in enumerate(mfgs):
                 if not keep_frame:
@@ -273,14 +273,16 @@ class OptimizedStreamer(Streamer):
 
             for bni, (boxes, scores, cls_, orig_img) in enumerate(zip(i_boxes, i_scores, i_classes, im0s)): 
 
+                preds = None 
                 self.seen = bni
-
+                current_frame_id = frame_ids[self.seen]
                 # No result returned from the object detection model
                 if boxes is None or len(boxes) == 0: 
                     inf_results = _empty_results(orig_image=orig_img)
-                    if results is not None:
-                        results.append(inf_results)
-                        yield inf_results
+                    # results.append(inf_results)
+                    
+                    self._publish_mqtt_message(preds=inf_results, frame_index=frame_ids)
+                    yield inf_results
                     continue
 
                 if isinstance(boxes, np.ndarray): 
@@ -314,32 +316,24 @@ class OptimizedStreamer(Streamer):
                 )
 
                 preds = Results(
-                    orig_img=orig_img, 
-                    path=f"image_{frame_ids[self.seen]}.jpg", 
-                    names=self.converter.class_names, 
-                    boxes=inf_results.T, 
-                    speed={}, 
+                    orig_img=orig_img,
+                    path=f"image_{frame_ids[self.seen]}.jpg",
+                    names=self.converter.class_names,
+                    boxes=inf_results.T,
+                    speed={}
                 )
-
-                if self.tracker_model is not None:
-                    preds = self.tracker_model.detect(
-                        predictions=preds, 
-                        save=False, 
-                        orig_frame=orig_img, 
-                        f_id=self.seen, 
-                        class_names=self.converter.class_names
-                    )
                 
+                if self.tracker_model is not None:
+                    preds = self.tracker_model.detect(predictions=preds,save=False,orig_frame=orig_img,f_id=frame_ids[self.seen],class_names=self.converter.class_names)
+
                 with profilers[2]:
-                    preds = self.postprocess(preds)
+                    preds = self.postprocess(preds, orig_image=orig_img)
 
                 preds.speed = {
                     "preprocess": profilers[0].dt * 1e3/len(im0s),
                     "inference": profilers[1].dt * 1e3/len(im0s),
-                    "postprocess":profilers[2].dt * 1e3/len(im0s)
+                    "postprocess": profilers[2].dt * 1e3/len(im0s)
                 }
-
-                results.append(preds) 
 
                 if self.mp is not None and self.args.bench: 
                     gt_cls, gt_bbs = self.__gt_labels.pop(self.seen, (np.zeros((0,), np.int64),np.zeros((0,4), np.float32)))
@@ -351,37 +345,39 @@ class OptimizedStreamer(Streamer):
                         gt_classes = gt_cls.astype(np.int64)
                     ) 
                 
-                yield results
+                if current_frame_id != last_frame_id:
+                    yield preds
 
-                if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
-                    filename=Path(paths[self.seen])
-                    if not filename: 
-                            Streamer.logger.warning("[WARNING]: filename to save image is invalid")
+                    if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
+                        filename=Path(paths[self.seen])
+                        if not filename: 
+                                Streamer.logger.warning("[WARNING]: filename to save image is invalid")
 
-                    self.batch[2][self.seen] += self.write_results(
-                            preds=results[self.seen], 
-                            i = self.seen, 
-                            p = filename,  
-                            im= im0s,
-                            s = self.batch[2]
-                        )
+                        self.batch[2][self.seen] += self.write_results(
+                                preds=preds, 
+                                i = self.seen, 
+                                p = filename,  
+                                im= im0s,
+                                s = self.batch[2]
+                            )
 
-                if producer_flag is not None: 
-                    producer_flag.value = True
+                    if producer_flag is not None: 
+                        producer_flag.value = True
 
-                if self.proc_image is not None and queue_list is not None:
-                    queue_list.put(self.proc_image)
-                elif self.proc_image is None and queue_list is not None: 
-                    queue_list.put(None)    
+                    if self.proc_image is not None and queue_list is not None:
+                        queue_list.put(self.proc_image)
+                    elif self.proc_image is None and queue_list is not None: 
+                        queue_list.put(None)    
                 
-                if self.seen >= len(im0s): 
-                    results.clear()
+                # if self.seen >= len(im0s): 
+                #     results.clear()
 
-                if self.seen == len(im0s)-1 and self.args.verbose: 
-                    elapsed_time=time.perf_counter() - start_time 
-                    Streamer.logger.info(f"Time from capturing batch to meaningful information: {elapsed_time:.2f}")
-            
-                self.__publish_mqtt_message(preds=preds, frame_index=self.seen) 
+                    if self.seen == len(im0s)-1 and self.args.verbose: 
+                        elapsed_time=time.perf_counter() - start_time 
+                        Streamer.logger.info(f"Time from capturing batch to meaningful information: {elapsed_time:.2f}")
+                
+                    self._publish_mqtt_message(preds=preds, frame_index=self.seen) 
+                    last_frame_id = current_frame_id 
 
             self.run_callbacks("on_predict_postprocess_end")
             self.run_callbacks("on_predict_batch_end")
@@ -399,6 +395,11 @@ class OptimizedStreamer(Streamer):
             if isinstance(v, cv2.VideoWriter): 
                 v.release() 
 
+        if self.args.save or self.args.save_txt or self.args.save_crop:
+            nl = len(list(self.save_dir.glob("labels/*.txt")))  # number of labels
+            s = f"\n{nl} label{'s' * (nl > 1)} saved to {self.save_dir / 'labels'}" if self.args.save_txt else ""
+        
+
         if self.args.verbose and self.seen: 
             t = tuple(x.t / self.seen * 1e3 for x in profilers) 
             Streamer.logger.info(
@@ -406,10 +407,6 @@ class OptimizedStreamer(Streamer):
                 f"{(min(self.args.batch, self.seen), 3, BATCH_SIZE)}" % t
             )
 
-        if self.args.save or self.args.save_txt or self.args.save_crop:
-            nl = len(list(self.save_dir.glob("labels/*.txt")))  # number of labels
-            s = f"\n{nl} label{'s' * (nl > 1)} saved to {self.save_dir / 'labels'}" if self.args.save_txt else ""
-        
         self.run_callbacks("on_predict_end")
 
 
@@ -491,5 +488,9 @@ class OptimizedStreamer(Streamer):
 
 
 
+    def _publish_mqtt_message(self, preds, frame_index)->None: 
+        super()._publish_mqtt_message(preds, frame_index)
 
 
+    def _publish_mqtt_message_no_detection(self, preds, frame_index)->None: 
+        super()._publish_mqtt_message_no_detection(preds, frame_index)
