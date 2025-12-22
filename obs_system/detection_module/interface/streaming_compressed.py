@@ -174,8 +174,7 @@ class OptimizedStreamer(Streamer):
         producer_flag  = kwargs["producer_flag"] 
         queue_list = kwargs["queue_list"]
         profilers=kwargs["profilers"] 
-        activities=kwargs["activities"] 
-
+        activities=kwargs["activities"]
         start_time = kwargs["start_time"]
         
         if self.args.bench: 
@@ -220,8 +219,7 @@ class OptimizedStreamer(Streamer):
             paths, im0s, s = self.batch
 
             #use_roi = True if self.args.roi and self.logic_module["ROI"] is not None else False 
-            use_roi = False
-            if use_roi :
+            if self.use_roi :
                 with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
                     im0s = self.logic_module['ROI'].crop_image(im0s)
 
@@ -237,17 +235,20 @@ class OptimizedStreamer(Streamer):
                     Streamer.logger.debug("FEP enabled")
                     im0s = self.logic_module["FEP"]._defish(im0s)  
 
-            # allowed_filter = [i for i, val in enumerate(mfgs) if val] 
-            # if len(allowed_filter) == 0 :
-            #     Streamer.logger.debug("All frames filtered out by motion gating.")
-            #     continue
 
-            # for i, al in enumerate(allowed_filter): 
-            #     if not al: 
-            #         im0s[i] = empty_image(im0s[i])
+            # Speeds up the process when no motion is detected in the incoming batch. 
+            if not any(mfgs):
+                yield return_no_motion_frames(
+                    im0s=im0s,
+                    batch_size=BATCH_SIZE 
+                )
+
+                # here normally the MQTT should update with no detections the publisher. 
+                
 
             for i, keep in enumerate(mfgs):
                 if not keep:
+                    print("Empty movement detected, skipping frame.")
                     im0s[i] = empty_image(im0s[i])
 
             with profilers[0]: 
@@ -344,18 +345,18 @@ class OptimizedStreamer(Streamer):
                 
                 yield results
 
-                # if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
-                filename=Path(paths[self.seen])
-                if not filename: 
-                        Streamer.logger.warning("[WARNING]: filename to save image is invalid")
+                if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
+                    filename=Path(paths[self.seen])
+                    if not filename: 
+                            Streamer.logger.warning("[WARNING]: filename to save image is invalid")
 
-                self.batch[2][self.seen] += self.write_results(
-                        i = self.seen, 
-                        p = filename,  
-                        im= images,
-                        original_images=self.batch[1], 
-                        s = self.batch[2]
-                    )
+                    self.batch[2][self.seen] += self.write_results(
+                            i = self.seen, 
+                            p = filename,  
+                            im= images,
+                            original_images=self.batch[1], 
+                            s = self.batch[2]
+                        )
 
                 if producer_flag is not None: 
                     producer_flag.value = True

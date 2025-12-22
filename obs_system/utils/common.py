@@ -401,3 +401,15 @@ def _empty_results(orig_image, class_names:Optional[List[str]]=None, frame_id:in
 
 def empty_image(image): 
     return np.zeros_like(image)
+
+
+def return_no_motion_frames(im0s, batch_size): 
+    results = [
+        _empty_results(
+            orig_image=im0s[i], 
+            frame_id=i, 
+            device="cpu"
+        ) for i in range(batch_size)
+    ]
+
+    return results 
