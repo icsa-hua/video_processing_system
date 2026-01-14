@@ -224,11 +224,11 @@ class Application:
         end_time = time.time()
         current, peak = tracemalloc.get_traced_memory()
         
-        logger.debug(f"------------------------------------------------------------------------------------")
-        logger.debug(f"|  Total Inference time: {end_time - self.start_time} seconds ")
-        logger.debug(f"|  Current Environment RAM usage (Psutil): {self.process_memory.memory_info().rss / (1024**2)} MB.")
-        logger.debug(f"|  Current memory usage (Tracemalloc): {current / (1024 ** 2):.2f} MB.")
-        logger.debug(f"|  Peak memory usage (Tracemalloc): {peak / (1024 ** 2):.2f} MB.")
+        logger.info(f"------------------------------------------------------------------------------------")
+        logger.info(f"|  Total Inference time: {end_time - self.start_time} seconds ")
+        logger.info(f"|  Current Environment RAM usage (Psutil): {self.process_memory.memory_info().rss / (1024**2)} MB.")
+        logger.info(f"|  Current memory usage (Tracemalloc): {current / (1024 ** 2):.2f} MB.")
+        logger.info(f"|  Peak memory usage (Tracemalloc): {peak / (1024 ** 2):.2f} MB.")
        
         if self.gpu_enabled:
             mem_info = pynvml.nvmlDeviceGetMemoryInfo(self.handle)
@@ -238,11 +238,11 @@ class Application:
             used_gpu_mem = int(mem_info.used) / (1024 ** 2)
             free_gpu_mem = int(mem_info.free) / (1024 ** 2)
         
-            logger.debug(f"|  Total GPU memory: {total_gpu_mem:.2f} MB")
-            logger.debug(f"|  Used GPU memory: {used_gpu_mem:.2f} MB")
-            logger.debug(f"|  Free GPU memory: {free_gpu_mem:.2f} MB")
+            logger.info(f"|  Total GPU memory: {total_gpu_mem:.2f} MB")
+            logger.info(f"|  Used GPU memory: {used_gpu_mem:.2f} MB")
+            logger.info(f"|  Free GPU memory: {free_gpu_mem:.2f} MB")
 
-        logger.debug(f"------------------------------------------------------------------------------------")
+        logger.info(f"------------------------------------------------------------------------------------")
 
 
     def close_app(self): 

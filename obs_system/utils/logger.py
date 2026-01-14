@@ -23,7 +23,7 @@ def jupyter_logger(level=logging.INFO)->logging.StreamHandler:
     return jupyter_handler
 
 
-def setup_logging(level=logging.DEBUG, log_dir="assets/logs"):
+def setup_logging(level=logging.INFO, log_dir="assets/logs"):
     root = logging.getLogger("obs_system")
     root.setLevel(level)
     # if root.handlers:  # idempotent
@@ -91,5 +91,5 @@ def list_loggers(show_handlers=False):
 
 # remove_logger("matplotlib")
 # remove_logger("matplotlib.font_manager")
-setup_logging(logging.DEBUG)
+setup_logging(logging.INFO)
 

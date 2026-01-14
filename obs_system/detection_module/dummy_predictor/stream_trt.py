@@ -85,8 +85,8 @@ class TensorRTRTXStreamer(OptimizedStreamer):
     def setup_model(self, model, opt='tracking'): 
         device = select_device(self.args.device, verbose=self.args.verbose) 
 
-        model_path = 'obs_system/compressed/yolov8s_original.onnx'
-        self.model = TensorRTYOLO(engine_path=model_path, fp16=False)
+        model_path = 'obs_system/compressed/yolov8s_dynamic_640_bz_16_simplified.onnx'
+        self.model = TensorRTYOLO(engine_path=model_path, fp16=True)
 
         [self.height, self.width] = self.model.input_height, self.model.input_width 
 

@@ -32,6 +32,8 @@ class StepContext():
     def __enter__(self) : 
         if self.verbose: 
             logger.info(f"✅SCM -> {self.name}...")
+        else: 
+            logger.debug(f"✅SCM -> {self.name}...")
         self.t0 = time.perf_counter() 
         return self 
 
@@ -45,6 +47,8 @@ class StepContext():
             perf.tick(self.name, ms)
             if self.verbose: 
                 logger.info(f"[{self.name}] took {self.elapsed_time:.2f}ms")
+            else: 
+                logger.debug(f"[{self.name}] took {self.elapsed_time:.2f}ms")
             return False #Nothing to suppress 
 
         self.no_exception_found = False 

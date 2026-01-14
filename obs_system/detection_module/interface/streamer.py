@@ -132,8 +132,7 @@ class Streamer(ABC):
         if not isinstance(preds, Results): 
             raise ValueError("Not using ultralytics.Results class in postprocess of Streamer.") 
         
-        pdb.set_trace()
-        if preds.results is not None and preds.boxes.xyxy.numel() == 0: 
+        if preds.boxes is not None and preds.boxes.xyxy.numel() == 0: 
             updated_labels, orig_classes_updated = classification_obstacles(
                 boxes=preds.boxes, 
                 classes=preds.boxes.cls, 

@@ -18,6 +18,7 @@ import torch
 import numpy as np
 import queue
 import threading
+import collections 
 
 from typing import Union, List, Any, Generator, Optional
 from pathlib import Path 
@@ -83,7 +84,6 @@ class OptimizedStreamer(Streamer):
 
     
     def postprocess(self, preds:Any, orig_image:Any)->Any : 
-        pdb.set_trace()
         return super().postprocess(preds, orig_image=orig_image) 
 
 
@@ -99,7 +99,7 @@ class OptimizedStreamer(Streamer):
         if self.args.verbose : Streamer.logger.info(" ")
 
         with self._lock: 
-            with StepContext(name="Set up Dataloader Process", catch=(RuntimeError, ), verbose=True):
+            with StepContext(name="Set up Dataloader Process", catch=(RuntimeError, ), verbose=self.args.verbose):
                 self.setup_source(source if source is not None else self.args.source)
                 self.dataset.bs = BATCH_SIZE
 
@@ -170,13 +170,19 @@ class OptimizedStreamer(Streamer):
     @abstractmethod
     @mem_profile
     def _stream_inference_impl(self, **kwargs): 
+
+        FPS_WINDOW = 100                    # sliding window size
+        fps_times = collections.deque(maxlen=FPS_WINDOW)
+        stream_start = time.perf_counter()
+        last_fps_log = stream_start
+        total_frames = 0
+
         model = kwargs["model"] 
         producer_flag  = kwargs["producer_flag"] 
         queue_list = kwargs["queue_list"]
         profilers=kwargs["profilers"] 
         activities=kwargs["activities"]
         start_time = kwargs["start_time"]
-        results = [] 
 
         if self.args.bench: 
             self.mp = ModelPerf(
@@ -196,7 +202,7 @@ class OptimizedStreamer(Streamer):
                 self.done_warmup = True
 
         # Asynchronous batch loading to avoid stalls
-        batch_queue = queue.Queue(maxsize=2)
+        batch_queue = queue.Queue(maxsize=8)
 
         def producer():
             try:
@@ -221,7 +227,7 @@ class OptimizedStreamer(Streamer):
 
             paths, im0s, s = self.batch
             frame_ids = get_frame_ids(labels=s)
-
+            #original_images = im0s.copy
             #use_roi = True if self.args.roi and self.logic_module["ROI"] is not None else False 
             if self.use_roi :
                 with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
@@ -278,9 +284,7 @@ class OptimizedStreamer(Streamer):
                 current_frame_id = frame_ids[self.seen]
                 # No result returned from the object detection model
                 if boxes is None or len(boxes) == 0: 
-                    inf_results = _empty_results(orig_image=orig_img)
-                    # results.append(inf_results)
-                    
+                    inf_results = _empty_results(orig_image=orig_img)                    
                     self._publish_mqtt_message(preds=inf_results, frame_index=frame_ids)
                     yield inf_results
                     continue
@@ -294,37 +298,61 @@ class OptimizedStreamer(Streamer):
                     scores_t = scores 
                     classes_t = cls_
 
-                keep_pc = batched_nms(
+                keep = batched_nms(
                         boxes_t, 
                         scores_t, 
                         classes_t.long(), 
                         iou_threshold=(1.0-NMS_IOU)
                     )
                     
-                keep = keep_pc if keep_pc.numel()==0 else keep_pc[nms(boxes_t[keep_pc],scores_t[keep_pc], iou_threshold=(1-NMS_IOU))]
+                # keep = keep_pc if keep_pc.numel()==0 else keep_pc[nms(boxes_t[keep_pc],scores_t[keep_pc], iou_threshold=(1-NMS_IOU))]
                 boxes_t, scores_t, classes_t = boxes_t[keep], scores_t[keep], classes_t[keep] 
                
-                inf_results = torch.stack(
-                    (
-                        boxes_t[:,0], 
-                        boxes_t[:,1],
-                        boxes_t[:,2],
-                        boxes_t[:,3],
-                        scores_t, 
-                        classes_t
-                    )
-                )
+                # inf_results = torch.stack(
+                #     (
+                #         boxes_t[:,0], 
+                #         boxes_t[:,1],
+                #         boxes_t[:,2],
+                #         boxes_t[:,3],
+                #         scores_t, 
+                #         classes_t
+                #     )
+                # )
+                
+                inf_results = torch.cat([boxes_t, scores_t[:,None], classes_t[:,None].float()], dim=1)
 
                 preds = Results(
                     orig_img=orig_img,
                     path=f"image_{frame_ids[self.seen]}.jpg",
                     names=self.converter.class_names,
-                    boxes=inf_results.T,
+                    boxes=inf_results, 
+                    # boxes=inf_results.T,
                     speed={}
                 )
+
+                # ================= FPS MEASUREMENT =================
+                now = time.perf_counter()
+                fps_times.append(now)
+                total_frames += 1
                 
+                # Sliding-window FPS (end-to-end)
+                if len(fps_times) > 1:
+                    fps = (len(fps_times) - 1) / (fps_times[-1] - fps_times[0])
+
+                # Log FPS once per second
+                if now - last_fps_log >= 1.0:
+                    elapsed = now - stream_start
+                    avg_fps = total_frames / elapsed
+                    Streamer.logger.info(
+                        f"[FPS] End-to-end FPS: {fps:.2f} | "
+                        f"Average FPS since start: {avg_fps:.2f}"
+                    )
+                    last_fps_log = now
+                # ===================================================
+
                 if self.tracker_model is not None:
-                    preds = self.tracker_model.detect(predictions=preds,save=False,orig_frame=orig_img,f_id=frame_ids[self.seen],class_names=self.converter.class_names)
+                    with StepContext(name="Tracking Frame", catch=(RuntimeError, ), verbose=self.args.verbose):
+                        preds = self.tracker_model.detect(predictions=preds,save=False,orig_frame=orig_img,f_id=frame_ids[self.seen],class_names=self.converter.class_names)
 
                 with profilers[2]:
                     preds = self.postprocess(preds, orig_image=orig_img)
@@ -350,27 +378,27 @@ class OptimizedStreamer(Streamer):
 
                     if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
                         filename=Path(paths[self.seen])
+
                         if not filename: 
                                 Streamer.logger.warning("[WARNING]: filename to save image is invalid")
 
-                        self.batch[2][self.seen] += self.write_results(
-                                preds=preds, 
-                                i = self.seen, 
-                                p = filename,  
-                                im= im0s,
-                                s = self.batch[2]
-                            )
+                        with StepContext(name="Save Results", catch=(Exception, RuntimeError), verbose=self.args.verbose):
+                            self.batch[2][self.seen] += self.write_results(
+                                    preds=preds, 
+                                    i = self.seen, 
+                                    p = filename,  
+                                    im= im0s,
+                                    s = self.batch[2]
+                                )
 
                     if producer_flag is not None: 
                         producer_flag.value = True
 
                     if self.proc_image is not None and queue_list is not None:
                         queue_list.put(self.proc_image)
+
                     elif self.proc_image is None and queue_list is not None: 
                         queue_list.put(None)    
-                
-                # if self.seen >= len(im0s): 
-                #     results.clear()
 
                     if self.seen == len(im0s)-1 and self.args.verbose: 
                         elapsed_time=time.perf_counter() - start_time 
@@ -406,6 +434,15 @@ class OptimizedStreamer(Streamer):
                 f"Speed: %.1fms preprocess, %.1fms inference, %.1fms postprocess per image at shape "
                 f"{(min(self.args.batch, self.seen), 3, BATCH_SIZE)}" % t
             )
+
+        # ---------------- CLEANUP LOG ----------------
+        total_time = time.perf_counter() - stream_start
+        if total_frames > 0:
+            print(
+                f"[FPS] FINAL Average FPS: {total_frames / total_time:.2f}"
+            )
+
+        
 
         self.run_callbacks("on_predict_end")
 

@@ -1,6 +1,7 @@
 from obs_system.compressed.interface.utils import *
 from obs_system.utils.appraisal import StepContext
 from obs_system.utils.logger import get_logger
+from obs_system.utils.global_config import BATCH_SIZE, TILE_SIZE
 
 import pdb
 import tensorrt as trt 
@@ -52,11 +53,11 @@ class TensorRTYOLO:
         
         self.conf_threshold = conf_thres
         self.iou_threshold = iou_thres
-        self.input_height=640 
-        self.input_width=640
+        self.input_height=TILE_SIZE 
+        self.input_width=TILE_SIZE
 
         self.__input_name = None 
-        self.__shape_input_model = [32, 3, 640, 640]
+        self.__shape_input_model = [BATCH_SIZE, 3, 640, 640]
         self.__output_names = [] 
 
         self.__device = torch.device("cuda", torch.cuda.current_device()) 
@@ -73,10 +74,13 @@ class TensorRTYOLO:
         #self.__synchronization_flag =  False
         # Runtime Phase: As per https://docs.nvidia.com/deeplearning/tensorrt-rtx/latest/inference-library/python-api-docs.html#create-network-python
 
+        _model = engine_path.split('/')[-1]
+        _model = _model.split('.')[0] 
+
         # Load TensorRT engine
         logger.debug(f"Loading TensorRT engine from {engine_path} ...")
-        
-        save_path = os.getcwd() + f"/obs_system/compressed/yolo_mixed_batch_trt_{'fp16' if self.__fp16 else 'nofp16'}_{'int8' if self.__int8 else 'noint8'}.engine"
+
+        save_path = os.getcwd() + f"/obs_system/compressed/{_model}_mixed_batch_trt_{'fp16' if self.__fp16 else 'nofp16'}_{'int8' if self.__int8 else 'noint8'}.engine"
         if not os.path.exists(save_path): 
             self.__build_engine__(engine_path, save_path)
             self.__load_engine__(load_path=save_path)
@@ -107,7 +111,7 @@ class TensorRTYOLO:
             config.set_timing_cache(cache, ignore_mismatch=False)
             
             #Define max Workspace for memory Limit 
-            max_workspace = (1 < 30) 
+            max_workspace = (1 << 30) 
             config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, max_workspace)
 
             # Create the Network Definition (representation of a model in TensorRT) 
@@ -134,6 +138,7 @@ class TensorRTYOLO:
                     logger.debug(f"Model {output.name} shape: {output.shape} {output.dtype}") 
 
             profile = builder.create_optimization_profile() 
+
             min_shape = [1] + self.__shape_input_model[-3:] 
             # min_shape = [1,3,160,160]
             opt_shape = [int(self.__shape_input_model[0]/2)] + self.__shape_input_model[-3:] 
@@ -166,8 +171,6 @@ class TensorRTYOLO:
 
             with open(save_path, "wb") as sf: 
                 sf.write(engine_bytes)
-
-            
 
 
     def __load_engine__(self, load_path:str="", serialized_engine=None): 
@@ -231,8 +234,6 @@ class TensorRTYOLO:
                 trt.DataType.BOOL : torch.bool, 
         }[trt_dtype]
             
-
-
 
     def getter_name(self): 
         return {
@@ -383,29 +384,28 @@ class TensorRTYOLO:
                 pad_size = 16 - original_batch_size
                 pad = torch.zeros((pad_size, *im.shape[1:]), dtype=im.dtype, device=im.device)
                 im = torch.cat([im, pad], dim=0)
-            color_convert = False  
-
-            def check_tensor(im): 
-                if not color_convert:
-                    im = im.reshape(im.shape[1], im.shape[2], im.shape[0]) 
-                    im = im.cpu().numpy() 
-                    check = np.argmax(im.mean((0,1)))
-                    
-                    if check == 2: 
-                        return True 
-                    return False
-
-            BGR_to_RGB = check_tensor(im[0]) 
-            if BGR_to_RGB: 
-                im = im.flip(1)
+           
+            ## If Necessary check the tensor structure to determine the color channel # [3,H,W]  
+            # color_convert = False  
+            # def check_tensor(img_chw):  
+            #     imean_c = img_chw.float().mean(dim=(1,2))  # GPU
+            #     check = int(torch.argmax(imean_c).item())  # this .item() is tiny, but can sync
+            #     return check == 2
+            # BGR_to_RGB = check_tensor(im[0]) 
+            # if BGR_to_RGB: 
+            #     im = im.flip(1)
 
         elif isinstance(im, np.ndarray):
             self.img_height, self.img_width = im.shape[:2]
             im = self.prepare_input_image(im)
+        
+        with StepContext(name="Inference inside tensor_yolo.py", catch=((RuntimeError, )), verbose=debug):        
+            outputs, event = self.inference(im, return_numpy=False, verbose=debug)
+        
+        torch.cuda.current_stream().wait_event(event)  
 
-        outputs, event = self.inference(im, return_numpy=False, verbose=debug)
-        with StepContext(name="Process Outputs inside tensor_yolo.py", catch=((RuntimeError, )), verbose=True):
-            boxes, scores, class_ids = self.process_output(outputs, debug=debug)
+        with StepContext(name="Process Outputs inside tensor_yolo.py", catch=((RuntimeError, )), verbose=debug):        
+            boxes, scores, class_ids = self.process_output(outputs, debug=debug)           
 
         if original_batch_size < 16:
             boxes = boxes[:original_batch_size]
