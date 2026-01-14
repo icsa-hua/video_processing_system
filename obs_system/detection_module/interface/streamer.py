@@ -232,8 +232,9 @@ class Streamer(ABC):
         """Write inference results to a file or directory."""
 
         string = "" 
-
-        # Ensure batch dimension
+        
+        pdb.set_trace()
+        # # Ensure batch dimension
         if isinstance(im, list): 
             im = np.array(im) 
             

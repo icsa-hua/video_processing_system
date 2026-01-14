@@ -121,7 +121,9 @@ class OptimizedStreamer(Streamer):
 
             first_batch = next(iter(self.dataset)) #Keeps the original pointer without moving it "peeking" to the first frame 
             _, im0s, _ = first_batch
-            self.orig_height, self.orig_width = im0s[0].shape[:2] 
+
+            self.original_imgsz = im0s[0].shape[:2] 
+            self.orig_height, self.orig_width = self.original_imgsz
 
             empty_image = f"{EMPTY_IMAGE_PATH}"
             if not os.path.exists(empty_image):
@@ -227,13 +229,14 @@ class OptimizedStreamer(Streamer):
 
             paths, im0s, s = self.batch
             frame_ids = get_frame_ids(labels=s)
-            #original_images = im0s.copy
+            original_images = [cv2.cvtColor(im, cv2.COLOR_BGR2RGB) for im in im0s.copy()]
+
             #use_roi = True if self.args.roi and self.logic_module["ROI"] is not None else False 
             if self.use_roi :
                 with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
                     im0s = self.logic_module['ROI'].crop_image(im0s)
 
-            with StepContext(name="BackGround Subtractor (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
+            with StepContext(name="BackGround Subtractor  (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
                 # Motion gate (vectorized over the mini batch) 
                 mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False)
                 if lanes_final is not None: 
@@ -260,6 +263,7 @@ class OptimizedStreamer(Streamer):
             for i, keep_frame in enumerate(mfgs):
                 if not keep_frame:
                     im0s[i] = empty_image(im0s[i])
+                    original_images = empty_image(original_images[i])
 
             with profilers[0]: 
                 images = self.preprocess(im0s) 
@@ -267,17 +271,17 @@ class OptimizedStreamer(Streamer):
             with profilers[1]: 
                 if self.seen == 0 and self.args.verbose: 
                     with profile(activities=activities) as prof:
-                        (i_boxes, i_scores, i_classes), event = self.model(images, orig_imgs=im0s, debug=self.args.verbose)
+                        (i_boxes, i_scores, i_classes), event = self.model(images, orig_imgs=original_images, debug=self.args.verbose)
                     prof.export_chrome_trace(f"trace_{model}.json")
                 else: 
-                    (i_boxes, i_scores, i_classes), event = self.model(images, orig_imgs=im0s, debug=self.args.verbose)
+                    (i_boxes, i_scores, i_classes), event = self.model(images, orig_imgs=original_images, debug=self.args.verbose)
 
             if model=='engine':
                 # End event and synchronize the engine after we don't need the tensors anymore 
                 # Transfer them into the CPU stream 
                 torch.cuda.current_stream().wait_event(event)
 
-            for bni, (boxes, scores, cls_, orig_img) in enumerate(zip(i_boxes, i_scores, i_classes, im0s)): 
+            for bni, (boxes, scores, cls_, orig_img) in enumerate(zip(i_boxes, i_scores, i_classes, original_images)): 
 
                 preds = None 
                 self.seen = bni
@@ -387,7 +391,7 @@ class OptimizedStreamer(Streamer):
                                     preds=preds, 
                                     i = self.seen, 
                                     p = filename,  
-                                    im= im0s,
+                                    im= original_images,
                                     s = self.batch[2]
                                 )
 
