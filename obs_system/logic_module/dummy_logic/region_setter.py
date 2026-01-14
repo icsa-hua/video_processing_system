@@ -1,11 +1,12 @@
 from obs_system.logic_module.interface.event_extractor import EventExtractorInterface
 import numpy as np
 import cv2
+import torch 
 from typing import Any
 from shapely.geometry import Polygon
 from shapely.geometry.point import Point
 import platform
-
+from ultralytics.utils.ops import scale_boxes
 from obs_system.utils.global_config import TILE_SIZE, ROI_X1, ROI_Y1, ROI_X2, ROI_Y2, REGION_COLOR
 
 class RegionSetter(EventExtractorInterface):
@@ -39,7 +40,6 @@ class RegionSetter(EventExtractorInterface):
         x_end = int(ROI_X2 * aspect_ratio_width)
         y_start = int(ROI_Y1 * aspect_ratio_height)
         y_end = int(ROI_Y2 * aspect_ratio_height)
-
         
         self.x_start, self.x_end = sorted([x_start, x_end])
         self.y_start, self.y_end = sorted([y_start, y_end])
@@ -55,7 +55,33 @@ class RegionSetter(EventExtractorInterface):
         ]
     
 
+    def translate_bounding_boxes(self, results,  # results[0]
+                         orig_img_shape,      # (H, W) of original, e.g. (1080, 1920)
+                         crop_shape,          # (h, w) of crop BEFORE letterbox, e.g. (572, 1290)
+                         lb_shape=(640, 640)  # letterboxed image shape given to model
+                         ):
+    
+        x0, y0 = self.x_start, self.y_start
+        H, W = orig_img_shape
+        h0, w0 = crop_shape
+
+        # 1) bring boxes from 640-letterboxed coords back to crop coords (572x1290)
+        xyxy = results
+        xyxy = scale_boxes(lb_shape, xyxy, (h0, w0))
+
+        # 2) add crop offset -> original image coords
+        xyxy[:, [0, 2]] += x0
+        xyxy[:, [1, 3]] += y0
+
+        # optional clamp
+        xyxy[:, [0, 2]].clamp_(0, W)
+        xyxy[:, [1, 3]].clamp_(0, H)
+
+        return xyxy
+
+
     def crop_image(self, images):
+        
         if len(images) > 1 and isinstance(images, list): 
             return [image[self.y_start:self.y_end, self.x_start:self.x_end] for image in images]
         elif isinstance(images, np.ndarray): 

@@ -75,7 +75,7 @@ class OptimizedStreamer(Streamer):
             raise ValueError("The type of the model parsed is incorrect")
 
         same_shapes = len({x.shape for x in im}) == 1 
-        letterbox = LetterBox(self.imgsz,auto=same_shapes ^ pt, stride=self.stride)
+        letterbox = LetterBox(self.imgsz, auto=same_shapes ^ pt, stride=self.stride)
         return [letterbox(image=x) for x in im]
 
 
@@ -134,6 +134,7 @@ class OptimizedStreamer(Streamer):
                 with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
                     
                     self.logic_module['ROI'].set_regions(im0s[0]) 
+                    self.cropped_imgsz = ((self.logic_module['ROI'].y_end - self.logic_module['ROI'].y_start),(self.logic_module['ROI'].x_end - self.logic_module['ROI'].x_start) )
                     cropped_frame = self.logic_module['ROI'].crop_image(im0s[0])
                     
                     if self.args.show: 
@@ -175,6 +176,7 @@ class OptimizedStreamer(Streamer):
 
         FPS_WINDOW = 100                    # sliding window size
         fps_times = collections.deque(maxlen=FPS_WINDOW)
+        fps=0
         stream_start = time.perf_counter()
         last_fps_log = stream_start
         total_frames = 0
@@ -235,7 +237,7 @@ class OptimizedStreamer(Streamer):
             if self.use_roi :
                 with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
                     im0s = self.logic_module['ROI'].crop_image(im0s)
-
+                    
             with StepContext(name="BackGround Subtractor  (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
                 # Motion gate (vectorized over the mini batch) 
                 mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False)
@@ -312,17 +314,14 @@ class OptimizedStreamer(Streamer):
                 # keep = keep_pc if keep_pc.numel()==0 else keep_pc[nms(boxes_t[keep_pc],scores_t[keep_pc], iou_threshold=(1-NMS_IOU))]
                 boxes_t, scores_t, classes_t = boxes_t[keep], scores_t[keep], classes_t[keep] 
                
-                # inf_results = torch.stack(
-                #     (
-                #         boxes_t[:,0], 
-                #         boxes_t[:,1],
-                #         boxes_t[:,2],
-                #         boxes_t[:,3],
-                #         scores_t, 
-                #         classes_t
-                #     )
-                # )
-                
+                if self.use_roi and self.args.save: 
+                    boxes_t = self.logic_module['ROI'].translate_bounding_boxes(
+                        results=boxes_t,
+                        orig_img_shape=self.original_imgsz, 
+                        crop_shape=self.cropped_imgsz, 
+                    )
+
+
                 inf_results = torch.cat([boxes_t, scores_t[:,None], classes_t[:,None].float()], dim=1)
 
                 preds = Results(
@@ -330,7 +329,6 @@ class OptimizedStreamer(Streamer):
                     path=f"image_{frame_ids[self.seen]}.jpg",
                     names=self.converter.class_names,
                     boxes=inf_results, 
-                    # boxes=inf_results.T,
                     speed={}
                 )
 

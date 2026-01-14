@@ -67,6 +67,9 @@ class Streamer(ABC):
         self.model: Any = None 
         self.stride: Any = None 
         self.imgsz: Any = None 
+        self.cropped_imgsz:Any = None
+        self.original_imgsz:Any = None 
+        self.use_roi:bool = False
         self.device: Any = None 
         self.dataset: Any = None
         self.plotted_img: Any = None 
@@ -233,7 +236,6 @@ class Streamer(ABC):
 
         string = "" 
         
-        pdb.set_trace()
         # # Ensure batch dimension
         if isinstance(im, list): 
             im = np.array(im) 
