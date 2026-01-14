@@ -32,10 +32,15 @@ class Application:
     the hardware utilization and the memory usage.
     """
 
-    def __init__(self, source:Any, model_name:str='yolov8s', opt='tracking', model_type='YOLO', save:bool=False, verbose:bool=False):
+    def __init__(self, model_name:str='yolov8s', opt='tracking', model_type='YOLO', save:bool=False, verbose:bool=False):
 
-        self.source = source 
+        self.source:str = ""
         self.model_name:str = model_name
+        
+        if not self.model_name.endswith('.pt') or  not self.model_name.endswith('.onnx') or self.model_name.endswith('.engine'): 
+            raise TypeError("The model is imperative to be either .pt, .onnx or .engine format.")
+
+
         self.opt = opt 
         self.model_type = model_type 
         self.save_outputs = save

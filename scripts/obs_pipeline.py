@@ -18,10 +18,10 @@ remove_logger("matplotlib.font_manager")
 def main():
 
     logger.debug("--- Initializing Application ---")
-
+    # assets/compressed_models/onnx/yolov8s_dynamic_640_bz_16_simplified.onnx
     argparser = argparse.ArgumentParser(description=__doc__)
-    argparser.add_argument('--model_name', metavar='M', default='trt', help='Model to use (Yolov5, Yolov8 (Default), MaskRCNN, ONNX (yolov5, yolov8))')
-    argparser.add_argument('--source', metavar='SO', default='samples/highway.mp4', help='Source to use - Local video path (.mp4) or stream index (key needs to be provided)')
+    argparser.add_argument('--model_name', metavar='M', default='assets/compressed_models/yolov8s_dynamic_640_bz_16_simplified.onnx', help='Model to use (Yolov5, Yolov8 (Default), MaskRCNN, ONNX (yolov5, yolov8))')
+    argparser.add_argument('--video_source', metavar='SO', default='samples/highway.mp4', help='Source to use - Local video path (.mp4) or stream index (key needs to be provided)')
     argparser.add_argument('--type', metavar='T', default='tracking', help='Use tracking with bytetracker or simple detection (recommended to leave default value)')
     argparser.add_argument('--gui', metavar='G', action=argparse.BooleanOptionalAction, help='Use GUI to select video source and model')
     argparser.add_argument('--mqtt',metavar='M', action=argparse.BooleanOptionalAction, help='Use MQTT to send data to server')
@@ -35,13 +35,15 @@ def main():
     argparser.add_argument('--fep', metavar='F', action=argparse.BooleanOptionalAction, help='Use of FishEye Projection based on camera')
     argparser.add_argument('--bench', metavar='BM', action=argparse.BooleanOptionalAction, help='Benchmark the Performance of the model and hardware.')
     argparser.add_argument('--bench-labels', metavar='BL', default='samples/labels', help="Submit the label path for GT")
+    argparser.add_argument('--use_TRT', metavar='TRT', action=argparse.BooleanOptionalAction, help='Use TensorRT engine for model inference (works only with either, model.engine or model.onnx)')
+
 
     if len(sys.argv) < 1:
          argparser.print_help()
          return
     
     args = argparser.parse_args()
-
+    
     try: 
         if args.bench and not os.path.exists(args.bench_labels): 
             raise ValueError("Submit a correct path for the GT labels, that matches the video") 
@@ -50,23 +52,35 @@ def main():
  
     logger.warning("WARNING: If you change the input video source, adjust the background subtractor image. Otherwise, it will classify all frames without movement")
 
+    if args.use_TRT and not (args.model_name.split('/')[-1].endswith('onnx') or args.model_name.split('/')[-1].endswith('engine')): 
+        raise TypeError("Can't use TRT if the model is not in ONNX or TRT format. Check ultralytics guide for more information: https://docs.ultralytics.com/modes/export/")
+
+    if not args.use_TRT and args.model_name.split('/')[-1].endswith('engine'): 
+        raise TypeError("Can't use TRT model without passing use_TRT. You can pass this argument with python3 scripts/obs_pipeline.py --use_TRT")
+
     if args.gui: 
         gui_connector(args.host_address, args.port_address)   
      
+   
+
+    # Check that the model name responds to the models approved for this application (Yolov5-v8) 
+    #config['model_name'], config['model_type'] 
+    model_specification = check_model_name(
+        model=args.model_name,
+        model_dirs=["assets/compressed_models"], 
+        must_exist=True
+    )
+    pdb.set_trace()
+
     config = {
-        'model_name':args.model_name,
+        'model_name':model_specification.name+"."+model_specification.kind,
         'stream':True, 
-        'source':args.source, 
-        'model_type':None, 
+        'source':args.video_source, 
+        'model_type':model_specification.kind, 
         'opt':args.type,
         'save':args.save if args.save is not None else False, 
         'verbose':args.verbose if args.verbose is not None else False
     }   
-
-    model_key = config['model_name'].lower()
-
-    # Check that the model name responds to the models approved for this application (Yolov5-v8) 
-    config['model_name'], config['model_type'] = check_model_name(model_key=model_key, condition= config['opt'])
 
     #Initialize the application module that interfaces source, model, mqtt and logic module 
     app = Application(

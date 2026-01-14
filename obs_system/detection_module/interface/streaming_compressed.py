@@ -174,7 +174,7 @@ class OptimizedStreamer(Streamer):
     @mem_profile
     def _stream_inference_impl(self, **kwargs): 
 
-        FPS_WINDOW = 100                    # sliding window size
+        FPS_WINDOW = 100  # sliding window size
         fps_times = collections.deque(maxlen=FPS_WINDOW)
         fps=0
         stream_start = time.perf_counter()
@@ -274,7 +274,11 @@ class OptimizedStreamer(Streamer):
                 if self.seen == 0 and self.args.verbose: 
                     with profile(activities=activities) as prof:
                         (i_boxes, i_scores, i_classes), event = self.model(images, orig_imgs=original_images, debug=self.args.verbose)
-                    prof.export_chrome_trace(f"trace_{model}.json")
+                    
+                    if not os.path.exists("assets/trace_jsons"):
+                        os.mkdir("assets/trace_jsons")
+                    
+                    prof.export_chrome_trace(f"assets/trace_jsons/trace_{model}.json")
                 else: 
                     (i_boxes, i_scores, i_classes), event = self.model(images, orig_imgs=original_images, debug=self.args.verbose)
 

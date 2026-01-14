@@ -1,3 +1,5 @@
+from __future__ import annotations 
+
 import re
 import subprocess
 import glob
@@ -8,12 +10,22 @@ import socket
 import numpy as np
 import torch 
 
-from typing import List
+from typing import List, Dict, Iterable, Optional, Union, Literal 
 from pathlib import Path
 from torchvision.ops import batched_nms, nms
 from typing import Dict, Any, Optional
-
+from dataclasses import dataclass 
 from ultralytics.engine.model import Results
+
+ModelKind = Literal['pt', 'onnx', 'engine']
+
+@dataclass(frozen=True) 
+class ModelSpecification: 
+    kind:ModelKind 
+    name:str 
+    path:Optional[Path]
+    resolved_from:Literal["path", "alias", "auto"]
+
 
 # check the existence of GPU 
 def check_nvidia_existence(): 
@@ -42,55 +54,102 @@ def find_available_port(start_port=8000, max_attempts=10):
     return None 
 
 
-def check_model_name(model_key:str,condition:str): 
+def check_model_name(model:Union[str,Path], *, model_dirs:Optional[Iterable[Union[str,Path]]]=None, aliases:Optional[Dict[str,str]]=None, prefer_ext:tuple[str, ...]=('.pt', '.onnx', '.engine'), must_exist:bool=False): 
+        
+    default_aliases = {
+        'pt':"yolov8s.pt", 
+        'yolo':"yolov8s.pt", 
+        'YOLO':"yolov8s.pt",
+        'v8':"yolov8s.pt",
+        'yolov8':"yolov8s.pt",
+        'onnx':"yolov8s.onnx", 
+        'trt': "yolov8s.onnx", 
+        'compressed': "yolov8s.onnx",
+        'TRT':"yolov8s.onnx", 
+        'ONNX':"yolov8s.onnx", 
+        'engine': "yolov8s.onnx"
+    }
+        
+    alias_map: Dict[str, str] = {**default_aliases, **(aliases or {})}
+    raw = str(model).strip()
+    p = Path(raw)
+    is_path_like = bool(p.suffix) or ("/" in raw) or ("\\" in raw)
+        
+    def kind_from_suffix(sfx: str) -> ModelKind:
+        sfx = sfx.lower()
+        if sfx == ".pt":
+            return "pt"
+        if sfx == ".onnx":
+            return "onnx"
+        if sfx == ".engine":
+            return "engine"
+        raise ValueError(f"Unsupported model extension: {sfx!r} (expected .pt, .onnx, .engine)")
 
-    model_validation = {
-        'yolo': ('autoshape', 'yolov8s'),
-        'yolov5': ('autoshape', 'yolov5s'),
-        'yolov8': ('autobackbone', 'yolov8s'),
-        'yolov5s': ('autoshape', 'yolov5s'),
-        'yolov8s': ('autobackbone', 'yolov8s'),
-        'yolov5n': ('autoshape', 'yolov5n'),
-        'yolov8n': ('autobackbone', 'yolov8n'),
-        'yolo5': ('autoshape', 'yolov5n'),
-        'yolo8': ('autobackbone', 'yolov8s'),
-        'yolov5m': ('autoshape', 'yolov5m'),
-        'yolov8m': ('autobackbone', 'yolov8m'),
-        'onnx' : ('compressed', 'onnx'), 
-        'compressed' : ('compressed', 'onnx'), 
-        'trt':('trt', 'engine'),
-        'trt-onnx':('trt', 'onnx')
-    }
-    model_validation_2 = {
-        'yolo': ('YOLO', 'yolov8s'),
-        'yolov5': ('YOLO', 'yolov5s'),
-        'yolov8': ('YOLO', 'yolov8s'),
-        'yolov5s': ('YOLO', 'yolov5s'),
-        'yolov8s': ('YOLO', 'yolov8s'),
-        'yolov5n': ('YOLO', 'yolov5n'),
-        'yolov8n': ('YOLO', 'yolov8n'),
-        'yolo5': ('YOLO', 'yolov5n'),
-        'yolo8': ('YOLO', 'yolov8s'),
-        'yolov5m': ('YOLO', 'yolov5m'),
-        'yolov8m': ('YOLO', 'yolov8m'),
-        'onnx' : ('compressed', 'onnx'), 
-        'compressed' : ('compressed', 'onnx') ,
-        'trt':('trt', 'engine'), 
-        'trt-onnx':('trt', 'onnx')
-    }
+    if is_path_like:
+        # Direct path case
+        path = p.expanduser()
+        kind = kind_from_suffix(path.suffix)
+        name = path.stem
+        if must_exist and not path.exists():
+            raise FileNotFoundError(f"Model path not found: {path}")
+        return ModelSpecification(kind=kind, name=name, path=path, resolved_from="path")
+
+    # Alias case
+    alias = raw.lower()
+
+    # Resolve alias chain (alias -> alias -> filename)
+    seen = set()
+    target = alias
+    while target in alias_map:
+        if target in seen:
+            raise ValueError(f"Alias loop detected while resolving {alias!r}")
+        seen.add(target)
+        target = alias_map[target].strip()
+
+    target_path = Path(target)
+
+    model_dirs_list = [Path(d).expanduser() for d in (model_dirs or [Path.cwd()])]
     
-    if condition == 'tracking': 
-        if model_key in model_validation_2: 
-            return model_validation_2[model_key][1], model_validation_2[model_key][0]
-        else: 
-            raise ValueError("No valid model was provided...\nUse 'yolov8' as an example")
+    if target_path.suffix:
+        # It might be a filename or a relative path; try resolving via model_dirs if not absolute
+        if target_path.is_absolute():
+            resolved = target_path
+        else:
+            # If target includes subdirs, join directly with each model_dir
+            candidates = [d / target_path for d in model_dirs_list]
+            resolved = next((c for c in candidates if c.exists()), candidates[0])
 
-    else: 
+        kind = kind_from_suffix(resolved.suffix)
+        name = resolved.stem
+        if must_exist and not resolved.exists():
+            raise FileNotFoundError(f"Model alias {alias!r} resolved to missing file: {resolved}")
+        return ModelSpecification(kind=kind, name=name, path=resolved, resolved_from="alias")
 
-        if model_key in model_validation:
-                return model_validation[model_key][1], model_validation[model_key][0]
-        else: 
-            raise ValueError("No valid model was provided...\nUse 'yolov8' as an example")
+    candidates = []
+    for d in model_dirs_list:
+        for ext in prefer_ext:
+            candidates.append(d / f"{target}{ext}")
+            candidates.append(d / f"{alias}{ext}")
+
+    resolved = next((c for c in candidates if c.exists()), None)
+   
+    if resolved is None:
+        # Can't resolve to an existing file; return "best guess" with the first preferred ext
+        guess = model_dirs_list[0] / f"{target}{prefer_ext[-1]}"  # default to .pt as last
+        # Better: if your prefer_ext has .pt last, use .pt; if not, use first.
+        guess = model_dirs_list[0] / f"{target}{prefer_ext[-1] if '.pt' in prefer_ext else prefer_ext[0]}"
+        kind = kind_from_suffix(guess.suffix)
+        if must_exist:
+            raise FileNotFoundError(
+                f"Could not resolve model alias {alias!r}. Tried:\n" +
+                "\n".join(str(c) for c in candidates[:12]) +
+                ("\n..." if len(candidates) > 12 else "")
+            )
+        return ModelSpecification(kind=kind, name=target, path=guess, resolved_from="auto")
+
+    kind = kind_from_suffix(resolved.suffix)
+    name = resolved.stem
+    return ModelSpecification(kind=kind, name=name, path=resolved, resolved_from="auto")
 
 
 def get_frame_ids(labels:List[str])->List[int]: 

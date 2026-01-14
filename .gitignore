@@ -46,3 +46,4 @@ Lanes_Overlay.png
 lanes_final.png
 samples/fisheye8k_large.png
 cprofile.txt
+obs_system/compressed/compressed_models/*
