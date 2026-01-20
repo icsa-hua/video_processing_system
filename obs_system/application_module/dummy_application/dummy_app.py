@@ -12,13 +12,15 @@ from obs_system.utils.logger import get_logger
 from obs_system.utils.appraisal import perf, frame_list 
 
 import os 
+import pdb
 import numpy as np
 import psutil 
 import pynvml
 import time 
 import tracemalloc 
 
-from typing import Any
+from pathlib import Path
+from typing import Any, Optional
 from collections import defaultdict
 from ultralytics.utils import DEFAULT_CFG
 
@@ -32,20 +34,12 @@ class Application:
     the hardware utilization and the memory usage.
     """
 
-    def __init__(self, model_name:str='yolov8s', opt='tracking', model_type='YOLO', save:bool=False, verbose:bool=False):
+    def __init__(self, save:bool=False, verbose:bool=False):
 
         self.source:str = ""
-        self.model_name:str = model_name
-        
-        if not self.model_name.endswith('.pt') or  not self.model_name.endswith('.onnx') or self.model_name.endswith('.engine'): 
-            raise TypeError("The model is imperative to be either .pt, .onnx or .engine format.")
-
-
-        self.opt = opt 
-        self.model_type = model_type 
         self.save_outputs = save
         self.verbose_outputs = verbose 
-
+        self.use_TRT=None
         self.model = None
         self.parent_path:str =  os.getcwd()
         self.mqtt:bool = False
@@ -58,62 +52,64 @@ class Application:
     def get_streaming_detector(self, model_name:str):
         
         # Associate the model from the model key to the corresponding streaming function. 
+        model_name_ending = model_name.split('.')[-1]
+        # set_object_detector_func = {
+        #     "yolov5s": self.yolov5_streaming,
+        #     "yolov5n": self.yolov5_streaming,
+        #     "yolov5m": self.yolov5_streaming,
+        #     "yolov8s": self.yolov8_streaming,
+        #     "yolov8n": self.yolov8_streaming,
+        #     "yolov8m": self.yolov8_streaming, 
+        #     "onnx":    self.onnx_streaming, 
+        #     "compressed": self.onnx_streaming, 
+        #     "yolov8.onnx": self.onnx_streaming, 
+        #     "trt": self.trt_streaming,
+        #     "engine":self.trt_streaming
+        # }
+
         set_object_detector_func = {
-            "yolov5s": self.yolov5_streaming,
-            "yolov5n": self.yolov5_streaming,
-            "yolov5m": self.yolov5_streaming,
-            "yolov8s": self.yolov8_streaming,
-            "yolov8n": self.yolov8_streaming,
-            "yolov8m": self.yolov8_streaming, 
-            "onnx":    self.onnx_streaming, 
-            "compressed": self.onnx_streaming, 
-            "yolov8.onnx": self.onnx_streaming, 
-            "trt": self.trt_streaming,
-            "engine":self.trt_streaming
+            "onnx":self.onnx_streaming if not self.use_TRT else self.trt_streaming,
+            "engine": self.trt_streaming, 
+            "pt": self.yolov8_streaming
         }
 
-        return set_object_detector_func.get(model_name, lambda *args:None)
+        return set_object_detector_func.get(model_name_ending, lambda *args:None)
      
 
-    def yolov5_streaming(self, opt:str):
+    # def yolov5_streaming(self, model_name, path_to_load:Optional[str|Path]):
+    #
+    #     # Check the model version. If the perscribed model is not lower than the medium version then default to the nano version. 
+    #     self.streamer = Yolov5Streamer(DEFAULT_CFG, {}, None)
+    #     self.streamer.setup_model(model=model_name, path_to_load=path_to_load)
+    #     self.model = self.streamer.model
+    #     
+    #     logger.debug(f"-- Streaming Through {model_name} found in {path_to_load}. --")
+
+
+    def yolov8_streaming(self, model_name, path_to_load:Optional[str|Path]):
 
         # Check the model version. If the perscribed model is not lower than the medium version then default to the nano version. 
-        model_weights = self.model_name + ".pt" 
-        self.streamer = Yolov5Streamer(DEFAULT_CFG, {}, None)
-        self.streamer.setup_model(model=model_weights, opt=opt)
-        self.model = self.streamer.model
-        
-        logger.debug(f"-- Streaming Through YoloV5 models --")
-
-
-    def yolov8_streaming(self, opt:str):
-
-        # Check the model version. If the perscribed model is not lower than the medium version then default to the nano version. 
-        model_weights = self.model_name + ".pt"
         self.streamer = Yolov8Streamer(DEFAULT_CFG, {}, None)
-        self.streamer.setup_model(model=model_weights, opt=opt)
+        self.streamer.setup_model(model_name=model_name, path_to_load=path_to_load)
         self.model = self.streamer.model
 
-        logger.debug(f"-- Streaming Through YoloV8 models --")
+        logger.debug(f"-- Streaming Through {model_name} found in {path_to_load}. --")
 
     
-    def onnx_streaming(self, opt:str): 
-
-        model_weights = self.model_name + ".onnx" 
+    def onnx_streaming(self,model_name, path_to_load:Optional[str|Path]):
         self.streamer = OnnxY8Streamer(DEFAULT_CFG, {}, None) 
-        self.streamer.setup_model(model=model_weights, opt=opt) 
+        self.streamer.setup_model(model_name=model_name, path_to_load=path_to_load) 
         self.model = self.streamer.model 
 
-        logger.debug(f"-- Streaming Through ONNX YOLO8S models --")
+        logger.debug(f"-- Streaming Through {model_name} found in {path_to_load}. --")
 
 
-    def trt_streaming(self, opt:str): 
-        model_weights = self.model_name + ".engine" if not self.model_name.endswith('.csv') else self.model_name + '.onnx'
+    def trt_streaming(self,model_name, path_to_load:Optional[str|Path]): 
         self.streamer = TensorRTRTXStreamer(DEFAULT_CFG, {}, None)
-        self.streamer.setup_model(model=model_weights, opt=opt)
+        self.streamer.setup_model(model_name=model_name, path_to_load=path_to_load)
         self.model = self.streamer.model
 
-        logger.debug(f"-- Streaming Through TRT Engine --")
+        logger.debug(f"-- Streaming Through {model_name} found in {path_to_load}. --")
 
 
     def setup_process(self, args): 
@@ -126,8 +122,8 @@ class Application:
             self.handle = pynvml.nvmlDeviceGetHandleByIndex(0)
         
         self.process_memory = psutil.Process(os.getpid())
-        
-        self.source = os.path.join(self.parent_path, self.source) if os.path.isfile(self.source) else self.source
+        self.source = os.path.join(self.parent_path, args.video_source) if args.video_source else self.source
+        self.use_TRT = args.use_TRT if args.use_TRT is not None else False
         self.mqtt = args.mqtt if args.mqtt is not None else False 
         self.start_time = time.time()
 
@@ -143,11 +139,28 @@ class Application:
         tracemalloc.start()
 
 
-    def setup_model(self, stream, opt:str="tracking"):
-       
-        self.stream = stream
-        setup_func = self.get_streaming_detector(self.model_name)
-        return setup_func(opt)
+    def setup_model(self,
+                    model_name:str="yolov8s.onnx",
+                    path_to_load:Optional[str|Path]="assets/compressed_models",
+                    opt:str="tracking"):
+
+        if path_to_load is None: 
+            raise TypeError("path_to_load cannot be None")
+
+        if not model_name.endswith('.pt') and  not model_name.endswith('.onnx') and model_name.endswith('.engine'): 
+            raise TypeError("The model is imperative to be either .pt, .onnx or .engine format.")
+
+        if path_to_load=="":
+            if not os.path.exists(model_name):
+                raise FileNotFoundError("model_name was passed as the path, and it does not exist") 
+            else: 
+                path_to_load = model_name
+        else: 
+            if not os.path.exists(path_to_load): 
+                raise FileNotFoundError(path_to_load)
+
+        setup_func = self.get_streaming_detector(model_name)
+        setup_func(model_name,path_to_load)
         
  
     def setup_logic_module(self, args): 
@@ -167,7 +180,7 @@ class Application:
         self.statistics()
 
         process_video_func = self.process_stream
-        process_video_func(model=self.model_name, producer_flag=producer_flag, queue=queue)
+        process_video_func(producer_flag=producer_flag, queue=queue)
         perf.finalize() 
         stats = perf.results() 
 
@@ -185,7 +198,7 @@ class Application:
         return 
 
 
-    def process_stream(self, model, producer_flag=None, queue=None):
+    def process_stream(self, producer_flag=None, queue=None):
         logger.debug("-- Starting the video streaming process --")
 
         # Streaming the video as before
@@ -196,7 +209,7 @@ class Application:
 
         self.streamer(
             source=self.source,
-            model=model,
+            model=self.model,
             logic_module=self.logic_module,
             mqtt_broker=self.mqtt_interface,
             producer_flag=producer_flag, 

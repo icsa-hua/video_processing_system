@@ -8,7 +8,6 @@ from obs_system.utils.appraisal import StepContext, frame_list
 from obs_system.utils.common import _empty_dets_numpy, _empty_results, empty_image
 from obs_system.utils.global_config import CONF_THR, NMS_IOU, WARM_UP_SESSIONS, BATCH_SIZE, MIN_WH, MULTIPLIER
 
-
 import pdb
 import time 
 import torch
@@ -82,11 +81,10 @@ class TensorRTRTXStreamer(OptimizedStreamer):
         return super().postprocess(preds, orig_image) 
 
 
-    def setup_model(self, model, opt='tracking'): 
+    def setup_model(self, model_name:str="", path_to_load:str="", opt='tracking'): 
         device = select_device(self.args.device, verbose=self.args.verbose) 
-        pdb.set_trace()
-        model_path = 'obs_system/compressed/yolov8s_dynamic_640_bz_16_simplified.onnx'
-        self.model = TensorRTYOLO(engine_path=model_path, fp16=True)
+        
+        self.model = TensorRTYOLO(model_name=model_name, engine_path=path_to_load, fp16=True)
 
         [self.height, self.width] = self.model.input_height, self.model.input_width 
 
@@ -97,7 +95,9 @@ class TensorRTRTXStreamer(OptimizedStreamer):
         self.stride = 32 if not self.args.half else 16
 
         if self.args.verbose: 
-            logger.info(f"[checked] Model {model} successfully set up")
+            logger.info(f"[checked] Model {model_name} successfully set up")
+        else: 
+            logger.debug(f"[checked]  Model {model_name} successfully set up")
 
 
     @smart_inference_mode()

@@ -46,7 +46,7 @@ class YOLOInt8Calibrator(trt.IInt8Calibrator):
 
 class TensorRTYOLO:
 
-    def __init__(self, engine_path, conf_thres=0.5, iou_thres=0.5, fp16=False, int8=False, strip_weights=False, calibration_data=None):
+    def __init__(self, model_name:str, engine_path, conf_thres=0.5, iou_thres=0.5, fp16=False, int8=False, strip_weights=False, calibration_data=None):
         
         if int8 and calibration_data is None:
             raise ValueError("calibration_data must be provided for INT8 mode")
@@ -74,21 +74,20 @@ class TensorRTYOLO:
         #self.__synchronization_flag =  False
         # Runtime Phase: As per https://docs.nvidia.com/deeplearning/tensorrt-rtx/latest/inference-library/python-api-docs.html#create-network-python
 
-        _model = engine_path.split('/')[-1]
-        _model = _model.split('.')[0] 
-
+        _model = model_name.split('.')[0]
         # Load TensorRT engine
-        logger.debug(f"Loading TensorRT engine from {engine_path} ...")
 
-        save_path = os.getcwd() + f"/obs_system/compressed/{_model}_mixed_batch_trt_{'fp16' if self.__fp16 else 'nofp16'}_{'int8' if self.__int8 else 'noint8'}.engine"
+        save_path = os.getcwd() + f"/assets/compressed_models/{_model}_mixed_batch_trt_{'fp16' if self.__fp16 else 'nofp16'}_{'int8' if self.__int8 else 'noint8'}.engine"
         if not os.path.exists(save_path): 
             self.__build_engine__(engine_path, save_path)
             self.__load_engine__(load_path=save_path)
+
             # self.__set_stream(runtime_input_shape=(32,3, 640, 640))
         else: 
             self.__load_engine__(load_path=save_path)
             # self.__set_stream(runtime_input_shape=(32,3,640,640))
         
+        logger.debug(f"Loaded TensorRT engine from {engine_path} ...")
 
     def __call__(self, image, orig_imgs=None, debug=False):
         return self.detect_objects(image, orig_imgs, debug=debug)
@@ -99,7 +98,8 @@ class TensorRTYOLO:
 
 
     def __build_engine__(self, engine_path, save_path:str): 
-        
+            
+            logger.info(f"Requiring to build the engine as it not found {engine_path}")
             # TensorRT Optimizer
             builder = trt.Builder(self.__TRT_LOGGER) 
 

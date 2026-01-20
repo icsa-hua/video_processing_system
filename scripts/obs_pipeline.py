@@ -61,22 +61,19 @@ def main():
     if args.gui: 
         gui_connector(args.host_address, args.port_address)   
      
-   
-
     # Check that the model name responds to the models approved for this application (Yolov5-v8) 
-    #config['model_name'], config['model_type'] 
     model_specification = check_model_name(
         model=args.model_name,
         model_dirs=["assets/compressed_models"], 
         must_exist=True
     )
-    pdb.set_trace()
+
 
     config = {
         'model_name':model_specification.name+"."+model_specification.kind,
-        'stream':True, 
+        'path_to_load': model_specification.path,
+        'use_TRT': args.use_TRT,
         'source':args.video_source, 
-        'model_type':model_specification.kind, 
         'opt':args.type,
         'save':args.save if args.save is not None else False, 
         'verbose':args.verbose if args.verbose is not None else False
@@ -84,21 +81,17 @@ def main():
 
     #Initialize the application module that interfaces source, model, mqtt and logic module 
     app = Application(
-        source = config['source'],
-        model_name = config['model_name' ], 
-        opt=config['opt'],
-        model_type=config['model_type'], 
         save=config['save'], 
         verbose=config['verbose']
     )
 
     with StepContext(name='Setup Process', catch=(KeyError, ModuleNotFoundError)):
         app.setup_process(args) 
-
+    
     with StepContext(name='Setup Model', catch=(OSError,ValueError)):
         app.setup_model(
-            stream=config['stream'],
-            opt=config['opt']
+            model_name=config['model_name'],
+            path_to_load=config['path_to_load'], 
         )
 
     # length_of_film = 0

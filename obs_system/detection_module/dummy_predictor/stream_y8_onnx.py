@@ -101,7 +101,7 @@ class OnnxY8Streamer(OptimizedStreamer):
             )
     
 
-    def setup_model(self, model, opt='tracking'): 
+    def setup_model(self, model_name, path_to_load, opt='tracking'): 
 
         device = select_device(self.args.device, verbose=self.args.verbose) 
 

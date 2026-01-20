@@ -87,7 +87,7 @@ class OptimizedStreamer(Streamer):
         return super().postprocess(preds, orig_image=orig_image) 
 
 
-    def setup_model(self, model:str, opt:str)->None:
+    def setup_model(self, model_name:str, path_to_load:Optional[str|Path], opt:str)->None:
         pass 
 
 
