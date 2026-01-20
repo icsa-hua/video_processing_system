@@ -9,6 +9,7 @@ from obs_system.utils.common import _empty_dets_numpy, _empty_results, empty_ima
 from obs_system.utils.global_config import CONF_THR, NMS_IOU, WARM_UP_SESSIONS, BATCH_SIZE, MIN_WH, MULTIPLIER
 
 import pdb
+import collections
 import time 
 import torch
 import cv2
@@ -107,6 +108,13 @@ class TensorRTRTXStreamer(OptimizedStreamer):
 
     @mem_profile
     def _stream_inference_impl_tiles(self, **kwargs)->Generator[Optional[Any], None, None]: 
+        FPS_WINDOW = 100  # sliding window size
+        fps_times = collections.deque(maxlen=FPS_WINDOW)
+        fps=0
+        stream_start = time.perf_counter()
+        last_fps_log = stream_start
+        total_frames = 0
+
         model = kwargs["model"] 
         producer_flag  = kwargs["producer_flag"] 
         queue_list = kwargs["queue_list"]
@@ -135,14 +143,14 @@ class TensorRTRTXStreamer(OptimizedStreamer):
                 self.model.warmup(micro=micro, warmup_sessions=WARM_UP_SESSIONS)
                 self.done_warmup = True
 
-        use_roi = True if self.logic_module is not None and self.logic_module["ROI"] is not None else False 
+        # use_roi = True if self.logic_module is not None and self.logic_module["ROI"] is not None else False 
 
         metas0 = [None]*micro 
         host0 = np.empty((micro, self.imgsz[0], self.imgsz[1], 3), np.uint8) 
         tbuf = torch.empty((micro, 3, self.imgsz[0], self.imgsz[1]), device=self.device, dtype=torch.float32)
         
         # Generators 
-        frame_iter = self.iter_data(use_roi=use_roi)
+        frame_iter = self.iter_data(use_roi=self.use_roi)
         tile_stream = self._frames_to_tiles(frame_iter, tile_size=self.imgsz[0], overlap_ratio=overlap_ratio)
 
         pending = {} 

@@ -467,10 +467,10 @@ class OptimizedStreamer(Streamer):
                 yield t, m
 
 
-    def iter_data(self, use_roi:bool): 
+    def iter_data(self): 
 
         """ Yields (frame_id, image) lazily from self.dataset after ROI + MOG2 gating """
-
+        
         self.dataset = iter(self.dataset) 
         while True: 
             try: 
@@ -480,21 +480,39 @@ class OptimizedStreamer(Streamer):
 
             _, im0s, s = self.batch 
             frame_ids = get_frame_ids(labels=s) 
- 
-            with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
-                if use_roi: 
+            original_images = im0s.copy() 
+            if self.use_roi:
+                with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
                     im0s = self.logic_module['ROI'].crop_image(im0s)
 
             with StepContext(name="FishEyE Processing (Defish)", catch=(RuntimeError, ), verbose=self.args.verbose):    
                 # Defish FishEye camera frames to increase accuracy
                 if self.logic_module["FEP"] is not None: 
+                    Streamer.logger.debug("FEP enabled")
                     im0s = self.logic_module["FEP"]._defish(im0s)
 
             with StepContext(name="BackGround Subtractor (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
                 # Motion gate (vectorized over the mini batch) 
-                mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False) 
-                if  lanes_final is not None and len(lanes_final) != 0 : 
+                mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False)
+                if lanes_final is not None: 
                     self.lanes_final = lanes_final
+
+            if not any(mfgs):
+                print("No motion detected in the batch - skipping inference")
+                empty_preds = return_no_motion_frames(
+                    im0s=im0s,
+                    batch_size=BATCH_SIZE 
+                )
+                yield empty_preds 
+
+                self._publish_mqtt_message_no_detection(preds=empty_preds, frame_index=frame_ids)
+                continue 
+
+            for i, keep_frame in enumerate(mfgs):
+                if not keep_frame:
+                    im0s[i] = empty_image(im0s[i])
+                    original_images = empty_image(original_images[i])
+
 
             if self.args.bench and self.mp is not None: 
  
