@@ -56,6 +56,9 @@ class Subtractor(EventExtractorInterface):
         self.__calibration_started = False
         self.__calibration_ended = False
 
+        # Stores per-frame motion scores (foreground ratio) from the last detect() call
+        self.last_motion_scores = []  # list[float], same length as batch
+
 
     def warm_up(self, empty_background_image:Optional[np.ndarray], trials:int=TRIALS):
         if empty_background_image is None:
@@ -104,6 +107,7 @@ class Subtractor(EventExtractorInterface):
             self.__calibration_started = True 
 
         motion_flags = [] 
+        motion_scores = []
         lanes_final = None
         last_frame = batch[-1]
 
@@ -115,6 +119,7 @@ class Subtractor(EventExtractorInterface):
             motion_flag = self.__call_subtractor(frame, save_dir=save_dir, save_img=save_img, save_idx=save_idx)
 
             motion_flags.append(motion_flag)
+            motion_scores.append(getattr(self, '_last_motion_score', 0.0))
 
             if save_img and save_idx is not None: 
                 save_idx += 1 
@@ -126,6 +131,7 @@ class Subtractor(EventExtractorInterface):
             lanes_final = self.__apply_calibration(last_frame, save_img=save_img)
             self.accum_time = -1
 
+        self.last_motion_scores = motion_scores
         return motion_flags, lanes_final
         
 
@@ -138,6 +144,12 @@ class Subtractor(EventExtractorInterface):
         _,subtractor_mask = cv2.threshold(mask, 254, 255, cv2.THRESH_BINARY)
         subtractor_mask = cv2.morphologyEx(subtractor_mask, cv2.MORPH_OPEN, self.kernel3)
         subtractor_mask = cv2.morphologyEx(subtractor_mask, cv2.MORPH_CLOSE, self.kernel3)
+
+        # Motion score: foreground pixel ratio in [0,1]
+        motion_pixels = cv2.countNonZero(subtractor_mask)
+        total_pixels = float(subtractor_mask.shape[0] * subtractor_mask.shape[1])
+        motion_score = (motion_pixels / total_pixels) if total_pixels > 0 else 0.0
+        self._last_motion_score = motion_score
         contours, _ = cv2.findContours(subtractor_mask,cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         flag = False 
@@ -192,7 +204,6 @@ class Subtractor(EventExtractorInterface):
 
         mask_resized = cv2.resize(fgmask_clean, (w,h))
         blended = cv2.addWeighted(mask_resized.astype(np.float32), 0.6, self.prev_mask, 0.4, 0)
-
 
         self.prev_mask = blended
         self.acc_mask = cv2.add(self.acc_mask, blended) 

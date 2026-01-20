@@ -3,6 +3,7 @@ from obs_system.compressed.interface.compressed_yolo import CompressedYOLO
 from obs_system.compressed.interface.tensor_yolo import TensorRTYOLO
 from obs_system.detection_module.interface.streamer import Streamer
 from obs_system.utils.benchmarking.metrics.model_performance import ModelPerf
+from obs_system.utils.benchmarking.metrics.pc_performance import PerfLogger, SlidingCounter
 from obs_system.utils.global_config import BATCH_SIZE
 from obs_system.utils.appraisal import StepContext, frame_list
 from obs_system.utils.global_config import *
@@ -20,6 +21,7 @@ import queue
 import threading
 import collections 
 
+
 from typing import Union, List, Any, Generator, Optional
 from pathlib import Path 
 from memory_profiler import profile as mem_profile
@@ -30,6 +32,7 @@ from ultralytics.data.augment import LetterBox
 from ultralytics.utils.torch_utils import smart_inference_mode
 
 from ultralytics.utils import ops
+
 
 
 class OptimizedStreamer(Streamer): 
@@ -181,6 +184,15 @@ class OptimizedStreamer(Streamer):
         last_fps_log = stream_start
         total_frames = 0
 
+
+
+        perf_log_path = getattr(self.args, 'perf_log', None) or 'assets/perf_logs/perf_log.csv'
+        perf_logger = PerfLogger(perf_log_path)
+        infer_counter = SlidingCounter(window_s=1.0) 
+        batch_idx = 0 
+
+
+
         model = kwargs["model"] 
         producer_flag  = kwargs["producer_flag"] 
         queue_list = kwargs["queue_list"]
@@ -223,6 +235,15 @@ class OptimizedStreamer(Streamer):
         last_frame_id = None
 
         while True:
+
+
+            t_batch_start = time.perf_counter() 
+            roi_ms = 0.0
+            mog2_ms = 0.0
+            preprocess_ms = 0.0 
+            inference_ms = 0.0 
+            postprocess_ms = 0.0 
+
             self.batch = batch_queue.get()
             if self.batch is None:
                 break
@@ -236,11 +257,15 @@ class OptimizedStreamer(Streamer):
             #use_roi = True if self.args.roi and self.logic_module["ROI"] is not None else False 
             if self.use_roi :
                 with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
+                    _t0 = time.perf_counter() 
                     im0s = self.logic_module['ROI'].crop_image(im0s)
+                    roi_ms = (time.perf_counter() - _t0) * 1e3 
                     
             with StepContext(name="BackGround Subtractor  (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
                 # Motion gate (vectorized over the mini batch) 
+                _t0 = time.perf_counter() 
                 mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False)
+                mog2_ms = (time.perf_counter() - _t0) * 1e3 
                 if lanes_final is not None: 
                     self.lanes_final = lanes_final
 
@@ -258,6 +283,33 @@ class OptimizedStreamer(Streamer):
                     batch_size=BATCH_SIZE 
                 )
                 yield empty_preds 
+                
+                # ---- perf log (batch skipped) ----
+                t_now = time.perf_counter()
+                scores = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None)
+                avg_motion_score = float(np.mean(scores)) if scores else 0.0
+                motion_density = 0.0
+                fps_sliding = fps
+                total_ms = (t_now - t_batch_start) * 1e3
+                perf_logger.log({
+                    't_wall': t_now,
+                    'batch_idx': batch_idx,
+                    'frames_in_batch': len(im0s),
+                    'motion_density': motion_density,
+                    'avg_motion_score': avg_motion_score,
+                    'inference_ran': 0,
+                    'frames_inferred': 0,
+                    'roi_ms_per_frame': roi_ms / max(len(im0s), 1),
+                    'mog2_ms_per_frame': mog2_ms / max(len(im0s), 1),
+                    'preprocess_ms_per_frame': 0.0,
+                    'inference_ms_per_frame': 0.0,
+                    'postprocess_ms_per_frame': 0.0,
+                    'total_ms_per_frame': total_ms / max(len(im0s), 1),
+                    'fps_sliding': fps_sliding,
+                })
+                batch_idx += 1
+                # -------------------------------
+
 
                 self._publish_mqtt_message_no_detection(preds=empty_preds, frame_index=frame_ids)
                 continue # to the next batch 
@@ -267,9 +319,12 @@ class OptimizedStreamer(Streamer):
                     im0s[i] = empty_image(im0s[i])
                     original_images = empty_image(original_images[i])
 
+            _t0 = time.perf_counter()
             with profilers[0]: 
                 images = self.preprocess(im0s) 
+            preprocess_ms = (time.perf_counter() - _t0) * 1e3 
 
+            _t0 = time.perf_counter()
             with profilers[1]: 
                 if self.seen == 0 and self.args.verbose: 
                     with profile(activities=activities) as prof:
@@ -282,11 +337,14 @@ class OptimizedStreamer(Streamer):
                 else: 
                     (i_boxes, i_scores, i_classes), event = self.model(images, orig_imgs=original_images, debug=self.args.verbose)
 
+            inference_ms = (time.perf_counter() - _t0) * 1e3
+
             if model=='engine':
                 # End event and synchronize the engine after we don't need the tensors anymore 
                 # Transfer them into the CPU stream 
                 torch.cuda.current_stream().wait_event(event)
 
+            _tpost = time.perf_counter()
             for bni, (boxes, scores, cls_, orig_img) in enumerate(zip(i_boxes, i_scores, i_classes, original_images)): 
 
                 preds = None 
@@ -412,8 +470,39 @@ class OptimizedStreamer(Streamer):
                 
                     self._publish_mqtt_message(preds=preds, frame_index=self.seen) 
                     last_frame_id = current_frame_id 
-
+            postprocess_ms = (time.perf_counter() - _tpost) *1e3
             self.run_callbacks("on_predict_postprocess_end")
+
+            # ---- perf log (batch processed) ----
+            t_now = time.perf_counter()
+            frames_in_batch = len(im0s)
+            frames_inferred = int(sum(bool(x) for x in mfgs)) if 'mfgs' in locals() else 0
+            motion_density = (frames_inferred / frames_in_batch) if frames_in_batch else 0.0
+            scores = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None)
+            avg_motion_score = float(np.mean(scores)) if scores else 0.0
+            inference_ran = 1 if frames_inferred > 0 else 0
+            if inference_ran:
+                infer_counter.add(t_now, 1.0)  # one model call per batch
+            total_ms = (t_now - t_batch_start) * 1e3
+            perf_logger.log({
+                't_wall': t_now,
+                'batch_idx': batch_idx,
+                'frames_in_batch': frames_in_batch,
+                'motion_density': motion_density,
+                'avg_motion_score': avg_motion_score,
+                'inference_ran': inference_ran,
+                'frames_inferred': frames_inferred,
+                'roi_ms_per_frame': roi_ms / max(frames_in_batch, 1),
+                'mog2_ms_per_frame': mog2_ms / max(frames_in_batch, 1),
+                'preprocess_ms_per_frame': preprocess_ms / max(frames_in_batch, 1),
+                'inference_ms_per_frame': inference_ms / max(frames_in_batch, 1),
+                'postprocess_ms_per_frame': postprocess_ms / max(frames_in_batch, 1),
+                'total_ms_per_frame': total_ms / max(frames_in_batch, 1),
+                'fps_sliding': fps,
+            })
+            batch_idx += 1
+            # ----------------------------------
+           
             self.run_callbacks("on_predict_batch_end")
 
         producer_thread.join()
@@ -512,7 +601,6 @@ class OptimizedStreamer(Streamer):
                 if not keep_frame:
                     im0s[i] = empty_image(im0s[i])
                     original_images = empty_image(original_images[i])
-
 
             if self.args.bench and self.mp is not None: 
  
