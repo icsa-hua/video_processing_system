@@ -53,14 +53,15 @@ class PerfLogger:
         self._fp = open(self.csv_path, 'w', newline='')
         self._writer = csv.DictWriter(self._fp, fieldnames=[
             't_wall', 'batch_idx', 'frames_in_batch',
+            'res_w', 'res_h',
             'motion_density', 'avg_motion_score',
             'inference_ran', 'frames_inferred',
+            'infer_calls_per_sec',
+            'gpu_util', 'gpu_mem_used_mb', 'gpu_mem_total_mb',
+            'cpu_util',
             'roi_ms_per_frame', 'mog2_ms_per_frame',
             'preprocess_ms_per_frame', 'inference_ms_per_frame', 'postprocess_ms_per_frame',
             'total_ms_per_frame', 'fps_sliding'
-            'res_w', 'res_h',
-            'gpu_util', 'gpu_mem_used_mb', 'gpu_mem_total_mb',
-            'cpu_util', 'infer_calls_per_sec',
 
         ])
         self._writer.writeheader()
