@@ -184,8 +184,6 @@ class OptimizedStreamer(Streamer):
         last_fps_log = stream_start
         total_frames = 0
 
-
-
         # Performance logging (for plots: FPS vs motion density, inference calls/sec, latency breakdown)
         perf_log_path = getattr(self.args, 'perf_log', None) or 'assets/perf_logs/perf_log.csv'
         perf_logger = PerfLogger(perf_log_path)
@@ -264,27 +262,38 @@ class OptimizedStreamer(Streamer):
             frame_ids = get_frame_ids(labels=s)
             original_images = [cv2.cvtColor(im, cv2.COLOR_BGR2RGB) for im in im0s.copy()]
 
+            _t0, _t0_rel = 0.0,0.0
+
             res_h, res_w = im0s[0].shape[:2] if len(im0s) else (0, 0)
 
             #use_roi = True if self.args.roi and self.logic_module["ROI"] is not None else False 
             if self.use_roi :
                 with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
-                    _t0 = time.perf_counter()
-                    _t0_rel = _t0 - stream_start
+                    if self.args.plot_performance:
+                        _t0 = time.perf_counter()
+                        _t0_rel = _t0 - stream_start
+                    
                     im0s = self.logic_module['ROI'].crop_image(im0s)
-                    roi_ms = (time.perf_counter() - _t0) * 1e3
-                    _t1_rel = time.perf_counter() - stream_start
-                    timeline_logger.log_span(batch_idx, 'roi', _t0_rel, _t1_rel)
-                    res_h, res_w = im0s[0].shape[:2] if len(im0s) else (0, 0)
+                    
+                    if self.args.plot_performance:
+                        roi_ms = (time.perf_counter() - _t0) * 1e3
+                        _t1_rel = time.perf_counter() - stream_start
+                        timeline_logger.log_span(batch_idx, 'roi', _t0_rel, _t1_rel)
+                        res_h, res_w = im0s[0].shape[:2] if len(im0s) else (0, 0)
                     
             with StepContext(name="BackGround Subtractor  (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
                 # Motion gate (vectorized over the mini batch) 
-                _t0 = time.perf_counter()
-                _t0_rel = _t0 - stream_start
+                if self.args.plot_performance:
+
+                    _t0 = time.perf_counter()
+                    _t0_rel = _t0 - stream_start
+               
                 mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False)
-                mog2_ms = (time.perf_counter() - _t0) * 1e3
-                _t1_rel = time.perf_counter() - stream_start
-                timeline_logger.log_span(batch_idx, 'mog2', _t0_rel, _t1_rel)
+                
+                if self.args.plot_performance:
+                    mog2_ms = (time.perf_counter() - _t0) * 1e3
+                    _t1_rel = time.perf_counter() - stream_start
+                    timeline_logger.log_span(batch_idx, 'mog2', _t0_rel, _t1_rel)
                 if lanes_final is not None: 
                     self.lanes_final = lanes_final
 
@@ -302,70 +311,71 @@ class OptimizedStreamer(Streamer):
                     batch_size=BATCH_SIZE 
                 )
                 yield empty_preds 
-                
-                # ---- perf log (batch skipped) ----
-                t_now = time.perf_counter()
-                scores = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None)
-                avg_motion_score = float(np.mean(scores)) if scores else 0.0
-                motion_density = 0.0
-                fps_sliding = fps
-                total_ms = (t_now - t_batch_start) * 1e3
-                infer_calls_per_sec = infer_counter.rate(t_now)
-                perf_logger.log({
-                    't_wall': t_now,
-                    'batch_idx': batch_idx,
-                    'frames_in_batch': len(im0s),
-                    'res_w': res_w,
-                    'res_h': res_h,
-                    'motion_density': motion_density,
-                    'avg_motion_score': avg_motion_score,
-                    'inference_ran': 0,
-                    'frames_inferred': 0,
-                    'infer_calls_per_sec': infer_calls_per_sec,
-                    'gpu_util': gpu_stats.get('gpu_util', float('nan')),
-                    'gpu_mem_used_mb': gpu_stats.get('mem_used_mb', float('nan')),
-                    'gpu_mem_total_mb': gpu_stats.get('mem_total_mb', float('nan')),
-                    'cpu_util': cpu_stats.get('cpu_util', float('nan')),
-                    'roi_ms_per_frame': roi_ms / max(len(im0s), 1),
-                    'mog2_ms_per_frame': mog2_ms / max(len(im0s), 1),
-                    'preprocess_ms_per_frame': 0.0,
-                    'inference_ms_per_frame': 0.0,
-                    'postprocess_ms_per_frame': 0.0,
-                    'total_ms_per_frame': total_ms / max(len(im0s), 1),
-                    'fps_sliding': fps_sliding,
-                })
-            
-                # per-frame latency log (skipped inference)
-                scores_list = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None) or [0.0]*len(im0s)
-                per_roi = roi_ms / max(len(im0s), 1)
-                per_mog2 = mog2_ms / max(len(im0s), 1)
-                per_total = total_ms / max(len(im0s), 1)
-                for i, fid in enumerate(frame_ids):
-                    frame_logger.log({
+                if self.args.plot_performance:
+
+                    # ---- perf log (batch skipped) ----
+                    t_now = time.perf_counter()
+                    scores = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None)
+                    avg_motion_score = float(np.mean(scores)) if scores else 0.0
+                    motion_density = 0.0
+                    fps_sliding = fps
+                    total_ms = (t_now - t_batch_start) * 1e3
+                    infer_calls_per_sec = infer_counter.rate(t_now)
+                    perf_logger.log({
                         't_wall': t_now,
                         'batch_idx': batch_idx,
-                        'frame_id': int(fid) if str(fid).isdigit() else fid,
+                        'frames_in_batch': len(im0s),
                         'res_w': res_w,
                         'res_h': res_h,
-                        'motion_passed': 0,
-                        'motion_score': float(scores_list[i]) if i < len(scores_list) else 0.0,
+                        'motion_density': motion_density,
+                        'avg_motion_score': avg_motion_score,
+                        'inference_ran': 0,
+                        'frames_inferred': 0,
+                        'infer_calls_per_sec': infer_calls_per_sec,
                         'gpu_util': gpu_stats.get('gpu_util', float('nan')),
                         'gpu_mem_used_mb': gpu_stats.get('mem_used_mb', float('nan')),
+                        'gpu_mem_total_mb': gpu_stats.get('mem_total_mb', float('nan')),
                         'cpu_util': cpu_stats.get('cpu_util', float('nan')),
-                        'roi_ms': per_roi,
-                        'mog2_ms': per_mog2,
-                        'preprocess_ms': 0.0,
-                        'inference_ms': 0.0,
-                        'postprocess_ms': 0.0,
-                        'total_ms': per_total,
+                        'roi_ms_per_frame': roi_ms / max(len(im0s), 1),
+                        'mog2_ms_per_frame': mog2_ms / max(len(im0s), 1),
+                        'preprocess_ms_per_frame': 0.0,
+                        'inference_ms_per_frame': 0.0,
+                        'postprocess_ms_per_frame': 0.0,
+                        'total_ms_per_frame': total_ms / max(len(im0s), 1),
+                        'fps_sliding': fps_sliding,
                     })
+                
+                    # per-frame latency log (skipped inference)
+                    scores_list = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None) or [0.0]*len(im0s)
+                    per_roi = roi_ms / max(len(im0s), 1)
+                    per_mog2 = mog2_ms / max(len(im0s), 1)
+                    per_total = total_ms / max(len(im0s), 1)
+                    for i, fid in enumerate(frame_ids):
+                        frame_logger.log({
+                            't_wall': t_now,
+                            'batch_idx': batch_idx,
+                            'frame_id': int(fid) if str(fid).isdigit() else fid,
+                            'res_w': res_w,
+                            'res_h': res_h,
+                            'motion_passed': 0,
+                            'motion_score': float(scores_list[i]) if i < len(scores_list) else 0.0,
+                            'gpu_util': gpu_stats.get('gpu_util', float('nan')),
+                            'gpu_mem_used_mb': gpu_stats.get('mem_used_mb', float('nan')),
+                            'cpu_util': cpu_stats.get('cpu_util', float('nan')),
+                            'roi_ms': per_roi,
+                            'mog2_ms': per_mog2,
+                            'preprocess_ms': 0.0,
+                            'inference_ms': 0.0,
+                            'postprocess_ms': 0.0,
+                            'total_ms': per_total,
+                        })
 
-                # timeline span for skipped batch
-                timeline_logger.log_span(batch_idx, 'batch_total', t_batch_start - stream_start, t_now - stream_start, {
-                    'inference_ran': 0,
-                    'frames_in_batch': int(len(im0s)),
-                })
-                batch_idx += 1
+                    # timeline span for skipped batch
+                    timeline_logger.log_span(batch_idx, 'batch_total', t_batch_start - stream_start, t_now - stream_start, {
+                        'inference_ran': 0,
+                        'frames_in_batch': int(len(im0s)),
+                    })
+                    batch_idx += 1
 
 
                 self._publish_mqtt_message_no_detection(preds=empty_preds, frame_index=frame_ids)
@@ -376,16 +386,20 @@ class OptimizedStreamer(Streamer):
                     im0s[i] = empty_image(im0s[i])
                     original_images = empty_image(original_images[i])
 
-            _t0 = time.perf_counter()
-            _t0_rel = _t0 - stream_start
+            if self.args.plot_performance:
+                _t0 = time.perf_counter()
+                _t0_rel = _t0 - stream_start
+
             with profilers[0]: 
                 images = self.preprocess(im0s) 
-            preprocess_ms = (time.perf_counter() - _t0) * 1e3 
-            timeline_logger.log_span(batch_idx, 'preprocess', _t0_rel, time.perf_counter() - stream_start)
+                            
+            if self.args.plot_performance:
+                preprocess_ms = (time.perf_counter() - _t0) * 1e3 
+                timeline_logger.log_span(batch_idx, 'preprocess', _t0_rel, time.perf_counter() - stream_start)
 
-
-            _t0 = time.perf_counter()
-            _t0_rel = _t0 - stream_start
+            if self.args.plot_performance:
+                _t0 = time.perf_counter()
+                _t0_rel = _t0 - stream_start
 
             with profilers[1]: 
                 if self.seen == 0 and self.args.verbose: 
@@ -398,9 +412,10 @@ class OptimizedStreamer(Streamer):
                     prof.export_chrome_trace(f"assets/trace_jsons/trace_{model}.json")
                 else: 
                     (i_boxes, i_scores, i_classes), event = self.model(images, orig_imgs=original_images, debug=self.args.verbose)
-
-            inference_ms = (time.perf_counter() - _t0) * 1e3
-            timeline_logger.log_span(batch_idx, 'inference', _t0_rel, time.perf_counter() - stream_start)
+            
+            if self.args.plot_performance:
+                inference_ms = (time.perf_counter() - _t0) * 1e3
+                timeline_logger.log_span(batch_idx, 'inference', _t0_rel, time.perf_counter() - stream_start)
 
 
             if model=='engine':
@@ -408,8 +423,9 @@ class OptimizedStreamer(Streamer):
                 # Transfer them into the CPU stream 
                 torch.cuda.current_stream().wait_event(event)
 
-            _tpost = time.perf_counter()
-            _tpost_rel = _tpost - stream_start
+            if self.args.plot_performance:
+                _tpost = time.perf_counter()
+                _tpost_rel = _tpost - stream_start
 
             for bni, (boxes, scores, cls_, orig_img) in enumerate(zip(i_boxes, i_scores, i_classes, original_images)): 
 
@@ -461,24 +477,25 @@ class OptimizedStreamer(Streamer):
                 )
 
                 # ================= FPS MEASUREMENT =================
-                now = time.perf_counter()
-                fps_times.append(now)
-                total_frames += 1
+                if (self.args.only_FPS and not self.args.plot_performance) or (self.args.plot_performance): 
+                    now = time.perf_counter()
+                    fps_times.append(now)
+                    total_frames += 1
                 
-                # Sliding-window FPS (end-to-end)
-                if len(fps_times) > 1:
-                    fps = (len(fps_times) - 1) / (fps_times[-1] - fps_times[0])
+                    # Sliding-window FPS (end-to-end)
+                    if len(fps_times) > 1:
+                        fps = (len(fps_times) - 1) / (fps_times[-1] - fps_times[0])
 
-                # Log FPS once per second
-                if now - last_fps_log >= 1.0:
-                    elapsed = now - stream_start
-                    avg_fps = total_frames / elapsed
-                    Streamer.logger.info(
-                        f"[FPS] End-to-end FPS: {fps:.2f} | "
-                        f"Average FPS since start: {avg_fps:.2f}"
-                    )
-                    last_fps_log = now
-                # ===================================================
+                    # Log FPS once per second
+                    if now - last_fps_log >= 1.0:
+                        elapsed = now - stream_start
+                        avg_fps = total_frames / elapsed
+                        Streamer.logger.info(
+                            f"[FPS] End-to-end FPS: {fps:.2f} | "
+                            f"Average FPS since start: {avg_fps:.2f}"
+                        )
+                        last_fps_log = now
+                    # ===================================================
 
                 if self.tracker_model is not None:
                     with StepContext(name="Tracking Frame", catch=(RuntimeError, ), verbose=self.args.verbose):
@@ -506,36 +523,37 @@ class OptimizedStreamer(Streamer):
                 if current_frame_id != last_frame_id:
                     yield preds
 
+                    if self.args.plot_performance:
 
-                    # --- per-frame logging (approximate stage attribution) ---
-                    t_now_f = time.perf_counter()
-                    scores_list = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None) or []
-                    motion_score = float(scores_list[bni]) if bni < len(scores_list) else float('nan')
-                    per_roi = roi_ms / max(len(im0s), 1)
-                    per_mog2 = mog2_ms / max(len(im0s), 1)
-                    per_pre = preprocess_ms / max(len(im0s), 1)
-                    per_inf = inference_ms / max(len(im0s), 1)
-                    # postprocess_ms is measured per-frame
-                    total_est = per_roi + per_mog2 + per_pre + per_inf + postprocess_ms
-                    frame_logger.log({
-                        't_wall': t_now_f,
-                        'batch_idx': batch_idx,
-                        'frame_id': int(current_frame_id) if str(current_frame_id).isdigit() else current_frame_id,
-                        'res_w': res_w,
-                        'res_h': res_h,
-                        'motion_passed': int(bool(mfgs[bni])) if bni < len(mfgs) else 1,
-                        'motion_score': motion_score,
-                        'gpu_util': gpu_stats.get('gpu_util', float('nan')),
-                        'gpu_mem_used_mb': gpu_stats.get('mem_used_mb', float('nan')),
-                        'cpu_util': cpu_stats.get('cpu_util', float('nan')),
-                        'roi_ms': per_roi,
-                        'mog2_ms': per_mog2,
-                        'preprocess_ms': per_pre,
-                        'inference_ms': per_inf,
-                        'postprocess_ms': postprocess_ms,
-                        'total_ms': total_est,
-                    })
-                    # --------------------------------------------------------
+                        # --- per-frame logging (approximate stage attribution) ---
+                        t_now_f = time.perf_counter()
+                        scores_list = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None) or []
+                        motion_score = float(scores_list[bni]) if bni < len(scores_list) else float('nan')
+                        per_roi = roi_ms / max(len(im0s), 1)
+                        per_mog2 = mog2_ms / max(len(im0s), 1)
+                        per_pre = preprocess_ms / max(len(im0s), 1)
+                        per_inf = inference_ms / max(len(im0s), 1)
+                        # postprocess_ms is measured per-frame
+                        total_est = per_roi + per_mog2 + per_pre + per_inf + postprocess_ms
+                        frame_logger.log({
+                            't_wall': t_now_f,
+                            'batch_idx': batch_idx,
+                            'frame_id': int(current_frame_id) if str(current_frame_id).isdigit() else current_frame_id,
+                            'res_w': res_w,
+                            'res_h': res_h,
+                            'motion_passed': int(bool(mfgs[bni])) if bni < len(mfgs) else 1,
+                            'motion_score': motion_score,
+                            'gpu_util': gpu_stats.get('gpu_util', float('nan')),
+                            'gpu_mem_used_mb': gpu_stats.get('mem_used_mb', float('nan')),
+                            'cpu_util': cpu_stats.get('cpu_util', float('nan')),
+                            'roi_ms': per_roi,
+                            'mog2_ms': per_mog2,
+                            'preprocess_ms': per_pre,
+                            'inference_ms': per_inf,
+                            'postprocess_ms': postprocess_ms,
+                            'total_ms': total_est,
+                        })
+                        # --------------------------------------------------------
 
                     if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
                         filename=Path(paths[self.seen])
@@ -567,53 +585,56 @@ class OptimizedStreamer(Streamer):
                 
                     self._publish_mqtt_message(preds=preds, frame_index=self.seen) 
                     last_frame_id = current_frame_id 
-
-            postprocess_ms = (time.perf_counter() - _tpost) *1e3
-            timeline_logger.log_span(batch_idx, 'postprocess', _tpost_rel, time.perf_counter() - stream_start, {'frame_in_batch': int(bni)})
+            
+            if self.args.plot_performance:
+                postprocess_ms = (time.perf_counter() - _tpost) *1e3
+                timeline_logger.log_span(batch_idx, 'postprocess', _tpost_rel, time.perf_counter() - stream_start, {'frame_in_batch': int(bni)})
 
             self.run_callbacks("on_predict_postprocess_end")
+            
+            if self.args.plot_performance:
 
-            # ---- perf log (batch processed) ----
-            t_now = time.perf_counter()
-            frames_in_batch = len(im0s)
-            frames_inferred = int(sum(bool(x) for x in mfgs)) if 'mfgs' in locals() else 0
-            motion_density = (frames_inferred / frames_in_batch) if frames_in_batch else 0.0
-            scores = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None)
-            avg_motion_score = float(np.mean(scores)) if scores else 0.0
-            inference_ran = 1 if frames_inferred > 0 else 0
-            if inference_ran:
-                infer_counter.add(t_now, 1.0)  # one model call per batch
-            infer_calls_per_sec = infer_counter.rate(t_now)
-            total_ms = (t_now - t_batch_start) * 1e3
-            perf_logger.log({
-                't_wall': t_now,
-                'batch_idx': batch_idx,
-                'frames_in_batch': frames_in_batch,
-                'res_w': res_w,
-                'res_h': res_h,
-                'motion_density': motion_density,
-                'avg_motion_score': avg_motion_score,
-                'inference_ran': inference_ran,
-                'frames_inferred': frames_inferred,
-                'infer_calls_per_sec': infer_calls_per_sec,
-                'gpu_util': gpu_stats.get('gpu_util', float('nan')),
-                'gpu_mem_used_mb': gpu_stats.get('mem_used_mb', float('nan')),
-                'gpu_mem_total_mb': gpu_stats.get('mem_total_mb', float('nan')),
-                'cpu_util': cpu_stats.get('cpu_util', float('nan')),
-                'roi_ms_per_frame': roi_ms / max(frames_in_batch, 1),
-                'mog2_ms_per_frame': mog2_ms / max(frames_in_batch, 1),
-                'preprocess_ms_per_frame': preprocess_ms / max(frames_in_batch, 1),
-                'inference_ms_per_frame': inference_ms / max(frames_in_batch, 1),
-                'postprocess_ms_per_frame': postprocess_ms / max(frames_in_batch, 1),
-                'total_ms_per_frame': total_ms / max(frames_in_batch, 1),
-                'fps_sliding': fps,
-            })
-            timeline_logger.log_span(batch_idx, 'batch_total', t_batch_start - stream_start, t_now - stream_start, {
-                'inference_ran': int(inference_ran),
-                'frames_in_batch': int(frames_in_batch),
-            })
-            batch_idx += 1
-            # ----------------------------------
+                # ---- perf log (batch processed) ----
+                t_now = time.perf_counter()
+                frames_in_batch = len(im0s)
+                frames_inferred = int(sum(bool(x) for x in mfgs)) if 'mfgs' in locals() else 0
+                motion_density = (frames_inferred / frames_in_batch) if frames_in_batch else 0.0
+                scores = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None)
+                avg_motion_score = float(np.mean(scores)) if scores else 0.0
+                inference_ran = 1 if frames_inferred > 0 else 0
+                if inference_ran:
+                    infer_counter.add(t_now, 1.0)  # one model call per batch
+                infer_calls_per_sec = infer_counter.rate(t_now)
+                total_ms = (t_now - t_batch_start) * 1e3
+                perf_logger.log({
+                    't_wall': t_now,
+                    'batch_idx': batch_idx,
+                    'frames_in_batch': frames_in_batch,
+                    'res_w': res_w,
+                    'res_h': res_h,
+                    'motion_density': motion_density,
+                    'avg_motion_score': avg_motion_score,
+                    'inference_ran': inference_ran,
+                    'frames_inferred': frames_inferred,
+                    'infer_calls_per_sec': infer_calls_per_sec,
+                    'gpu_util': gpu_stats.get('gpu_util', float('nan')),
+                    'gpu_mem_used_mb': gpu_stats.get('mem_used_mb', float('nan')),
+                    'gpu_mem_total_mb': gpu_stats.get('mem_total_mb', float('nan')),
+                    'cpu_util': cpu_stats.get('cpu_util', float('nan')),
+                    'roi_ms_per_frame': roi_ms / max(frames_in_batch, 1),
+                    'mog2_ms_per_frame': mog2_ms / max(frames_in_batch, 1),
+                    'preprocess_ms_per_frame': preprocess_ms / max(frames_in_batch, 1),
+                    'inference_ms_per_frame': inference_ms / max(frames_in_batch, 1),
+                    'postprocess_ms_per_frame': postprocess_ms / max(frames_in_batch, 1),
+                    'total_ms_per_frame': total_ms / max(frames_in_batch, 1),
+                    'fps_sliding': fps,
+                })
+                timeline_logger.log_span(batch_idx, 'batch_total', t_batch_start - stream_start, t_now - stream_start, {
+                    'inference_ran': int(inference_ran),
+                    'frames_in_batch': int(frames_in_batch),
+                })
+                batch_idx += 1
+                # ----------------------------------
            
             self.run_callbacks("on_predict_batch_end")
 
@@ -642,20 +663,23 @@ class OptimizedStreamer(Streamer):
                 f"{(min(self.args.batch, self.seen), 3, BATCH_SIZE)}" % t
             )
 
-        # ---------------- CLEANUP LOG ----------------
-        total_time = time.perf_counter() - stream_start
-        if total_frames > 0:
-            print(
-                f"[FPS] FINAL Average FPS: {total_frames / total_time:.2f}"
-            )
+        if (self.args.only_FPS and not self.args.plot_performance) or (self.args.plot_performance): 
 
-                # Close performance loggers
-        try:
-            perf_logger.close()
-            frame_logger.close()
-            timeline_logger.close()
-        except Exception:
-            pass
+            # ---------------- CLEANUP LOG ----------------
+            total_time = time.perf_counter() - stream_start
+            if total_frames > 0:
+                print(
+                    f"[FPS] FINAL Average FPS: {total_frames / total_time:.2f}"
+                )
+
+        if self.args.plot_performance:
+            # Close performance loggers
+            try:
+                perf_logger.close()
+                frame_logger.close()
+                timeline_logger.close()
+            except Exception:
+                pass
 
         self.run_callbacks("on_predict_end")
 

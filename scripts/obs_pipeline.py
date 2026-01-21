@@ -36,6 +36,8 @@ def main():
     argparser.add_argument('--bench', metavar='BM', action=argparse.BooleanOptionalAction, help='Benchmark the Performance of the model and hardware.')
     argparser.add_argument('--bench-labels', metavar='BL', default='samples/labels', help="Submit the label path for GT")
     argparser.add_argument('--use_TRT', metavar='TRT', action=argparse.BooleanOptionalAction, help='Use TensorRT engine for model inference (works only with either, model.engine or model.onnx)')
+    argparser.add_argument('--plot_perf', metavar='TRT', action=argparse.BooleanOptionalAction, help='Plot performance diagrams, ensuring FPS is materialized, inference per frame etc.')
+    argparser.add_argument('--only_FPS', metavar='TRT', action=argparse.BooleanOptionalAction, help='Measure average FPS regardles of plotting.')
 
 
     if len(sys.argv) < 1:

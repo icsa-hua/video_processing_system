@@ -135,7 +135,9 @@ class Application:
         DEFAULT_CFG.bench = args.bench 
         DEFAULT_CFG.bench_labels = args.bench_labels
         DEFAULT_CFG.roi = args.roi if args.roi is not None else False
-
+        DEFAULT_CFG.plot_performance = args.plot_perf if args.plot_perf is not None else False 
+        DEFAULT_CFG.only_FPS = args.only_FPS if args.only_FPS is not None else False
+        
         tracemalloc.start()
 
 

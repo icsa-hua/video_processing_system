@@ -108,12 +108,14 @@ class TensorRTRTXStreamer(OptimizedStreamer):
 
     @mem_profile
     def _stream_inference_impl_tiles(self, **kwargs)->Generator[Optional[Any], None, None]: 
-        FPS_WINDOW = 100  # sliding window size
-        fps_times = collections.deque(maxlen=FPS_WINDOW)
-        fps=0
-        stream_start = time.perf_counter()
-        last_fps_log = stream_start
-        total_frames = 0
+        
+        if (self.args.only_FPS and not self.args.plot_performance) or (self.args.plot_performance): 
+            FPS_WINDOW = 100  # sliding window size
+            fps_times = collections.deque(maxlen=FPS_WINDOW)
+            fps=0
+            stream_start = time.perf_counter()
+            last_fps_log = stream_start
+            total_frames = 0
 
         model = kwargs["model"] 
         producer_flag  = kwargs["producer_flag"] 
