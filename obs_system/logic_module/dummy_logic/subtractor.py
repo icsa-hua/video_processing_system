@@ -186,7 +186,6 @@ class Subtractor(EventExtractorInterface):
     def __save_subtractor(self, frame, mask, save_dir:str, idx:int): 
         motion_cutout = cv2.bitwise_and(frame, frame, mask=mask) 
         cv2.imwrite(os.path.join(save_dir, f"{idx:06d}_motion.png"), motion_cutout) 
-                    
 
 
     def __cal_calibrator(self, frame, **kwargs): 

@@ -7,14 +7,12 @@ OUTPUT_LABELS_PATH = 'assets/unified_dataset/labels'
 os.makedirs(OUTPUT_LABELS_PATH, exist_ok=True) 
 
 ID_REMAP = {
-
-    0:0, 
-    1:1, 
-    2:2,
-    3:7, 
-    4:5
+    0: 5,  # Bus (FishEye8K) -> Bus (COCO)
+    1: 1,  # Bike (FishEye8K) -> Bicycle (COCO)
+    2: 2,  # Car (FishEye8K) -> Car (COCO)
+    3: 0,  # Pedestrian (FishEye8K) -> Person (COCO)
+    4: 7   # Truck (FishEye8K) -> Truck (COCO)
 }
-
 
 def remap_labels_in_directory(source_dir, dest_dir): 
 

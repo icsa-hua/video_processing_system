@@ -169,7 +169,6 @@ class Application:
 
         # Change this based on your video. Get the first frame. 
         self.logic_module["SUBTRACTOR"] = Subtractor()
-
         self.logic_module["ROI"] = RegionSetter() 
         
         if args.fep: 

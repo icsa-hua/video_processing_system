@@ -26,8 +26,8 @@ coco_test_path_labels = os.path.join(COCO_LABELS_PATH, "test2017")
 coco_test_output_images = os.path.join(OUTPUT_IMAGE_PATH, "test")
 coco_test_output_labels = os.path.join(OUTPUT_LABEL_PATH, "test")
 
-SAMPLE_SIZE = 3000 
-VAL_SAMPLE = 1000 
+SAMPLE_SIZE = 4000 
+VAL_SAMPLE = 1500 
 TEST_SAMPLE = 3000
 
 def real_labels_images(label_path, image_path, output_label_path, output_image_path, sample_size): 
@@ -98,24 +98,24 @@ def transfer_images_only(image_path, output_image_path, sample_size):
 
 
 
-real_labels_images(
-    label_path = coco_train_path_labels, 
-    image_path = coco_train_path_images, 
-    output_label_path = coco_train_output_labels, 
-    output_image_path = coco_train_output_images, 
-    sample_size=SAMPLE_SIZE
-)
-real_labels_images(
-    label_path = coco_val_path_labels, 
-    image_path = coco_val_path_images, 
-    output_label_path = coco_val_output_labels, 
-    output_image_path = coco_val_output_images, 
-    sample_size=VAL_SAMPLE
-)
-
-
-# transfer_images_only(
-#     image_path=coco_test_path_images, 
-#     output_image_path=coco_test_output_images, 
-#     sample_size=TEST_SAMPLE
+# real_labels_images(
+#     label_path = coco_train_path_labels, 
+#     image_path = coco_train_path_images, 
+#     output_label_path = coco_train_output_labels, 
+#     output_image_path = coco_train_output_images, 
+#     sample_size=SAMPLE_SIZE
 # )
+# real_labels_images(
+#     label_path = coco_val_path_labels, 
+#     image_path = coco_val_path_images, 
+#     output_label_path = coco_val_output_labels, 
+#     output_image_path = coco_val_output_images, 
+#     sample_size=VAL_SAMPLE
+# )
+
+
+transfer_images_only(
+    image_path=coco_test_path_images, 
+    output_image_path=coco_test_output_images, 
+    sample_size=TEST_SAMPLE
+)
