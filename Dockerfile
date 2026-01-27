@@ -1,31 +1,96 @@
-FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
 
-# Install necessary packages
+# `python-base` sets up all our shared environment variables
+# FROM nvcr.io/nvidia/l4t-pytorch:r35.2.1-pth2.0-py3  as python-base
+
+#     # python
+# ENV PYTHONUNBUFFERED=1 \
+#     # prevents python creating .pyc files
+#     PYTHONDONTWRITEBYTECODE=1 \
+#     \
+#     # pip
+#     PIP_NO_CACHE_DIR=off \
+#     PIP_DISABLE_PIP_VERSION_CHECK=on \
+#     PIP_DEFAULT_TIMEOUT=100 \
+#     \
+#     # poetry
+#     # https://python-poetry.org/docs/configuration/#using-environment-variables
+#     # make poetry install to this location
+#     POETRY_HOME="/opt/poetry" \
+#     # make poetry create the virtual environment in the project's root
+#     # it gets named `.venv`
+#     POETRY_VIRTUALENVS_IN_PROJECT=true \
+#     # do not ask any interactive question
+#     POETRY_NO_INTERACTION=1 \
+#     \
+#     # paths
+#     # this is where our requirements + virtual environment will live
+#     PYSETUP_PATH="/opt/pysetup" \
+#     VENV_PATH="/opt/pysetup/.venv"
+
+
+# # prepend poetry and venv to path
+# ENV PATH="$POETRY_HOME/bin:$VENV_PATH/bin:$PATH"
+
+
+# # `builder-base` stage is used to build deps + create our virtual environment
+# FROM python-base as builder-base
+# RUN apt-get update \
+#     && apt-get install --no-install-recommends -y \
+#         # deps for installing poetry
+#         curl \
+#         # deps for building python deps
+#         build-essential
+
+# # install poetry - respects $POETRY_VERSION & $POETRY_HOME
+# RUN curl -sSL https://install.python-poetry.org | python3 -
+
+# # copy project requirement files here to ensure they will be cached.
+# WORKDIR $PYSETUP_PATH
+# COPY poetry.lock pyproject.toml ./
+
+# # install runtime deps - uses $POETRY_VIRTUALENVS_IN_PROJECT internally
+# RUN poetry install --no-directory
+
+
+# # `development` image is used during development / testing
+# FROM python-base as development
+# ENV FASTAPI_ENV=development
+# WORKDIR $PYSETUP_PATH
+
+# # copy in our built poetry + venv
+# COPY --from=builder-base $POETRY_HOME $POETRY_HOME
+# COPY --from=builder-base $PYSETUP_PATH $PYSETUP_PATH
+
+# # quicker install as runtime deps are already installed
+# RUN poetry install
+
+# FROM nvcr.io/nvidia/l4t-pytorch:r35.2.1-pth2.0-py3  as python-base
+FROM dustynv/l4t-pytorch:r36.4.0
+
+# MAke sure no prompts stop the installations
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    wget \
-    curl \
-    libglib2.0-0 \
-    net-tools \
-    bzip2 libopenblas-dev pbzip2 libgl1-mesa-glx && \
-    rm -rf /var/lib/apt/lists/*
+    ffmpeg libsm6 libxext6 libxrender-dev \
+    libgl1-mesa-glx python3-pip \
+    git wget unzip \
+    python3-opencv \
+    && apt-get clean
+    
+# Install necessary packages
+RUN apt-get update 
 
-RUN apt-get update && apt-get install -y libglib2.0-0 libsm6 libxext6 libxrender-dev
-RUN apt-get update && apt-get install ffmpeg libsm6 libxext6  -y    
-
-# Install any python packages you need
+COPY README.md README.md
 COPY requirements.txt requirements.txt
-RUN python3 -m pip install --upgrade pip
-RUN pip3 install -r requirements.txt
-RUN pip3 install opencv-python-headless
-# Install PyTorch and torchvision
-# RUN pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+COPY setup.py setup.py
+
+RUN pip3 install -e . 
+
 WORKDIR /app 
 COPY . /app 
 
-# Expose the Streamlit port 
-EXPOSE 8000 8503
-
-# Set the command to run when the container starts
-CMD ["python3", "/app/obs_pipeline.py", "--gui", "--verbose", "--host_server=0.0.0.0"]
+CMD ["python3", "/app/scripts/obs_pipeline.py", "--save", "--use_TRT", "--only_FPS"]

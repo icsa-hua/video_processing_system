@@ -164,6 +164,7 @@ class Streamer(ABC):
         self.points = self.tracker_model.update_tracker_history(preds, logic_module=self.logic_module)
         
         try: 
+            # TODO: Don't have only the option to save the image but instead also be able to transmit them through mqtt. 
             self.capture_object_boxes(
                     image=orig_image,
                     results=preds,

@@ -15,5 +15,5 @@ setuptools.setup(
     url="", 
     packages=setuptools.find_packages(include=['obs_system', 'obs_system.*']),
     install_requires=requirements,
-    python_requires='>=3.9'
+    python_requires='>=3.8'
 )

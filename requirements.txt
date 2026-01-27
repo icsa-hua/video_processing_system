@@ -1,27 +1,18 @@
-fastapi[standard]==0.115.11
+fastapi[standard]
 mss
-numpy>= 2.0.2
-nvidia_ml_py==12.560.30
-opencv_python==4.11.0.86
-pafy==0.5.5
+numpy
+# opencv_python==4.11.0.86
 paho_mqtt==2.1.0
 Pillow
-pillow_heif
-psutil==5.9.0
-pydantic==2.10.6
+psutil
 pynvml
-pytubefix==8.12.0
-Requests==2.32.3
-Shapely==2.0.7
-silence_tensorflow==1.2.3
+Shapely
+silence_tensorflow
 streamlit
-torch[cuda]
-torchvision
-ultralytics==8.3.65
-yt_dlp
+# torch[cuda]
+# torchvision
+ultralytics
 viztracer
-lap 
-ipykernel
 trackers
 onnx 
 onnxruntime
