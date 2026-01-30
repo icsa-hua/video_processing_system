@@ -110,8 +110,8 @@ class OptimizedStreamer(Streamer):
             self.batch = None 
             self.mp = None 
                        
-            #self.use_roi = True if self.args.roi and self.logic_module["ROI"] is not None else False 
-            self.use_roi = True
+            self.use_roi = True if self.args.roi and self.logic_module["ROI"] is not None else False 
+            # self.use_roi = self.args.roi
 
             profilers = (
                 ops.Profile(device=self.device), 
@@ -150,7 +150,6 @@ class OptimizedStreamer(Streamer):
                 self.logic_module['SUBTRACTOR'].warm_up(empty_image, trials=TRIALS)
             
             tile_flag = True if (self.orig_width // TILE_SIZE) > TILE_THR or (self.orig_height //TILE_SIZE) >= TILE_THR else False  
-
             if tile_flag : 
                 Streamer.logger.info("Run Inference with Tiles")
                 return self._stream_inference_impl_tiles(
@@ -288,7 +287,7 @@ class OptimizedStreamer(Streamer):
                     _t0 = time.perf_counter()
                     _t0_rel = _t0 - stream_start
                
-                mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False)
+                mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=True)
                 
                 if self.args.plot_performance:
                     mog2_ms = (time.perf_counter() - _t0) * 1e3
@@ -303,9 +302,12 @@ class OptimizedStreamer(Streamer):
                     Streamer.logger.debug("FEP enabled")
                     im0s = self.logic_module["FEP"]._defish(im0s)  
 
+            pdb.set_trace()
+                    
+            # For rectilinear images, motion gating seems to only work with ROI.  
             # Speeds up the process when no motion is detected in the incoming batch. 
             if not any(mfgs):
-                print("No motion detected in the batch - skipping inference")
+                Streamer.logger.debug("No motion detected in the batch - skipping inference")
                 empty_preds = return_no_motion_frames(
                     im0s=im0s,
                     batch_size=BATCH_SIZE 

@@ -20,7 +20,7 @@ def main():
     logger.debug("--- Initializing Application ---")
     # assets/compressed_models/onnx/yolov8s_dynamic_640_bz_16_simplified.onnx
     argparser = argparse.ArgumentParser(description=__doc__)
-    argparser.add_argument('--model_name', metavar='M', default='assets/compressed_models/yolov8s_dynamic_640_bz_16_simplified.onnx', help='Model to use (Yolov5, Yolov8 (Default), MaskRCNN, ONNX (yolov5, yolov8))')
+    argparser.add_argument('--model_name', metavar='M', default='assets/compressed_models/mixed_dataset_trained_yolov8s.onnx', help='Model to use (Yolov5, Yolov8 (Default), MaskRCNN, ONNX (yolov5, yolov8))')
     argparser.add_argument('--video_source', metavar='SO', default='samples/highway.mp4', help='Source to use - Local video path (.mp4) or stream index (key needs to be provided)')
     argparser.add_argument('--type', metavar='T', default='tracking', help='Use tracking with bytetracker or simple detection (recommended to leave default value)')
     argparser.add_argument('--gui', metavar='G', action=argparse.BooleanOptionalAction, help='Use GUI to select video source and model')

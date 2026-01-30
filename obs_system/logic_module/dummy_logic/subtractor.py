@@ -90,14 +90,14 @@ class Subtractor(EventExtractorInterface):
         if not batch: return []
 
         save_dir = None
+        save_idx = None
         if save_img: 
             parent = os.getcwd()
             save_dir = f"{parent}/assets/background_check/"
             os.makedirs(save_dir, exist_ok=True)
             logger.debug(f"Background Images saved in {save_dir}")
             save_idx = 0 
-        else: 
-            save_idx = None
+        
         
         h, w = batch[0].shape[:2] 
 
