@@ -64,33 +64,101 @@
 # # quicker install as runtime deps are already installed
 # RUN poetry install
 
-# FROM nvcr.io/nvidia/l4t-pytorch:r35.2.1-pth2.0-py3  as python-base
-FROM dustynv/l4t-pytorch:r36.4.0
+# FROM nvcr.io/nvidia/l4t-pytorch:r35.2.1-pth2.0-py3
+# FROM dustynv/l4t-pytorch:r36.4.0
+#
+# # MAke sure no prompts stop the installations
+# ENV DEBIAN_FRONTEND=noninteractive
+# ENV TZ=Etc/UTC
+# ENV PYTHONDONTWRITEBYTECODE=1
+# ENV PYTHONUNBUFFERED=1
+#
+# # Install system dependencies
+# RUN apt-get update && apt-get install -y \
+#     ffmpeg libsm6 libxext6 libxrender-dev \
+#     libgl1-mesa-glx python3-pip \
+#     git wget unzip \
+#     python3-opencv \
+#     && apt-get clean
+#     
+# # Install necessary packages
+# RUN apt-get update 
+#
+# COPY README.md README.md
+# COPY requirements.txt requirements.txt
+# COPY setup.py setup.py
+#
+# RUN pip3 install -e . 
+#
+# WORKDIR /app 
+# COPY . /app 
+#
+# CMD ["python3", "/app/scripts/obs_pipeline.py", "--save", "--use_TRT", "--only_FPS"]
 
-# MAke sure no prompts stop the installations
-ENV DEBIAN_FRONTEND=noninteractive
-ENV TZ=Etc/UTC
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    ffmpeg libsm6 libxext6 libxrender-dev \
-    libgl1-mesa-glx python3-pip \
-    git wget unzip \
-    python3-opencv \
-    && apt-get clean
+FROM nvcr.io/nvidia/l4t-base:r36.2.0
+
+ENV DEBIAN_FRONTEND=noninteractive \ 
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \ 
+    VENV_PATH=/opt/venv 
     
-# Install necessary packages
-RUN apt-get update 
+# System dependencies 
+RUN apt-get update && apt-get install -y --no-install-recommends \ 
+    software-properties-common \ 
+    curl \ 
+    git \ 
+    ffmpeg \ 
+    libsm6 \ 
+    libxext6 \ 
+    libopencv-dev \
+    python3.10 \ 
+    python3.10-dev \ 
+    python3.10-venv \ 
+    python3-opencv \
+    && rm -rf /var/lib/apt/lists/* 
 
-COPY README.md README.md
-COPY requirements.txt requirements.txt
-COPY setup.py setup.py
 
-RUN pip3 install -e . 
+# Make python 3.10 default 
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 
 
-WORKDIR /app 
-COPY . /app 
+# Virtual Environment 
+RUN python -m venv ${VENV_PATH} && \
+    ${VENV_PATH}/bin/pip install --upgrade pip setuptools wheel
 
-CMD ["python3", "/app/scripts/obs_pipeline.py", "--save", "--use_TRT", "--only_FPS"]
+
+ENV PATH="${VENV_PATH}/bin:${PATH}"
+
+WORKDIR /workspace 
+
+CMD ["bash"]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
