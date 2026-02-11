@@ -8,8 +8,8 @@ import supervision as sv
 
 from typing import Any
 from collections import defaultdict, deque
-# from trackers import SORTTracker 
-# from trackers.core.deepsort.tracker import DeepSORTTracker 
+from trackers import SORTTracker 
+from trackers.core.deepsort.tracker import DeepSORTTracker 
 from ultralytics.engine.results import Results
 
 class TrackerHandler(EventExtractorInterface): 
@@ -30,11 +30,11 @@ class TrackerHandler(EventExtractorInterface):
 
     def _create_tracker(self, **kwargs): 
         if self.__tracker_choice == "sort": 
-            # return SORTTracker() 
-            raise ValueError("Not supported Tracker Type")
+            return SORTTracker() 
+            # raise ValueError("Not supported Tracker Type")
         elif self.__tracker_choice == "deepsort": 
-            # return DeepSORTTracker() 
-            raise ValueError("Not supported Tracker Type")
+            return DeepSORTTracker() 
+            # raise ValueError("Not supported Tracker Type")
         elif self.__tracker_choice == 'byte_tracker': 
             return sv.ByteTrack() 
         else: 
@@ -46,11 +46,11 @@ class TrackerHandler(EventExtractorInterface):
         detections = sv.Detections.from_ultralytics(predictions)
 
         if self.__tracker_choice == "sort": 
-            # return self.__tracker.update(detections)
-            raise ValueError("Not supported Tracker Type")
+            return self.__tracker.update(detections)
+            # raise ValueError("Not supported Tracker Type")
         elif self.__tracker_choice == "deepsort": 
-            # return self.__tracker.update(detections, orig_img) 
-            raise ValueError("Not supported Tracker Type")
+            return self.__tracker.update(detections, orig_img) 
+            # raise ValueError("Not supported Tracker Type")
         elif self.__tracker_choice == "byte_tracker":
             return self.__tracker.update_with_detections(detections)
         else: 
