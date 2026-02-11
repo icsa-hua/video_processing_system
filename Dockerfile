@@ -96,44 +96,35 @@
 # CMD ["python3", "/app/scripts/obs_pipeline.py", "--save", "--use_TRT", "--only_FPS"]
 
 
-FROM nvcr.io/nvidia/l4t-base:r36.2.0
+FROM dustynv/l4t-pytorch:r36.4.0
 
-ENV DEBIAN_FRONTEND=noninteractive \ 
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \ 
-    VENV_PATH=/opt/venv 
-    
-# System dependencies 
-RUN apt-get update && apt-get install -y --no-install-recommends \ 
-    software-properties-common \ 
-    curl \ 
-    git \ 
-    ffmpeg \ 
-    libsm6 \ 
-    libxext6 \ 
+    PYTHONDONTWRITEBYTECODE=1 \
+    VENV_PATH=/opt/venv
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    curl \
+    wget \
+    git \
+    ffmpeg \
+    libsm6 \
+    libxext6 \
     libopencv-dev \
-    python3.10 \ 
-    python3.10-dev \ 
-    python3.10-venv \ 
+    libxrender1 \
     python3-opencv \
-    && rm -rf /var/lib/apt/lists/* 
-
-
-# Make python 3.10 default 
-RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 
-
-# Virtual Environment 
-RUN python -m venv ${VENV_PATH} && \
-    ${VENV_PATH}/bin/pip install --upgrade pip setuptools wheel
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
 
 
 ENV PATH="${VENV_PATH}/bin:${PATH}"
 
-WORKDIR /workspace 
+WORKDIR /workspace
 
 CMD ["bash"]
-
-
 
 
 
