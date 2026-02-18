@@ -118,6 +118,8 @@ class TensorRTYOLO:
             net_flag = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
             network = builder.create_network(net_flag) 
 
+            # config.set_device_type(network.get_layer(0), trt.DeviceType.GPU)
+
             # Populate the network definition from the ONNX representation
             parser = trt.OnnxParser(network, self.__TRT_LOGGER) 
 
@@ -138,31 +140,31 @@ class TensorRTYOLO:
                     logger.debug(f"Model {output.name} shape: {output.shape} {output.dtype}") 
 
             profile = builder.create_optimization_profile() 
-
-            min_shape = [1] + self.__shape_input_model[-3:] 
-            # min_shape = [1,3,160,160]
-            opt_shape = [int(self.__shape_input_model[0]/2)] + self.__shape_input_model[-3:] 
-            max_shape = self.__shape_input_model
+            same_shape = self.__shape_input_model 
+            # # min_shape = [1,3,160,160]
+            # opt_shape = [int(self.__shape_input_model[0]/2)] + self.__shape_input_model[-3:] 
+            # max_shape = self.__shape_input_model
 
             for input in inputs: 
                 profile.set_shape(
                     input.name, 
-                    min_shape, opt_shape, max_shape
+                    same_shape, same_shape, same_shape
                 )
 
             config.add_optimization_profile(profile)
 
             # Default is TF32 
-            if self.__fp16: 
+            if self.__fp16 and builder.platform_has_fast_fp16: 
                 config.set_flag(trt.BuilderFlag.FP16) 
             elif self.__int8: 
                 config.set_flag(trt.BuilderFlag.INT8)
                 config.int8_calibrator = self.calibrator 
 
-            if self.__strip_weights: 
-                config.set_flag(trt.BuilderFlag.STRIP_PLAN) 
-            else: 
-                config.flags &= ~(1 << int(trt.BuilderFlag.STRIP_PLAN))
+            # Not Working with TensorRT 8.x 
+            # if self.__strip_weights: 
+            #     config.set_flag(trt.BuilderFlag.STRIP_PLAN) 
+            # else: 
+            #     config.flags &= ~(1 << int(trt.BuilderFlag.STRIP_PLAN))
 
             engine_bytes = builder.build_serialized_network(network, config) 
 
