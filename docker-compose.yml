@@ -1,19 +1,20 @@
 services:
   obs_vps_app:
     build: .
-    image: obs-inference-jetson
+    image: obs-inference-jetson:tensorrt-arm64
 
     runtime: nvidia
 
     volumes:
       - ./:/workspace
-      - ./vps_env:/opt/venv
+      - venv:/opt/venv
 
 
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
       - VENV_PATH=/opt/venv
+      - PIP_INDEX_URL=https://pypi.org/simple
 
     ipc: host
     shm_size: "1gb"
@@ -21,18 +22,20 @@ services:
     command: >
       bash -lc "
         set -e;
+        cd /workspace; 
         python3 -V;
-        if [ ! -x $${VENV_PATH}/bin/python ]; then
-          echo 'Creating venv in $${VENV_PATH}' ;
-          python3 -m venv $${VENV_PATH};
-        fi;
-        source ${VENV_PATH}/bin/activate;
-        python3 -m pip install -U pip setuptools wheel;
-        if [ -f requirements.txt ]; then
-          python3 -m pip install requirements.txt;
-        fi;
-        python3 scripts/obs_pipeline.py;
 
+        if [ ! -x $$VENV_PATH/bin/python ]; then
+          echo 'Creating venv in '$$VENV_PATH;
+          python3 -m venv $$VENV_PATH;
+        fi;
+
+        source $$VENV_PATH/bin/activate;
+        if [ -f setup.py ]; then
+          echo 'Setting up OBS package...';
+          python3 -m pip install -e .;
+        fi;
+        python3 scripts/obs_pipeline.py --model mixed_dataset_trained_yolov8s.onnx --video_source samples/highway.mp4 --use_TRT --only_FPS --roi;
       "
 
 volumes:

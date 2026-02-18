@@ -95,8 +95,7 @@
 #
 # CMD ["python3", "/app/scripts/obs_pipeline.py", "--save", "--use_TRT", "--only_FPS"]
 
-
-FROM dustynv/l4t-pytorch:r36.4.0
+FROM dustynv/l4t-ml:r36.2.0 
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -108,15 +107,18 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     curl \
+    ca-certificates \ 
+    openssl \
     wget \
     git \
     ffmpeg \
     libsm6 \
     libxext6 \
-    libopencv-dev \
     libxrender1 \
-    python3-opencv \
     python3-venv \
+    python3-wheel \ 
+    python3-setuptools \ 
+    && update-ca-certificates \ 
     && rm -rf /var/lib/apt/lists/*
 
 
