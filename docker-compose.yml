@@ -25,17 +25,14 @@ services:
         cd /workspace; 
         python3 -V;
 
-        if [ ! -x $$VENV_PATH/bin/python ]; then
-          echo 'Creating venv in '$$VENV_PATH;
-          python3 -m venv $$VENV_PATH;
-        fi;
-
-        source $$VENV_PATH/bin/activate;
         if [ -f setup.py ]; then
           echo 'Setting up OBS package...';
           python3 -m pip install -e . --no-deps;
         fi;
-        python3 -m pip install -r requirements.txt --no-deps
+        if [ -f requirements.txt ]; then 
+          python3 -m pip install -r requirements.txt --no-deps; 
+          python3 -m pip install --upgrade pyparsing; 
+        fi; 
         python3 scripts/obs_pipeline.py --model assets/compressed_models/mixed_dataset_trained_yolov8s_fixed_mixed_batch_trt_fp16_noibt8.engine --video_source samples/sample_video.mp4 --use_TRT --only_FPS --roi;
       "
 
