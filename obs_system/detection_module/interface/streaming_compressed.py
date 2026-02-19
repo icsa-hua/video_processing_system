@@ -302,7 +302,6 @@ class OptimizedStreamer(Streamer):
                     Streamer.logger.debug("FEP enabled")
                     im0s = self.logic_module["FEP"]._defish(im0s)  
 
-            pdb.set_trace()
                     
             # For rectilinear images, motion gating seems to only work with ROI.  
             # Speeds up the process when no motion is detected in the incoming batch. 

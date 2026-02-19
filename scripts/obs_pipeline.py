@@ -52,7 +52,7 @@ def main():
     except Exception as e: 
         raise Exception(e) 
  
-    logger.warning("WARNING: If you change the input video source, adjust the background subtractor image. Otherwise, it will classify all frames without movement")
+    logger.warning("If you change the input video source, adjust the background subtractor image. Otherwise, it will classify all frames without movement")
 
     if args.use_TRT and not (args.model_name.split('/')[-1].endswith('onnx') or args.model_name.split('/')[-1].endswith('engine')): 
         raise TypeError("Can't use TRT if the model is not in ONNX or TRT format. Check ultralytics guide for more information: https://docs.ultralytics.com/modes/export/")
