@@ -33,8 +33,9 @@ services:
         source $$VENV_PATH/bin/activate;
         if [ -f setup.py ]; then
           echo 'Setting up OBS package...';
-          python3 -m pip install -e .;
+          python3 -m pip install -e . --no-deps;
         fi;
+        python3 -m pip install -r requirements.txt --no-deps
         python3 scripts/obs_pipeline.py --model mixed_dataset_trained_yolov8s.onnx --video_source samples/highway.mp4 --use_TRT --only_FPS --roi;
       "
 

@@ -16,3 +16,9 @@ viztracer
 trackers
 #onnx 
 #onnxruntime
+matplotlib
+memory_profiler
+supervision==0.27.0rc4
+cycler
+kiwisolver
+tqdm
