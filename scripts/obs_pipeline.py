@@ -70,7 +70,6 @@ def main():
         must_exist=True
     )
 
-
     config = {
         'model_name':model_specification.name+"."+model_specification.kind,
         'path_to_load': model_specification.path,

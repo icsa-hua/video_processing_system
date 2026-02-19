@@ -149,7 +149,7 @@ class Application:
         if path_to_load is None: 
             raise TypeError("path_to_load cannot be None")
 
-        if not model_name.endswith('.pt') and  not model_name.endswith('.onnx') and model_name.endswith('.engine'): 
+        if not model_name.endswith('.pt') and not model_name.endswith('.onnx') and not model_name.endswith('.engine'): 
             raise TypeError("The model is imperative to be either .pt, .onnx or .engine format.")
 
         if path_to_load=="":

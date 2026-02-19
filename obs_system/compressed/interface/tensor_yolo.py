@@ -75,17 +75,20 @@ class TensorRTYOLO:
         # Runtime Phase: As per https://docs.nvidia.com/deeplearning/tensorrt-rtx/latest/inference-library/python-api-docs.html#create-network-python
 
         _model = model_name.split('.')[0]
+        model_dir = os.getcwd() + f"/assets/compressed_models/"
         # Load TensorRT engine
 
-        save_path = os.getcwd() + f"/assets/compressed_models/{_model}_mixed_batch_trt_{'fp16' if self.__fp16 else 'nofp16'}_{'int8' if self.__int8 else 'noint8'}.engine"
-        if not os.path.exists(save_path): 
+        save_path = model_dir + f"{_model}_mixed_batch_trt_{'fp16' if self.__fp16 else 'nofp16'}_{'int8' if self.__int8 else 'noint8'}.engine"
+        if not os.path.exists(save_path) and not model_name.endswith('.engine'): 
             self.__build_engine__(engine_path, save_path)
             self.__load_engine__(load_path=save_path)
 
             # self.__set_stream(runtime_input_shape=(32,3, 640, 640))
-        else: 
-            self.__load_engine__(load_path=save_path)
+        elif model_name.endswith('.engine'): 
+            self.__load_engine__(load_path=model_dir + f"{model_name}")
             # self.__set_stream(runtime_input_shape=(32,3,640,640))
+        else: 
+            raise ValueError(f"Cannot load unknown engine from model{model_name}")
         
         logger.debug(f"Loaded TensorRT engine from {engine_path} ...")
 
@@ -178,12 +181,13 @@ class TensorRTYOLO:
     def __load_engine__(self, load_path:str="", serialized_engine=None): 
 
         runtime = trt.Runtime(self.__TRT_LOGGER) 
-
+        
         # Deserialization on a TensorRT (or TensorRTX) engine - Read engine file into memory buffer. 
         if not os.path.exists(load_path) and serialized_engine is not None: 
            self.__engine = runtime.deserialize_cuda_engine(serialized_engine) 
 
         elif os.path.exists(load_path) and serialized_engine is None: 
+            
             with open(load_path, "rb") as f: 
                 self.__engine = runtime.deserialize_cuda_engine(f.read())
             logger.info("Engine Create through the save file")
