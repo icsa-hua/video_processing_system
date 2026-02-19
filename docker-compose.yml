@@ -36,7 +36,7 @@ services:
           python3 -m pip install -e . --no-deps;
         fi;
         python3 -m pip install -r requirements.txt --no-deps
-        python3 scripts/obs_pipeline.py --model mixed_dataset_trained_yolov8s.onnx --video_source samples/highway.mp4 --use_TRT --only_FPS --roi;
+        python3 scripts/obs_pipeline.py --model assets/compressed_models/mixed_dataset_trained_yolov8s_fixed_mixed_batch_trt_fp16_noibt8.engine --video_source samples/sample_video.mp4 --use_TRT --only_FPS --roi;
       "
 
 volumes:
