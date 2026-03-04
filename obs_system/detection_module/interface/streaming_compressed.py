@@ -378,7 +378,7 @@ class OptimizedStreamer(Streamer):
                     })
                     batch_idx += 1
 
-
+                pdb.set_trace()
                 self._publish_mqtt_message_no_detection(preds=empty_preds, frame_index=frame_ids)
                 continue # to the next batch 
                 

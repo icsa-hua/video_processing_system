@@ -96,11 +96,11 @@ def main():
         )
 
     # length_of_film = 0
-    if os.path.isfile(config['source']): 
-        data = cv2.VideoCapture(app.source)
-        # length_of_film = data.get(cv2.CAP_PROP_FRAME_COUNT)
-        data.release()
-        cv2.destroyAllWindows()
+    # if os.path.isfile(config['source']): 
+    #     data = cv2.VideoCapture(app.source)
+    #     # length_of_film = data.get(cv2.CAP_PROP_FRAME_COUNT)
+    #     data.release()
+    #     cv2.destroyAllWindows()
 
     with StepContext(name='Setup Logic',catch=(KeyError,IndexError)):
         app.setup_logic_module(args) 

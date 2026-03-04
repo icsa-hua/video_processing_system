@@ -95,7 +95,8 @@
 #
 # CMD ["python3", "/app/scripts/obs_pipeline.py", "--save", "--use_TRT", "--only_FPS"]
 
-FROM dustynv/l4t-ml:r36.2.0 
+# FROM dustynv/l4t-ml:r36.2.0 
+FROM ultralytics/ultralytics:latest-jetson-jetpack6
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \

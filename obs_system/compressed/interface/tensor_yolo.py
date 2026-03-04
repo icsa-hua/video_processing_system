@@ -62,6 +62,7 @@ class TensorRTYOLO:
 
         self.__device = torch.device("cuda", torch.cuda.current_device()) 
         torch.cuda.set_device(self.__device)
+
         self.__stream = torch.cuda.Stream(device=self.__device)
         self.__in_dev = None 
         self.__out_devs = {}
@@ -185,21 +186,32 @@ class TensorRTYOLO:
         # Deserialization on a TensorRT (or TensorRTX) engine - Read engine file into memory buffer. 
         if not os.path.exists(load_path) and serialized_engine is not None: 
            self.__engine = runtime.deserialize_cuda_engine(serialized_engine) 
+           self.__context = self.__engine.create_execution_context() 
 
         elif os.path.exists(load_path) and serialized_engine is None: 
+            try: 
             
-            with open(load_path, "rb") as f: 
-                self.__engine = runtime.deserialize_cuda_engine(f.read())
-            logger.info("Engine Create through the save file")
+                with open(load_path, "rb") as f: 
+                    self.__engine = runtime.deserialize_cuda_engine(f.read())
+                self.__context = self.__engine.create_execution_context()
+                logger.info("Engine provided through CUDA deserialization.")
+            except Exception as e: 
+                from ultralytics import YOLO 
+                if str(load_path).endswith('.engine'): 
+                    model = YOLO(load_path) 
+                    model.predict(source=None) 
+                    self.__engine = model.predictor.model.model 
+                    self.__context = model.predictor.model.context
+                logger.info(f"Engine provided through YOLO({load_path}).")
 
         else: 
             raise ValueError(f"There is no engine given and no serialized engine is provided")
 
         if self.__engine is None: 
             raise RuntimeError("Could not deserialize engine")
-        
+         
         # Performing Inference based on IExecutionContext interface
-        self.__context = self.__engine.create_execution_context() 
+        # self.__context = self.__engine.create_execution_context() 
 
         if self.__context is None: 
             raise RuntimeError("Failed to creatre execution context")
