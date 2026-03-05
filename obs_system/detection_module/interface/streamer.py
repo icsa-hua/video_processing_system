@@ -16,7 +16,8 @@ import queue
 
 from pathlib import Path
 from io import StringIO
-from typing import Union, List, Any, Optional, final, Generator
+from collections import defaultdict
+from typing import Union, List, Any, Optional, final, Generator, Tuple
 from abc import ABC, abstractmethod
 from ultralytics.cfg import get_cfg, get_save_dir
 from ultralytics.utils.plotting import colors
@@ -77,7 +78,7 @@ class Streamer(ABC):
         self.batch: Any = None 
         self.source_type: Any = None 
         self.results: Optional[List[Any]] = []
-        self.txt_path: Optional[str] = None 
+        # self.txt_path: Optional[str] = None 
         self.proc_image: Optional[bool] = None 
         self.mqtt_interface:Any = None 
         self.logic_module: Any = None 
@@ -132,11 +133,12 @@ class Streamer(ABC):
 
     @abstractmethod
     def postprocess(self, preds:Any, orig_image:Any)->Any : 
-        
         if not isinstance(preds, Results): 
             raise ValueError("Not using ultralytics.Results class in postprocess of Streamer.") 
-        
-        if preds.boxes is not None and preds.boxes.xyxy.numel() == 0: 
+
+        preds.save_dir = self.save_dir.__str__() 
+
+        if preds.boxes is not None and preds.boxes.xyxy.numel() > 0: 
             updated_labels, orig_classes_updated = classification_obstacles(
                 boxes=preds.boxes, 
                 classes=preds.boxes.cls, 
@@ -144,39 +146,49 @@ class Streamer(ABC):
                 orig_shape=self.imgsz, 
                 orig_classes=self.converter.class_names
             )
+            
+            # Update class names only if changed and Valid
+            if orig_classes_updated is not None and len(orig_classes_updated) != len(self.converter.class_names): 
+                self.converter.class_names = orig_classes_updated 
+                preds.names = {i: name for i, name in enumerate(self.converter.class_names)}
 
             if len(self.converter.class_names) != len(orig_classes_updated) and orig_classes_updated is not None: 
                 self.converter.class_names = orig_classes_updated
 
-                preds.names.clear() 
-                for i, name in enumerate(self.converter.class_names): 
-                    preds.names[i] = name
-
+            # Update Labels if same length
             if preds.boxes.cls.numel() == updated_labels.numel(): 
                 preds.boxes.cls[:] = updated_labels
-
-        preds.save_dir = self.save_dir.__str__() 
 
         try:  
             self.points.clear()
         except: 
             pass
-
-        self.points = self.tracker_model.update_tracker_history(preds, logic_module=self.logic_module)
         
+        if getattr(self, "tracker_model", None) is not None: 
+            self.points = self.tracker_model.update_tracker_history(preds, logic_module=self.logic_module)
+
+
         try: 
             # TODO: Don't have only the option to save the image but instead also be able to transmit them through mqtt. 
-            mask = self.capture_object_boxes(
+            mqtt_batch_messages = self.capture_object_boxes(
                     image=orig_image,
                     results=preds,
-                    cropped_dirname=self.cropped_image_dirname,
-                    save=self.args.save
+                    save=self.args.save, 
+                    return_crops=True
             )
         except IndexError as ie: 
             Streamer.logger.exception(ie)
 
 
-        return preds, mask
+        return preds, mqtt_batch_messages
+
+    
+    def postprocess_batch(self, preds_list: List[Results], orig_images: List[Any])-> List[Results]: 
+        out = [] 
+        for preds, im in zip(preds_list, orig_images): 
+            results, mqtts = self.postprocess(preds, im)
+            out.append((results, mqtts))
+        return out
 
 
     @final
@@ -233,10 +245,19 @@ class Streamer(ABC):
         raise NotImplemented
 
 
-    def write_results(self, preds:Any, i: Any, p: Any, im:Any, s:Any)->str: 
+    def write_results(self, preds:Any, i: Any, im:Any)->str: 
         """Write inference results to a file or directory."""
-
+        
         string = "" 
+
+        if self.source_type.stream or self.source_type.from_img or self.source_type.tensor:  # batch_size >= 1
+            string += f"{i}: "
+            frame = self.dataset.count
+        else:
+            match = re.search(r"frame (\d+)/", s[i])
+            frame = int(match[1]) if match else None  # 0 if frame undetermined
+
+
         
         # # Ensure batch dimension
         if isinstance(im, list): 
@@ -245,43 +266,10 @@ class Streamer(ABC):
         if len(im.shape) == 3:
             im = im[None]  
 
-        # Determine frame index
-        if self.source_type.stream or self.source_type.from_img or self.source_type.tensor:  # batch_size >= 1
-            string += f"{i}: "
-            frame = self.dataset.count
-        else:
-            match = re.search(r"frame (\d+)/", s[i])
-            frame = int(match[1]) if match else None  # 0 if frame undetermined
-
-        self.txt_path = self.save_dir / "labels" / (
-            p.stem + ("" if self.dataset.mode == "image" else f"_{frame}")
-        )
-
-        string += "%gx%g " % im.shape[2:]
-
-        self.__optional_save_or_show(preds, p)
-
-        string += f"{preds.verbose()}{preds.speed['inference']:.1f}ms" 
-          
-        # Save results
-        if self.args.save_txt:
-            preds.save_txt(f"{self.txt_path}.txt", save_conf=self.args.save_conf)
-        
-        if self.args.save_crop:
-            preds.save_crop(save_dir=self.save_dir / "crops", file_name=self.txt_path.stem if self.txt_path is not None else Path("unknown"))
-
-
-
-
-
+        string = f"{i}: " if (self.source_type.stream or self.source_type.from_img or self.source_type.tensor) else ""
+        string += "%gx%g " % im.shape[2:] 
+        string += f"{preds.verbose()}{preds.speed.get('inference', 0.0): .1f}ms"
         return string
-
-
-    def save_predicted_images(self, save_path:str, frame:int) ->None: 
-        im = self.plotted_img 
-        
-        if im is not None: 
-            self.save_queue.put((save_path, frame, im.copy()))
 
 
     def _save_worker(self):
@@ -289,16 +277,40 @@ class Streamer(ABC):
             task = self.save_queue.get()
             if task is None:
                 break
-            self._do_save(task)
+            try: 
+                self._do_save(task)
+            except Exception: 
+                Streamer.logger.exception("Save worker task failed: %s", task[0] if task else task)
 
 
     def _do_save(self, task):
-        save_path, frame, im = task
-        if im is None:
+
+        task_type = task[0] 
+
+        if task_type == "save_frame" : 
+            _, save_path, frame, im = task 
+            self._do_save_frame(save_path, frame, im) 
             return
 
-        out_path = Path(save_path).expanduser()
+        if task_type == "save_results": 
+            _, preds, p, frame = task 
+            self._do_save_results(preds, p, frame)
+            return 
 
+        # if task_type == "save_crops": 
+        #     _, crops_payload = task
+        #     self._do_save_crops(crops_payload)
+        #     return
+
+        Streamer.logger.warning(f"Uknown save task type: {task_type}")
+
+
+    def _do_save_frame(self, save_path, frame, im): 
+
+        if im is None: 
+            return 
+
+        out_path = Path(save_path).expanduser()
         if out_path.name == "":
             Streamer.logger.error(f"Save predicted images: empty save path {save_path}")
             return
@@ -321,7 +333,6 @@ class Streamer(ABC):
                 return
 
             vid_key = str(out_path.resolve())
-
             vw = self.vid_writer.get(vid_key)
 
             if vw is None:
@@ -366,6 +377,29 @@ class Streamer(ABC):
                 Streamer.logger.error("cv2.imwrite failed: %s", img_path)
 
 
+    def _do_save_results(self, preds: Any, p: Path, frame: int | None): 
+
+        # Determine frame index
+        txt_path = self.save_dir / "labels" / (p.stem + ("" if self.dataset.mode == "image" else f"_{frame}"))
+
+        # self.__optional_save_or_show(preds, p)
+
+        # Save results
+        if self.args.save_txt:
+            preds.save_txt(f"{txt_path}.txt", save_conf=self.args.save_conf)
+        
+        if self.args.save_crop:
+            preds.save_crop(save_dir=self.save_dir / "crops", file_name=txt_path.stem if txt_path is not None else Path("unknown"))
+
+
+    def save_predicted_images(self, save_path:str, frame:int) ->None: 
+        im = self.plotted_img 
+        
+        if im is not None: 
+            # self.save_queue.put((save_path, frame, im.copy()))
+            self.save_queue.put(("save_frame", save_path, frame, im.copy()))
+
+
     def show(self, p:str)->None:
         im = self.plotted_img
 
@@ -407,52 +441,67 @@ class Streamer(ABC):
         self.callbacks[event].append(func)
 
 
-    def capture_object_boxes(self, image:np.ndarray|torch.Tensor,results:Any, cropped_dirname:str, save:bool=True): 
+    def capture_object_boxes(
+        self,
+        image:np.ndarray,
+        results:Any,
+        save:bool=True, 
+        return_crops: bool = True, 
+        max_objects: Optional[int] = None
+    ): 
 
-        if results is None:
-            return 
+        if results is None or results.boxes is None:
+            return {"crops": [], "boxes_xyxy": np.zeros((0,4), dtype=np.int32), "paths": []}
 
-        cropped_image_dir = os.path.join(os.getcwd(), 'assets') 
-        if not os.path.exists(cropped_image_dir) : 
-            os.mkdir(cropped_image_dir) 
-            print(f"Created directory {cropped_image_dir} to store cropped detections.")
+        # No detections 
+        if results.boxes.xyxy.numel() == 0: 
+            return {"crops": [], "boxes_xyxy": np.zeros((0,4), dtype=np.int32), "paths": []}
 
-        image_dir = os.path.join(cropped_image_dir, cropped_dirname) 
-        if not os.path.exists(image_dir): 
-            os.mkdir(image_dir) 
-            print(f"Created directory {image_dir} to store masked frames.")
-
-        save_cropped_img = f"{image_dir}/masked_frame_{np.random.randint(10000)}.jpg"
-
-        mask = np.zeros_like(image)
-        orig_h, orig_w = image.shape[:2]
+        if isinstance(image, torch.Tensor): 
+            image = image.detach().cpu().numpy() 
         
+        image = np.asarray(image) 
+        orig_h, orig_w = image.shape[:-1]
         infer_h, infer_w = results.orig_shape  
 
-        # Calculate resize ratio and padding used in letterboxing
-        scale = min(infer_w / orig_w, infer_h / orig_h)
-        pad_w = (infer_w - orig_w * scale) / 2
-        pad_h = (infer_h - orig_h * scale) / 2
+        xyxy = _to_numpy_xyxy(results)
+        xyxy_orig = _unletterbox_xyxy_to_orig(xyxy, (orig_h, orig_w), (infer_h, infer_w))
 
-        for _, box in enumerate(results.boxes):
-            x1, y1, x2, y2 = map(float, box.xyxy[0])
+        xyxyi = xyxy_orig.round().astype(np.int32) 
+        x1 = np.minimum(xyxyi[:, 0], xyxyi[:, 2])
+        y1 = np.minimum(xyxyi[:, 1], xyxyi[:, 3])       
+        x2 = np.maximum(xyxyi[:, 0], xyxyi[:, 2])
+        y2 = np.maximum(xyxyi[:, 1], xyxyi[:, 3])
+        xyxyi = np.stack([x1,y1,x2,y2], axis=1)
 
-            # Remove padding and rescale back to original image size
-            x1 = int((x1 - pad_w) / scale)
-            x2 = int((x2 - pad_w) / scale)
-            y1 = int((y1 - pad_h) / scale)
-            y2 = int((y2 - pad_h) / scale)
+        # Optional Cap for performance boost
+        if max_objects is not None and xyxyi.shape[0] > max_objects: 
+            xyxyi = xyxyi[:max_objects]
 
-             # Clip to original image boundaries
-            x1, x2 = max(0, x1), min(orig_w, x2)
-            y1, y2 = max(0, y1), min(orig_h, y2)
+        crops: List[np.ndarray] = [] 
+        paths: List[str] = [] 
 
-            mask[y1:y2,x1:x2] = image[y1:y2,x1:x2]
+        out_dir = Path("assets") / self.cropped_image_dirname 
+    
+        if save: 
+            _ensure_dir(out_dir)
 
-        if save:
-            cv2.imwrite(save_cropped_img, mask) 
+        for idx, (x1, y1, x2, y2) in enumerate(xyxyi): 
+            if x2 <= x1 or y2 <= y1: 
+                continue 
 
-        return mask
+            crop = image[y1:y2, x1:x2] 
+            if return_crops: 
+                crops.append(crop)
+
+            if save: 
+                fid = getattr(results, "path", "frame") 
+                stem = Path(str(fid)).stem 
+                fn = out_dir / f"{stem}_obj{idx}.jpg" 
+                cv2.imwrite(str(fn), crop) 
+                paths.append(str(fn))
+
+        return {"crops": crops, "boxes_xyxy": xyxyi, "paths":paths}
 
 
     def __optional_save_or_show(self, preds:Any, p:Any)-> None: 
@@ -472,7 +521,19 @@ class Streamer(ABC):
             self.save_predicted_images(str(self.save_dir / p.name), int(self.dataset.count))    
 
 
-    def __generate_mqtt_message(self, preds:Any, frame_index:int)->str: 
+    def __generate_mqtt_message(self, preds:Any, mqtt_messages, frame_index:int)->str: 
+            crops = defaultdict() 
+            pdb.set_trace()
+            for r, mes in zip(preds, mqtt_messages): 
+                for bb in enumerate(r.boxes.xyxy): 
+                    tmp = {
+                        "img": r.path, 
+                        "cls": self.converter.class_names[r.boxes.cls[bb]],
+                        "conf": r.boxes.conf[bb], 
+                        "track_id": r.boxes.id[bb] if r.boxes.id is not None else None
+
+                    }
+
             return json.dumps({
                 "frame_id":frame_index, 
                 "classes":preds.boxes.cls.tolist(), 
@@ -497,9 +558,9 @@ class Streamer(ABC):
     
 
     @abstractmethod
-    def _publish_mqtt_message(self, preds, frame_index)->None: 
+    def _publish_mqtt_message(self, preds, mqtt_messages, frame_ids)->None: 
         if self.mqtt_interface is not None: 
-            message = self.__generate_mqtt_message(preds, frame_index)
+            message = self.__generate_mqtt_message(preds, frame_ids)
             self.mqtt_interface.publish(self.mqtt_interface.topic, message)
 
 
@@ -508,3 +569,45 @@ class Streamer(ABC):
         if self.mqtt_interface is not None: 
             message = self.__generate_mqtt_message_no_motion(preds, frame_index)
             self.mqtt_interface.publish(self.mqtt_interface.topic, message)
+
+
+def _ensure_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+
+def _to_numpy_xyxy(results) -> np.ndarray:
+    """
+    Returns Nx4 float32 xyxy in *inference/letterbox space* (whatever results.boxes.xyxy is).
+    """
+    xyxy = results.boxes.xyxy
+    if isinstance(xyxy, torch.Tensor):
+        xyxy = xyxy.detach().cpu().numpy()
+    return np.asarray(xyxy, dtype=np.float32)
+
+
+def _unletterbox_xyxy_to_orig(
+    xyxy: np.ndarray,
+    orig_hw: Tuple[int, int],
+    infer_hw: Tuple[int, int],
+) -> np.ndarray:
+    """
+    Map boxes from letterboxed inference space -> original image pixel coords.
+    """
+    orig_h, orig_w = orig_hw
+    infer_h, infer_w = infer_hw
+
+    # Scale + padding used in letterbox
+    scale = min(infer_w / orig_w, infer_h / orig_h)
+    pad_w = (infer_w - orig_w * scale) / 2.0
+    pad_h = (infer_h - orig_h * scale) / 2.0
+
+    out = xyxy.copy()
+    out[:, [0, 2]] = (out[:, [0, 2]] - pad_w) / scale
+    out[:, [1, 3]] = (out[:, [1, 3]] - pad_h) / scale
+
+    # Clip
+    out[:, 0] = np.clip(out[:, 0], 0, orig_w)
+    out[:, 2] = np.clip(out[:, 2], 0, orig_w)
+    out[:, 1] = np.clip(out[:, 1], 0, orig_h)
+    out[:, 3] = np.clip(out[:, 3], 0, orig_h)
+    return out
+

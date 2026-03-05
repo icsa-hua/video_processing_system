@@ -1,3 +1,4 @@
+from os import wait
 from obs_system.detection_module.interface.streaming_compressed import OptimizedStreamer
 from obs_system.utils.benchmarking.metrics.model_performance import ModelPerf 
 from obs_system.logic_module.dummy_logic.tracker_sv import TrackerHandler
@@ -394,8 +395,8 @@ class TensorRTRTXStreamer(OptimizedStreamer):
     def _stream_inference_impl(self, **kwargs): 
         return super()._stream_inference_impl(**kwargs) 
 
-    def _publish_mqtt_message(self, preds, frame_index)->None: 
-        super()._publish_mqtt_message(preds, frame_index)
+    def _publish_mqtt_message(self, preds, mqtt_messages, frame_ids)->None: 
+        super()._publish_mqtt_message(preds, mqtt_messages, frame_ids)
 
     def _publish_mqtt_message_no_detection(self, preds, frame_index)->None: 
         super()._publish_mqtt_message_no_detection(preds, frame_index)

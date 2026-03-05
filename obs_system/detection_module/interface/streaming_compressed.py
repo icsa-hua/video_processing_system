@@ -1,3 +1,4 @@
+from obs_system.communication_module.interface import mqtt_interface
 from obs_system.utils.common import _get_gt, _empty_dets_numpy, _empty_results
 from obs_system.compressed.interface.compressed_yolo import CompressedYOLO
 from obs_system.compressed.interface.tensor_yolo import TensorRTYOLO
@@ -21,7 +22,6 @@ import queue
 import threading
 import collections 
 
-
 from typing import Union, List, Any, Generator, Optional
 from pathlib import Path 
 from memory_profiler import profile as mem_profile
@@ -32,7 +32,6 @@ from ultralytics.data.augment import LetterBox
 from ultralytics.utils.torch_utils import smart_inference_mode
 
 from ultralytics.utils import ops
-
 
 
 class OptimizedStreamer(Streamer): 
@@ -378,7 +377,6 @@ class OptimizedStreamer(Streamer):
                     })
                     batch_idx += 1
 
-                pdb.set_trace()
                 self._publish_mqtt_message_no_detection(preds=empty_preds, frame_index=frame_ids)
                 continue # to the next batch 
                 
@@ -428,27 +426,60 @@ class OptimizedStreamer(Streamer):
                 _tpost = time.perf_counter()
                 _tpost_rel = _tpost - stream_start
 
-            pdb.set_trace()
-            for bni, (boxes, scores, cls_, orig_img) in enumerate(zip(i_boxes, i_scores, i_classes, original_images)): 
+            frame_bundles = [] # one entry per frame in batch 
+            for bni in range(len(original_images)): 
 
-                preds = None 
-                self.seen = bni
-                current_frame_id = frame_ids[self.seen]
-                # No result returned from the object detection model
-                if boxes is None or len(boxes) == 0: 
-                    inf_results = _empty_results(orig_image=orig_img)                    
-                    self._publish_mqtt_message(preds=inf_results, frame_index=frame_ids)
-                    yield inf_results
+                fid = frame_ids[bni]
+                orig_img = original_images[bni]
+                boxes = i_boxes[bni] 
+                scores = i_scores[bni]
+                cls_ = i_classes[bni]
+
+                if not mfgs[bni]: 
+                    frame_bundles.append({
+                        "frame_id": fid, 
+                        "orig_img": orig_img, 
+                        "empty": True, 
+                        "boxes": None, 
+                        "scores": None, 
+                        "classes": None,
+                        "bni":bni
+                    })
                     continue
 
-                if isinstance(boxes, np.ndarray): 
-                    boxes_t = torch.from_numpy(boxes)
-                    scores_t = torch.from_numpy(scores) 
-                    classes_t = torch.from_numpy(cls_) 
-                else: 
-                    boxes_t = boxes 
-                    scores_t = scores 
-                    classes_t = cls_
+
+                # preds = None 
+                # self.seen = bni
+                # current_frame_id = frame_ids[self.seen]
+                # No result returned from the object detection model
+
+                if boxes is None or len(boxes) == 0: 
+                    frame_bundles.append({
+                        "frame_id": fid, 
+                        "orig_img": orig_img, 
+                        "empty": True, 
+                        "boxes": None, 
+                        "scores": None, 
+                        "classes": None,
+                        "bni": bni
+                    })
+                    # inf_results = _empty_results(orig_image=orig_img)                    
+                    # self._publish_mqtt_message(preds=inf_results, frame_index=frame_ids)
+                    # yield inf_results
+                    continue
+
+                boxes_t = torch.as_tensor(boxes) 
+                scores_t = torch.as_tensor(scores) 
+                classes_t = torch.as_tensor(cls_).long()
+
+                # if isinstance(boxes, np.ndarray): 
+                #     boxes_t = torch.from_numpy(boxes)
+                #     scores_t = torch.from_numpy(scores) 
+                #     classes_t = torch.from_numpy(cls_) 
+                # else: 
+                #     boxes_t = boxes 
+                #     scores_t = scores 
+                #     classes_t = cls_
 
                 keep = batched_nms(
                         boxes_t, 
@@ -467,15 +498,44 @@ class OptimizedStreamer(Streamer):
                         crop_shape=self.cropped_imgsz, 
                     )
 
-                inf_results = torch.cat([boxes_t, scores_t[:,None], classes_t[:,None].float()], dim=1)
+                frame_bundles.append({
+                    "frame_id": fid, 
+                    "orig_img": orig_img, 
+                    "empty": False, 
+                    "boxes": boxes_t, 
+                    "scores": scores_t, 
+                    "classes": classes_t,
+                    "bni": bni
+                })
 
-                preds = Results(
-                    orig_img=orig_img,
-                    path=f"image_{frame_ids[self.seen]}.jpg",
-                    names=self.converter.class_names,
-                    boxes=inf_results, 
-                    speed={}
-                )
+            results_list = []  # Results only for non-empty frames
+            results_map = {} # frame_id -> Results 
+
+            for fb in frame_bundles: 
+
+                if fb["empty"]: 
+                    r = _empty_results(orig_image=fb["orig_img"]) 
+                else: 
+
+                    inf_results = torch.cat(
+                            [fb["boxes"],
+                             fb["scores"][:,None],
+                             fb["classes"][:,None].float()],
+                            dim=1
+                    )
+                    
+                    # len(r) = number of detections. r.boxes.xyxy.shape is (4,4) e.g. 
+                    # len(frame_bundles) = Number of frames. 
+                    r = Results(
+                        orig_img=fb["orig_img"],
+                        path=f"image_{fb['frame_id']}.jpg",
+                        names=self.converter.class_names,
+                        boxes=inf_results, 
+                        speed={}
+                    )
+
+                results_list.append(r) 
+                results_map[fb["frame_id"]] = r
 
                 # ================= FPS MEASUREMENT =================
                 if (self.args.only_FPS and not self.args.plot_performance) or (self.args.plot_performance): 
@@ -499,94 +559,115 @@ class OptimizedStreamer(Streamer):
                     # ===================================================
 
                 if self.tracker_model is not None:
-                    with StepContext(name="Tracking Frame", catch=(RuntimeError, ), verbose=self.args.verbose):
-                        preds = self.tracker_model.detect(predictions=preds,save=False,orig_frame=orig_img,f_id=frame_ids[self.seen],class_names=self.converter.class_names)
+                    if fb["empty"] : continue 
+                    
+                    fid = fb["frame_id"] 
+                    results_map[fid] = self.tracker_model.detect(
+                        predictions=results_map[fid], 
+                        save=False, 
+                        orig_frame=fb["orig_img"], 
+                        f_id=fid, 
+                        class_names=self.converter.class_names
+                    )
+                        
+                    # with StepContext(name="Tracking Frame", catch=(RuntimeError, ), verbose=self.args.verbose):
+                    #     preds = self.tracker_model.detect(predictions=preds,save=False,orig_frame=orig_img,f_id=frame_ids[self.seen],class_names=self.converter.class_names)
 
-                with profilers[2]:
-                    preds, crop_detection_mask = self.postprocess(preds, orig_image=orig_img)
+            with profilers[2]:
+                out = self.postprocess_batch(results_list, orig_images=original_images)
 
-                preds.speed = {
+                # if self.mp is not None and self.args.bench: 
+                #     gt_cls, gt_bbs = self.__gt_labels.pop(self.seen, (np.zeros((0,), np.int64),np.zeros((0,4), np.float32)))
+                #     self.mp.update(
+                #         boxes_xyxy = boxes_t.cpu().numpy().astype(np.float32), 
+                #         scores = scores_t.cpu().numpy().astype(np.float32), 
+                #         classes = classes_t.cpu().numpy().astype(np.int32), 
+                #         gt_boxes_xyxy=gt_bbs.astype(np.float32), 
+                #         gt_classes = gt_cls.astype(np.int64)
+                #     ) 
+
+            preds = [] 
+            mqtt_messages = [] 
+            for fb, (r,mqtt_mess) in zip(frame_bundles,out):
+                r.speed = {
                     "preprocess": profilers[0].dt * 1e3/len(im0s),
                     "inference": profilers[1].dt * 1e3/len(im0s),
                     "postprocess": profilers[2].dt * 1e3/len(im0s)
                 }
+                fid = fb["frame_id"]
+                bni = fb["bni"]
+                 
+                # if fid != last_frame_id:
+                #     continue
 
-                if self.mp is not None and self.args.bench: 
-                    gt_cls, gt_bbs = self.__gt_labels.pop(self.seen, (np.zeros((0,), np.int64),np.zeros((0,4), np.float32)))
-                    self.mp.update(
-                        boxes_xyxy = boxes_t.cpu().numpy().astype(np.float32), 
-                        scores = scores_t.cpu().numpy().astype(np.float32), 
-                        classes = classes_t.cpu().numpy().astype(np.int32), 
-                        gt_boxes_xyxy=gt_bbs.astype(np.float32), 
-                        gt_classes = gt_cls.astype(np.int64)
-                    ) 
-                
-                if current_frame_id != last_frame_id:
-                    yield preds
+                yield r 
 
-                    if self.args.plot_performance:
+                if self.args.plot_performance:
 
-                        # --- per-frame logging (approximate stage attribution) ---
-                        t_now_f = time.perf_counter()
-                        scores_list = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None) or []
-                        motion_score = float(scores_list[bni]) if bni < len(scores_list) else float('nan')
-                        per_roi = roi_ms / max(len(im0s), 1)
-                        per_mog2 = mog2_ms / max(len(im0s), 1)
-                        per_pre = preprocess_ms / max(len(im0s), 1)
-                        per_inf = inference_ms / max(len(im0s), 1)
-                        # postprocess_ms is measured per-frame
-                        total_est = per_roi + per_mog2 + per_pre + per_inf + postprocess_ms
-                        frame_logger.log({
-                            't_wall': t_now_f,
-                            'batch_idx': batch_idx,
-                            'frame_id': int(current_frame_id) if str(current_frame_id).isdigit() else current_frame_id,
-                            'res_w': res_w,
-                            'res_h': res_h,
-                            'motion_passed': int(bool(mfgs[bni])) if bni < len(mfgs) else 1,
-                            'motion_score': motion_score,
-                            'gpu_util': gpu_stats.get('gpu_util', float('nan')),
-                            'gpu_mem_used_mb': gpu_stats.get('mem_used_mb', float('nan')),
-                            'cpu_util': cpu_stats.get('cpu_util', float('nan')),
-                            'roi_ms': per_roi,
-                            'mog2_ms': per_mog2,
-                            'preprocess_ms': per_pre,
-                            'inference_ms': per_inf,
-                            'postprocess_ms': postprocess_ms,
-                            'total_ms': total_est,
-                        })
-                        # --------------------------------------------------------
+                    # --- per-frame logging (approximate stage attribution) ---
+                    t_now_f = time.perf_counter()
+                    scores_list = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None) or []
+                    motion_score = float(scores_list[bni]) if bni < len(scores_list) else float('nan')
+                    per_roi = roi_ms / max(len(im0s), 1)
+                    per_mog2 = mog2_ms / max(len(im0s), 1)
+                    per_pre = preprocess_ms / max(len(im0s), 1)
+                    per_inf = inference_ms / max(len(im0s), 1)
+                    # postprocess_ms is measured per-frame
+                    total_est = per_roi + per_mog2 + per_pre + per_inf + postprocess_ms
+                    frame_logger.log({
+                        't_wall': t_now_f,
+                        'batch_idx': batch_idx,
+                        'frame_id': int(fid) if str(fid).isdigit() else fid,
+                        'res_w': res_w,
+                        'res_h': res_h,
+                        'motion_passed': int(bool(mfgs[bni])) if bni < len(mfgs) else 1,
+                        'motion_score': motion_score,
+                        'gpu_util': gpu_stats.get('gpu_util', float('nan')),
+                        'gpu_mem_used_mb': gpu_stats.get('mem_used_mb', float('nan')),
+                        'cpu_util': cpu_stats.get('cpu_util', float('nan')),
+                        'roi_ms': per_roi,
+                        'mog2_ms': per_mog2,
+                        'preprocess_ms': per_pre,
+                        'inference_ms': per_inf,
+                        'postprocess_ms': postprocess_ms,
+                        'total_ms': total_est,
+                    })
+                    # --------------------------------------------------------
 
-                    if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
-                        filename=Path(paths[self.seen])
+                if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
+                    filename=Path(paths[bni])
 
-                        if not filename: 
-                                Streamer.logger.warning("[WARNING]: filename to save image is invalid")
+                    if self.args.save or self.args.show:
+                        self.__optional_save_or_show(r, filename)
 
+                    self.save_queue.put(("save_results", r, filename, fid))
+
+                    if self.args.save_txt or self.args.save_crop:
                         with StepContext(name="Save Results", catch=(Exception, RuntimeError), verbose=self.args.verbose):
-                            self.batch[2][self.seen] += self.write_results(
-                                    preds=preds, 
-                                    i = self.seen, 
-                                    p = filename,  
-                                    im= original_images,
-                                    s = self.batch[2]
-                                )
+                            self.batch[2][bni] += self.write_results(
+                                preds=r, 
+                                i = bni,
+                                im= original_images,
+                        )
 
-                    if producer_flag is not None: 
-                        producer_flag.value = True
+                if producer_flag is not None: 
+                    producer_flag.value = True
 
-                    if self.proc_image is not None and queue_list is not None:
-                        queue_list.put(self.proc_image)
+                if self.proc_image is not None and queue_list is not None:
+                    queue_list.put(self.proc_image)
 
-                    elif self.proc_image is None and queue_list is not None: 
-                        queue_list.put(None)    
+                elif self.proc_image is None and queue_list is not None: 
+                    queue_list.put(None)    
 
-                    if self.seen == len(im0s)-1 and self.args.verbose: 
-                        elapsed_time=time.perf_counter() - start_time 
-                        Streamer.logger.info(f"Time from capturing batch to meaningful information: {elapsed_time:.2f}")
-                
-                    self._publish_mqtt_message(preds=preds, frame_index=self.seen) 
-                    last_frame_id = current_frame_id 
-            
+                preds.append(r)
+                mqtt_messages.append(mqtt_mess)
+                    # if self.seen == len(im0s)-1 and self.args.verbose: 
+                    #     elapsed_time=time.perf_counter() - start_time 
+                    #     Streamer.logger.info(f"Time from capturing batch to meaningful information: {elapsed_time:.2f}")
+            pdb.set_trace() 
+            self._publish_mqtt_message(preds=preds, mqtt_messages=mqtt_messages, frame_ids=frame_ids) 
+            last_frame_id = bni 
+        
             if self.args.plot_performance:
                 postprocess_ms = (time.perf_counter() - _tpost) *1e3
                 timeline_logger.log_span(batch_idx, 'postprocess', _tpost_rel, time.perf_counter() - stream_start, {'frame_in_batch': int(bni)})
@@ -780,8 +861,8 @@ class OptimizedStreamer(Streamer):
 
 
 
-    def _publish_mqtt_message(self, preds, frame_index)->None: 
-        super()._publish_mqtt_message(preds, frame_index)
+    def _publish_mqtt_message(self, preds, mqtt_messages, frame_ids)->None: 
+        super()._publish_mqtt_message(preds, mqtt_messages, frame_ids)
 
 
     def _publish_mqtt_message_no_detection(self, preds, frame_index)->None: 
