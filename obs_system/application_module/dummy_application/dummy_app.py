@@ -2,7 +2,7 @@ from obs_system.detection_module.dummy_predictor.stream_yolov5 import Yolov5Stre
 from obs_system.detection_module.dummy_predictor.stream_yolov8 import Yolov8Streamer 
 from obs_system.detection_module.dummy_predictor.stream_y8_onnx import OnnxY8Streamer
 from obs_system.detection_module.dummy_predictor.stream_trt import TensorRTRTXStreamer
-from obs_system.communication_module.mqtt_com.message_transmitter import RealMQTT
+from obs_system.communication_module.mqtt_com.message_transmitter import CBORMQTTCropClientCV2, RealMQTT
 from obs_system.logic_module.dummy_logic.region_setter import RegionSetter
 from obs_system.logic_module.dummy_logic.subtractor import Subtractor
 from obs_system.logic_module.dummy_logic.fisheye import FishEyeProjection
@@ -220,21 +220,31 @@ class Application:
         return self.streamer.results
         
 
-    def setup_mqtt(self, topic, broker_address, port):
+    def setup_mqtt(self, topic, broker_address, port, qos:int=0, jpeg_quality:int=75):
         
         if not self.mqtt: 
             self.mqtt_interface = None 
             return
         
         self.mqtt_topic = topic
-        self.mqtt_interface = RealMQTT(broker_address, self.mqtt_topic)
+        self.mqtt_interface = CBORMQTTCropClientCV2(
+            broker_address=broker_address, 
+            topic=topic, 
+            client_id="obs-batch-publisher", 
+            qos=qos, 
+            jpeg_quality=jpeg_quality
+        )
+        # self.mqtt_interface = RealMQTT(broker_address, self.mqtt_topic)
+
         self.mqtt_interface.connect(port=port, keepalive=60)
-        self.mqtt_interface.client.loop_start() #Not loop.forever as main thread will be taken over for the MQTT process. 
+        self.mqtt_interface.start_loop(background=True)
+
+        # self.mqtt_interface.client.loop_start() #Not loop.forever as main thread will be taken over for the MQTT process. 
              
-
-    def publish_mqtt(self, message):
-        self.mqtt_interface.publish(topic=self.mqtt_topic, message=message)
-
+    #
+    # def publish_mqtt(self, message):
+    #     self.mqtt_interface.publish(topic=self.mqtt_topic, message=message)
+    #
 
     def statistics(self):
         logger.debug("-- Performance metrics --")

@@ -22,3 +22,4 @@ supervision==0.27.0rc4
 cycler
 kiwisolver
 tqdm
+cbor2

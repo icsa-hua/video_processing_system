@@ -428,6 +428,7 @@ class OptimizedStreamer(Streamer):
                 _tpost = time.perf_counter()
                 _tpost_rel = _tpost - stream_start
 
+            pdb.set_trace()
             for bni, (boxes, scores, cls_, orig_img) in enumerate(zip(i_boxes, i_scores, i_classes, original_images)): 
 
                 preds = None 
@@ -503,7 +504,7 @@ class OptimizedStreamer(Streamer):
                         preds = self.tracker_model.detect(predictions=preds,save=False,orig_frame=orig_img,f_id=frame_ids[self.seen],class_names=self.converter.class_names)
 
                 with profilers[2]:
-                    preds = self.postprocess(preds, orig_image=orig_img)
+                    preds, crop_detection_mask = self.postprocess(preds, orig_image=orig_img)
 
                 preds.speed = {
                     "preprocess": profilers[0].dt * 1e3/len(im0s),

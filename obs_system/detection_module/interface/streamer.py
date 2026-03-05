@@ -2,7 +2,7 @@ from obs_system.compressed.interface.convert_to_Results import ConverterResults
 from obs_system.logic_module.dummy_logic.obstacle_filtering import classification_obstacles
 from obs_system.utils.logger import get_logger
 from obs_system.utils.common import *
-
+#
 import os
 import pdb
 import cv2
@@ -88,6 +88,7 @@ class Streamer(ABC):
         self.converter = ConverterResults() 
         self.callbacks = _callbacks or callbacks.get_default_callbacks() 
         self.cropped_image_dirname = f'cropped_trial_{np.random.randint(44)}'
+        
         callbacks.add_integration_callbacks(self) 
         
 
@@ -165,7 +166,7 @@ class Streamer(ABC):
         
         try: 
             # TODO: Don't have only the option to save the image but instead also be able to transmit them through mqtt. 
-            self.capture_object_boxes(
+            mask = self.capture_object_boxes(
                     image=orig_image,
                     results=preds,
                     cropped_dirname=self.cropped_image_dirname,
@@ -175,7 +176,7 @@ class Streamer(ABC):
             Streamer.logger.exception(ie)
 
 
-        return preds
+        return preds, mask
 
 
     @final
@@ -411,6 +412,18 @@ class Streamer(ABC):
         if results is None:
             return 
 
+        cropped_image_dir = os.path.join(os.getcwd(), 'assets') 
+        if not os.path.exists(cropped_image_dir) : 
+            os.mkdir(cropped_image_dir) 
+            print(f"Created directory {cropped_image_dir} to store cropped detections.")
+
+        image_dir = os.path.join(cropped_image_dir, cropped_dirname) 
+        if not os.path.exists(image_dir): 
+            os.mkdir(image_dir) 
+            print(f"Created directory {image_dir} to store masked frames.")
+
+        save_cropped_img = f"{image_dir}/masked_frame_{np.random.randint(10000)}.jpg"
+
         mask = np.zeros_like(image)
         orig_h, orig_w = image.shape[:2]
         
@@ -424,29 +437,22 @@ class Streamer(ABC):
         for _, box in enumerate(results.boxes):
             x1, y1, x2, y2 = map(float, box.xyxy[0])
 
-        # Remove padding and rescale back to original image size
+            # Remove padding and rescale back to original image size
             x1 = int((x1 - pad_w) / scale)
             x2 = int((x2 - pad_w) / scale)
             y1 = int((y1 - pad_h) / scale)
             y2 = int((y2 - pad_h) / scale)
 
-        # Clip to original image boundaries
+             # Clip to original image boundaries
             x1, x2 = max(0, x1), min(orig_w, x2)
             y1, y2 = max(0, y1), min(orig_h, y2)
 
             mask[y1:y2,x1:x2] = image[y1:y2,x1:x2]
 
-        cropped_image_dir = os.path.join(os.getcwd(), 'assets') 
-        if not os.path.exists(cropped_image_dir) : 
-            os.mkdir(cropped_image_dir) 
-
-        image_dir = os.path.join(cropped_image_dir, cropped_dirname) 
-        if not os.path.exists(image_dir): 
-            os.mkdir(image_dir) 
-
-        save_cropped_img = f"{image_dir}/masked_frame_{np.random.randint(10000)}.jpg"
         if save:
             cv2.imwrite(save_cropped_img, mask) 
+
+        return mask
 
 
     def __optional_save_or_show(self, preds:Any, p:Any)-> None: 
