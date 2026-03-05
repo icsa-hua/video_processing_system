@@ -7,7 +7,6 @@ from obs_system.logic_module.dummy_logic.region_setter import RegionSetter
 from obs_system.logic_module.dummy_logic.subtractor import Subtractor
 from obs_system.logic_module.dummy_logic.fisheye import FishEyeProjection
 from obs_system.utils.common import check_nvidia_existence
-from obs_system.utils.global_config import EMPTY_IMAGE_PATH
 from obs_system.utils.logger import get_logger 
 from obs_system.utils.appraisal import perf, frame_list 
 

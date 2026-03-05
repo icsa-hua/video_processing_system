@@ -489,11 +489,13 @@ class Streamer(ABC):
             messages.append(message)
         return json.dumps(messages)
     
+
     @abstractmethod
     def _publish_mqtt_message(self, preds, frame_index)->None: 
         if self.mqtt_interface is not None: 
             message = self.__generate_mqtt_message(preds, frame_index)
             self.mqtt_interface.publish(self.mqtt_interface.topic, message)
+
 
     @abstractmethod
     def _publish_mqtt_message_no_detection(self, preds, frame_index)->None: 
