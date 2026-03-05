@@ -467,7 +467,6 @@ class OptimizedStreamer(Streamer):
                         crop_shape=self.cropped_imgsz, 
                     )
 
-
                 inf_results = torch.cat([boxes_t, scores_t[:,None], classes_t[:,None].float()], dim=1)
 
                 preds = Results(
@@ -744,7 +743,7 @@ class OptimizedStreamer(Streamer):
             for i, keep_frame in enumerate(mfgs):
                 if not keep_frame:
                     im0s[i] = empty_image(im0s[i])
-                    original_images = empty_image(original_images[i])
+                    original_images[i] = empty_image(original_images[i])
 
             if self.args.bench and self.mp is not None: 
  
