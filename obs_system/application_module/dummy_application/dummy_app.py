@@ -1,3 +1,4 @@
+from obs_system.communication_module.mqtt_com.config import BROKER, CALLBACK_API_VERSION, CREATE_SUBSCRIBER, KEEPALIVE, PORT
 from obs_system.detection_module.dummy_predictor.stream_yolov5 import Yolov5Streamer 
 from obs_system.detection_module.dummy_predictor.stream_yolov8 import Yolov8Streamer 
 from obs_system.detection_module.dummy_predictor.stream_y8_onnx import OnnxY8Streamer
@@ -9,6 +10,7 @@ from obs_system.logic_module.dummy_logic.fisheye import FishEyeProjection
 from obs_system.utils.common import check_nvidia_existence
 from obs_system.utils.logger import get_logger 
 from obs_system.utils.appraisal import perf, frame_list 
+from obs_system.communication_module.mqtt_com.config import *
 
 import os 
 import pdb
@@ -43,7 +45,7 @@ class Application:
         self.parent_path:str =  os.getcwd()
         self.mqtt:bool = False
         self.streamer:Any = None 
-        self.mqtt_interface:Any = None 
+        self.mqtt_publisher:Any = None 
         self.logic_module = defaultdict() 
         self.gpu_enabled:bool = False 
 
@@ -179,8 +181,7 @@ class Application:
     def run_app(self, producer_flag=None, queue=None): 
         self.statistics()
 
-        process_video_func = self.process_stream
-        process_video_func(producer_flag=producer_flag, queue=queue)
+        self.process_stream(producer_flag=producer_flag, queue=queue)
         perf.finalize() 
         stats = perf.results() 
 
@@ -211,7 +212,7 @@ class Application:
             source=self.source,
             model=self.model,
             logic_module=self.logic_module,
-            mqtt_broker=self.mqtt_interface,
+            mqtt_broker=self.mqtt_publisher,
             producer_flag=producer_flag, 
             queue=queue, 
             **{key: kwargs[key] for key in ['verbose', 'save']}
@@ -220,32 +221,44 @@ class Application:
         return self.streamer.results
         
 
-    def setup_mqtt(self, topic, broker_address, port, qos:int=0, jpeg_quality:int=75):
+    def setup_mqtt(self, qos:int=QOS, jpeg_quality:int=JPEG_QUALITY):
         
         if not self.mqtt: 
-            self.mqtt_interface = None 
+            self.mqtt_publisher = None 
+            self.mqtt_subscriber = None
             return
         
-        self.mqtt_topic = topic
-        self.mqtt_interface = CBORMQTTCropClientCV2(
-            broker_address=broker_address, 
-            topic=topic, 
-            client_id="obs-batch-publisher", 
+        self.mqtt_topic = TOPIC
+
+        self.mqtt_publisher = CBORMQTTCropClientCV2(
+            broker_address=BROKER, 
+            topic=self.mqtt_topic, 
+            callback_version=CALLBACK_API_VERSION,
+            client_id="obs-sender", 
             qos=qos, 
             jpeg_quality=jpeg_quality
         )
         # self.mqtt_interface = RealMQTT(broker_address, self.mqtt_topic)
 
-        self.mqtt_interface.connect(port=port, keepalive=60)
-        self.mqtt_interface.start_loop(background=True)
+        self.mqtt_publisher.connect(port=PORT, keepalive=KEEPALIVE)
+        # self.mqtt_interface.start_loop(background=True)
 
-        # self.mqtt_interface.client.loop_start() #Not loop.forever as main thread will be taken over for the MQTT process. 
-             
-    #
-    # def publish_mqtt(self, message):
-    #     self.mqtt_interface.publish(topic=self.mqtt_topic, message=message)
-    #
+        if CREATE_SUBSCRIBER: 
+            self.mqtt_subscriber = CBORMQTTCropClientCV2(
+                broker_address=BROKER, 
+                topic=self.mqtt_topic,
+                callback_version=CALLBACK_API_VERSION, 
+                client_id="obs-receiver", 
+                qos=qos, 
+                jpeg_quality=jpeg_quality
+            )
+            self.mqtt_subscriber.client.on_message = self.mqtt_subscriber.on_message 
+            self.mqtt_subscriber.client.on_connect = self.mqtt_subscriber.on_connect
 
+            self.mqtt_subscriber.connect(port=PORT, keepalive=KEEPALIVE) 
+            self.mqtt_subscriber.start_loop(background=True) 
+
+       
     def statistics(self):
         logger.debug("-- Performance metrics --")
 
@@ -282,11 +295,14 @@ class Application:
         
         #Display GPU usage after execution
         self.statistics()
+        
+        if self.mqtt_subscriber is not None: 
+            self.mqtt_subscriber.client.loop_stop() 
+            self.mqtt_subscriber.client.disconnect() 
 
         # #Close MQTT connection with server
-        if self.mqtt_interface is not None:
-            self.mqtt_interface.client.loop_stop()
-            self.mqtt_interface.client.disconnect()
+        if self.mqtt_publisher is not None:
+            self.mqtt_publisher.client.disconnect()
 
         if self.gpu_enabled:
             pynvml.nvmlShutdown()

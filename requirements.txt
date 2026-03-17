@@ -23,3 +23,4 @@ cycler
 kiwisolver
 tqdm
 cbor2
+defusedxml

@@ -2,7 +2,7 @@ services:
   obs_vps_app_v2:
     build: .
     image: obs-inference-jetson:tensorrt-arm64
-
+    container_name: dev_cont
     runtime: nvidia
 
     volumes:
@@ -22,6 +22,8 @@ services:
 
     ipc: host
     shm_size: "1gb"
+    tty: true 
+    stdin_open: true
 
     command: >
       bash -lc "
@@ -39,8 +41,8 @@ services:
           python3 -m pip uninstall pynvml;
           python3 -m pip install nvidia-ml-py --no-deps; 
         fi; 
-
-        python3 scripts/obs_pipeline.py --model_name=assets/compressed_models/mixed_dataset_trained_yolov8s_fixed_mixed_batch_trt_fp16_noibt8.engine --video_source=samples/sample_video.mp4 --use_TRT --only_FPS --roi;
+        echo '[docker-compose]: Environment Setup Completed...'; 
+        tail -f /dev/null; 
       "
 
 volumes:

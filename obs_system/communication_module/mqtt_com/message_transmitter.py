@@ -1,9 +1,13 @@
 from obs_system.communication_module.interface.mqtt_interface import MQTTInterface
+from obs_system.communication_module.mqtt_com.config import CA_CRT, CLIENT_CRT, CLIENT_KEY
 from obs_system.utils.logger import get_logger 
 from dataclasses import dataclass
 from typing import Tuple, Optional, Dict, Any, Callable, Union, List, Sequence
+from obs_system.communication_module.mqtt_com.config import * 
 
+import os 
 import cv2
+import ssl 
 import time
 import cbor2
 import numpy as np
@@ -101,6 +105,7 @@ class CBORMQTTCropClientCV2(MQTTInterface):
         self,
         broker_address: str,
         topic: str,
+        callback_version: Any, 
         client_id: str = "cbor-crop-client",
         qos: int = 0,
         jpeg_quality: int = 80,
@@ -109,17 +114,26 @@ class CBORMQTTCropClientCV2(MQTTInterface):
 
         self.qos = int(qos)
         self.jpeg_quality = int(jpeg_quality)
+        self.broker_address = broker_address 
+        self.topic = topic
 
         # Paho MQTT client (v2 callback API)
-        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
-        self.client.on_connect = self.on_connect
-        self.client.on_message = self.on_message
+        self.client = mqtt.Client(callback_version, client_id=client_id)
+        # self.client.on_connect = self.on_connect
+        # self.client.on_message = self.on_message
 
         # Optional pipeline callback invoked with decoded messages
         self._on_batch_callback: Optional[Callable[[CropBatchMessage, str], None]] = None
 
-    # ---- Public helpers ----
+        if 'sender' in client_id and (os.path.exists(CLIENT_CRT) and os.path.exists(CLIENT_KEY) and os.path.exists(CA_CRT)): 
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+            ctx.load_verify_locations(CA_CRT) 
+            ctx.load_cert_chain(CLIENT_CRT, CLIENT_KEY) 
+            self.client.tls_set_context(ctx) 
 
+
+    # ---- Public helpers ----
     def set_on_batch_callback(self, cb: Callable[[CropBatchMessage, str], None]) -> None:
         self._on_batch_callback = cb
 

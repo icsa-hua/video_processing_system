@@ -107,11 +107,7 @@ def main():
 
     with StepContext(name='Setup MQTT', catch=(ConnectionError, TimeoutError)): 
         if app.mqtt:
-            app.setup_mqtt(
-                topic="test/topic", 
-                broker_address="mqtt.eclipseprojects.io", 
-                port=1883
-            )
+            app.setup_mqtt()
         else:
             logger.debug("[MQTT] interface is disabled") 
 
