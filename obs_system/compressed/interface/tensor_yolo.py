@@ -612,7 +612,7 @@ class TensorRTYOLO:
 
     def extract_boxes(self, predictions):
         boxes = predictions[:, :4]
-        if not (self.input_width == 640 and self.input_height == 640):
+        if self.input_width != self.img_width or self.input_height != self.img_height:
             boxes = self.rescale_boxes(boxes)
         boxes = xywh2xyxy(boxes)
         return boxes

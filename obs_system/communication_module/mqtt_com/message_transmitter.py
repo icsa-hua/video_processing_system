@@ -1,3 +1,4 @@
+import logging
 from obs_system.communication_module.interface.mqtt_interface import MQTTInterface
 from obs_system.communication_module.mqtt_com.config import CA_CRT, CLIENT_CRT, CLIENT_KEY
 from obs_system.utils.logger import get_logger 
@@ -78,7 +79,7 @@ class CropBatchMessage:
                     h=int(it.get("h", 0)), 
                     fmt=str(it.get("fmt", "jpg")), 
                     track_id=int(it["track_id"]) if "track_id" in it and it["track_id"] is not None else None, 
-                    bbox=tuple(map(int, it["box"])) if "bbox" in it and it["bbox"] is not None else None 
+                    bbox=tuple(map(int, it["bbox"])) if "bbox" in it and it["bbox"] is not None else None 
                 )
             ) 
 
@@ -116,11 +117,14 @@ class CBORMQTTCropClientCV2(MQTTInterface):
         self.jpeg_quality = int(jpeg_quality)
         self.broker_address = broker_address 
         self.topic = topic
-
+        self.client_id = client_id
         # Paho MQTT client (v2 callback API)
         self.client = mqtt.Client(callback_version, client_id=client_id)
         # self.client.on_connect = self.on_connect
         # self.client.on_message = self.on_message
+        
+        # Enable mqtt.Client logger: 
+        self.client.enable_logger(logging.getLogger(__name__))
 
         # Optional pipeline callback invoked with decoded messages
         self._on_batch_callback: Optional[Callable[[CropBatchMessage, str], None]] = None
@@ -153,7 +157,7 @@ class CBORMQTTCropClientCV2(MQTTInterface):
 
     def connect(self, port: int = 1883, keepalive: int = 60):
         self.client.connect(self.broker_address, int(port), int(keepalive))
-        logger.debug(f"Connecting to broker {self.broker_address}:{port} keepalive={keepalive}")
+        logger.info(f"Connecting {self.client_id} to broker {self.broker_address}:{port} keepalive={keepalive}")
 
 
     def publish(self, topic: str, message: Union[bytes, Dict[str, Any]]):
@@ -259,6 +263,9 @@ class CBORMQTTCropClientCV2(MQTTInterface):
     ):
 
         payload = self.encode_batch_from_crops(crops=crops, cam_id=cam_id, ts_ms=ts_ms, frame_id=frame_id, include_bbox=include_bbox)
+        with open(SAVE_PUBLISHES_PATH, "ab") as file: 
+            file.write(payload + b"\n")
+
         return self.publish(topic or self.topic, payload)
 
     
@@ -269,7 +276,7 @@ class CBORMQTTCropClientCV2(MQTTInterface):
             if isinstance(data, dict) and data.get("type") == "crop_batch": 
                 batch = CropBatchMessage.from_dict(data) 
 
-                logger.debug(
+                logger.info(
                     f"Received batch on {message.topic}: cam={batch.cam} ts={batch.ts} "
                     f"items={len(batch.items)} payload={len(message.payload)}B"
                 )
@@ -293,13 +300,12 @@ class CBORMQTTCropClientCV2(MQTTInterface):
             logger.debug("Failed to connect, return code %d\n", rc)
 
 
-def on_batch(batch: CropBatchMessage):
-    os.makedirs(OUTDIR, exist_ok=True)
-    for i, item in enumerate(batch.items):
-        arr = np.frombuffer(item.img, dtype=np.uint8)
-        crop_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if crop_bgr is None:
-            continue
-        path = os.path.join(OUTDIR, f"{batch.cam}_{batch.ts}_{i}_{item.cls}_{item.track_id or 'na'}.jpg")
-        cv2.imwrite(path, crop_bgr)
+    def on_batch(self, batch: CropBatchMessage, topic:str):
+        for i, item in enumerate(batch.items):
+            arr = np.frombuffer(item.img, dtype=np.uint8)
+            crop_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if crop_bgr is None:
+                continue
+            path = os.path.join(DECODED_JPEG_DIR, f"{batch.cam}_{batch.ts}_{i}_{item.cls}_{item.track_id or 'na'}.jpg")
+            cv2.imwrite(path, crop_bgr)
 

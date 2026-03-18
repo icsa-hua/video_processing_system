@@ -257,8 +257,6 @@ class Streamer(ABC):
             match = re.search(r"frame (\d+)/", s[i])
             frame = int(match[1]) if match else None  # 0 if frame undetermined
 
-
-        
         # # Ensure batch dimension
         if isinstance(im, list): 
             im = np.array(im) 
@@ -459,22 +457,29 @@ class Streamer(ABC):
 
         if isinstance(image, torch.Tensor): 
             image = image.detach().cpu().numpy() 
-        
+
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR) 
+        orig_h, orig_w = image.shape[:2]
+        infer_h, infer_w = self.cropped_imgsz if self.use_roi else results.orig_shape
         image = np.asarray(image) 
-        orig_h, orig_w = image.shape[:-1]
-        infer_h, infer_w = results.orig_shape  
+        xyxyi = _to_numpy_xyxy(results)
+        # xyxyi = _unletterbox_xyxy_to_orig(xyxyi, (orig_h, orig_w), (infer_h, infer_w))
 
-        xyxy = _to_numpy_xyxy(results)
-        xyxy_orig = _unletterbox_xyxy_to_orig(xyxy, (orig_h, orig_w), (infer_h, infer_w))
-
-        xyxyi = xyxy_orig.round().astype(np.int32) 
+        xyxyi = xyxyi.round().astype(np.int32) 
+        xyxyi[:, [0, 2]] = np.clip(xyxyi[:, [0, 2]], 0, orig_w)
+        xyxyi[:, [1, 3]] = np.clip(xyxyi[:, [1, 3]], 0, orig_h)
         x1 = np.minimum(xyxyi[:, 0], xyxyi[:, 2])
         y1 = np.minimum(xyxyi[:, 1], xyxyi[:, 3])       
         x2 = np.maximum(xyxyi[:, 0], xyxyi[:, 2])
         y2 = np.maximum(xyxyi[:, 1], xyxyi[:, 3])
         xyxyi = np.stack([x1,y1,x2,y2], axis=1)
-
-        # Optional Cap for performance boost
+        #
+        assert np.all(xyxyi[:, 0] <= xyxyi[:, 2]) 
+        assert np.all(xyxyi[:, 1] <= xyxyi[:, 3]) 
+        assert np.all(xyxyi[:, [0,2]] <= orig_w) 
+        assert np.all(xyxyi[:, [1,3]] <= orig_h)
+        #
+        # # Optional Cap for performance boost
         if max_objects is not None and xyxyi.shape[0] > max_objects: 
             xyxyi = xyxyi[:max_objects]
 
@@ -482,12 +487,13 @@ class Streamer(ABC):
         paths: List[str] = [] 
 
         out_dir = Path("assets") / self.cropped_image_dirname 
-    
+        save = True 
         if save: 
             _ensure_dir(out_dir)
 
         for idx, (x1, y1, x2, y2) in enumerate(xyxyi): 
             if x2 <= x1 or y2 <= y1: 
+                print("dafuck")
                 continue 
 
             crop = image[y1:y2, x1:x2] 
@@ -501,10 +507,11 @@ class Streamer(ABC):
                 cv2.imwrite(str(fn), crop) 
                 paths.append(str(fn))
 
+        pdb.set_trace()
         return {"crops": crops, "boxes_xyxy": xyxyi, "paths":paths}
 
 
-    def __optional_save_or_show(self, preds:Any, p:Any)-> None: 
+    def optional_save_or_show(self, preds:Any, p:Any)-> None: 
 
         if self.args.save or self.args.show: 
             self.plotted_img = preds.plot(
@@ -521,7 +528,7 @@ class Streamer(ABC):
             self.save_predicted_images(str(self.save_dir / p.name), int(self.dataset.count))    
 
 
-    def __generate_mqtt_message(self, preds:Any, mqtt_messages, frame_index_list:list)->str: 
+    def __generate_mqtt_message(self, preds:Any, mqtt_messages, frame_index_list:list): 
             crops = defaultdict()
             for r, mes, fid in zip(preds, mqtt_messages, frame_index_list): 
                 crops[fid] = []
@@ -529,7 +536,7 @@ class Streamer(ABC):
                     cls_id = int(r.boxes.cls[bb].item())
                     cropped_detection = {
                         "img": mes["crops"][bb],
-                        "bbox": r.boxes.xyxy[bb],
+                        "bbox": mes["boxes_xyxy"][bb],
                         "cls":self.converter.class_names[cls_id],
                         "conf":r.boxes.conf[bb].item(),
                         "track_id":r.boxes.id[bb] if r.boxes.id is not None else None

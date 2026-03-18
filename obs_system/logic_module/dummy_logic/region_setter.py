@@ -1,5 +1,6 @@
 from obs_system.logic_module.interface.event_extractor import EventExtractorInterface
 import numpy as np
+import pdb
 import cv2
 import torch 
 from typing import Any
@@ -60,14 +61,14 @@ class RegionSetter(EventExtractorInterface):
                          crop_shape,          # (h, w) of crop BEFORE letterbox, e.g. (572, 1290)
                          lb_shape=(640, 640)  # letterboxed image shape given to model
                          ):
-    
         x0, y0 = self.x_start, self.y_start
         H, W = orig_img_shape
-        h0, w0 = crop_shape
 
         # 1) bring boxes from 640-letterboxed coords back to crop coords (572x1290)
         xyxy = results
-        xyxy = scale_boxes(lb_shape, xyxy, (h0, w0))
+        # This is necessary if the detections are in the 640x640 format
+        # h0, w0 = crop_shape
+        # xyxy = scale_boxes(lb_shape, xyxy, (h0, w0))
 
         # 2) add crop offset -> original image coords
         xyxy[:, [0, 2]] += x0

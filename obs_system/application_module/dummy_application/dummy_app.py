@@ -3,7 +3,7 @@ from obs_system.detection_module.dummy_predictor.stream_yolov5 import Yolov5Stre
 from obs_system.detection_module.dummy_predictor.stream_yolov8 import Yolov8Streamer 
 from obs_system.detection_module.dummy_predictor.stream_y8_onnx import OnnxY8Streamer
 from obs_system.detection_module.dummy_predictor.stream_trt import TensorRTRTXStreamer
-from obs_system.communication_module.mqtt_com.message_transmitter import CBORMQTTCropClientCV2, RealMQTT, on_batch
+from obs_system.communication_module.mqtt_com.message_transmitter import CBORMQTTCropClientCV2, RealMQTT
 from obs_system.logic_module.dummy_logic.region_setter import RegionSetter
 from obs_system.logic_module.dummy_logic.subtractor import Subtractor
 from obs_system.logic_module.dummy_logic.fisheye import FishEyeProjection
@@ -231,19 +231,6 @@ class Application:
         
         self.mqtt_topic = TOPIC
 
-        self.mqtt_publisher = CBORMQTTCropClientCV2(
-            broker_address=BROKER, 
-            topic=self.mqtt_topic, 
-            callback_version=CALLBACK_API_VERSION,
-            client_id="obs-sender", 
-            qos=qos, 
-            jpeg_quality=jpeg_quality
-        )
-        # self.mqtt_interface = RealMQTT(broker_address, self.mqtt_topic)
-
-        self.mqtt_publisher.connect(port=PORT, keepalive=KEEPALIVE)
-        # self.mqtt_interface.start_loop(background=True)
-
         if CREATE_SUBSCRIBER: 
             self.mqtt_subscriber = CBORMQTTCropClientCV2(
                 broker_address=BROKER, 
@@ -253,12 +240,26 @@ class Application:
                 qos=qos, 
                 jpeg_quality=jpeg_quality
             )
+            self.mqtt_subscriber.set_on_batch_callback(self.mqtt_subscriber.on_batch)
             self.mqtt_subscriber.client.on_message = self.mqtt_subscriber.on_message 
             self.mqtt_subscriber.client.on_connect = self.mqtt_subscriber.on_connect
-            pdb.set_trace()
-            self.mqtt_subscriber.set_on_batch_callback(on_batch)
-            self.mqtt_subscriber.connect(port=PORT, keepalive=KEEPALIVE) 
+            self.mqtt_subscriber.connect(port=PORT, keepalive=KEEPALIVE) # Checked that it connects
             self.mqtt_subscriber.start_loop(background=True) 
+            time.sleep(1)
+            self.mqtt_subscriber.subscribe(self.mqtt_topic)
+
+
+        self.mqtt_publisher = CBORMQTTCropClientCV2(
+            broker_address=BROKER, 
+            topic=self.mqtt_topic, 
+            callback_version=CALLBACK_API_VERSION,
+            client_id="obs-sender", 
+            qos=qos, 
+            jpeg_quality=jpeg_quality
+        )
+        # self.mqtt_interface = RealMQTT(broker_address, self.mqtt_topic)
+        self.mqtt_publisher.connect(port=PORT, keepalive=KEEPALIVE)
+        # self.mqtt_interface.start_loop(background=True)
 
        
     def statistics(self):

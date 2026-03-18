@@ -161,6 +161,7 @@ class OptimizedStreamer(Streamer):
                 )
 
             Streamer.logger.info("Run Inference without Tiles")
+            print("Run Inference without TILES")
             return self._stream_inference_impl(
                   model=model,
                   producer_flag = producer_flag, 
@@ -259,7 +260,7 @@ class OptimizedStreamer(Streamer):
             paths, im0s, s = self.batch
             frame_ids = get_frame_ids(labels=s)
             original_images = [cv2.cvtColor(im, cv2.COLOR_BGR2RGB) for im in im0s.copy()]
-
+            
             _t0, _t0_rel = 0.0,0.0
 
             res_h, res_w = im0s[0].shape[:2] if len(im0s) else (0, 0)
@@ -278,7 +279,11 @@ class OptimizedStreamer(Streamer):
                         _t1_rel = time.perf_counter() - stream_start
                         timeline_logger.log_span(batch_idx, 'roi', _t0_rel, _t1_rel)
                         res_h, res_w = im0s[0].shape[:2] if len(im0s) else (0, 0)
-                    
+                
+            # Required here to capture the cropped frames, if cropping happens
+            if self.use_roi:
+                cropped_original_images = [cv2.cvtColor(im, cv2.COLOR_BGR2RGB) for im in im0s.copy()]
+                   
             with StepContext(name="BackGround Subtractor  (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
                 # Motion gate (vectorized over the mini batch) 
                 if self.args.plot_performance:
@@ -378,18 +383,20 @@ class OptimizedStreamer(Streamer):
                     batch_idx += 1
 
                 self._publish_mqtt_message_no_detection(preds=empty_preds, frame_index=frame_ids)
+                
                 continue # to the next batch 
                 
             for i, keep_frame in enumerate(mfgs):
                 if not keep_frame:
                     im0s[i] = empty_image(im0s[i])
-                    original_images = empty_image(original_images[i])
+                    original_images[i] = empty_image(original_images[i])
 
             if self.args.plot_performance:
                 _t0 = time.perf_counter()
                 _t0_rel = _t0 - stream_start
 
             with profilers[0]: 
+                # if cropped the im0s here have a (572, 1290, 3) shape. Otherwise same shape with original images
                 images = self.preprocess(im0s) 
                             
             if self.args.plot_performance:
@@ -410,12 +417,18 @@ class OptimizedStreamer(Streamer):
                     
                     prof.export_chrome_trace(f"assets/trace_jsons/trace_{model}.json")
                 else: 
-                    (i_boxes, i_scores, i_classes), event = self.model(images, orig_imgs=original_images, debug=self.args.verbose)
+                    # The shape of image is (3, 640, 640) | original_images shape is (1080, 1920, 3) 
+                    # If the roi is enabled then original images shape should be the cropped size. 
+                    # Results should match the appropriate original_image size.  
+                    (i_boxes, i_scores, i_classes), event = self.model(
+                            images,
+                            orig_imgs=original_images if not self.use_roi else cropped_original_images,
+                            debug=self.args.verbose
+                    )
             
             if self.args.plot_performance:
                 inference_ms = (time.perf_counter() - _t0) * 1e3
                 timeline_logger.log_span(batch_idx, 'inference', _t0_rel, time.perf_counter() - stream_start)
-
 
             if model=='engine':
                 # End event and synchronize the engine after we don't need the tensors anymore 
@@ -431,6 +444,8 @@ class OptimizedStreamer(Streamer):
 
                 fid = frame_ids[bni]
                 orig_img = original_images[bni]
+
+                # If self.use_roi then boxes here have the coordinates of the cropped images. 
                 boxes = i_boxes[bni] 
                 scores = i_scores[bni]
                 cls_ = i_classes[bni]
@@ -463,23 +478,11 @@ class OptimizedStreamer(Streamer):
                         "classes": None,
                         "bni": bni
                     })
-                    # inf_results = _empty_results(orig_image=orig_img)                    
-                    # self._publish_mqtt_message(preds=inf_results, frame_index=frame_ids)
-                    # yield inf_results
                     continue
 
                 boxes_t = torch.as_tensor(boxes) 
                 scores_t = torch.as_tensor(scores) 
                 classes_t = torch.as_tensor(cls_).long()
-
-                # if isinstance(boxes, np.ndarray): 
-                #     boxes_t = torch.from_numpy(boxes)
-                #     scores_t = torch.from_numpy(scores) 
-                #     classes_t = torch.from_numpy(cls_) 
-                # else: 
-                #     boxes_t = boxes 
-                #     scores_t = scores 
-                #     classes_t = cls_
 
                 keep = batched_nms(
                         boxes_t, 
@@ -491,7 +494,7 @@ class OptimizedStreamer(Streamer):
                 # keep = keep_pc if keep_pc.numel()==0 else keep_pc[nms(boxes_t[keep_pc],scores_t[keep_pc], iou_threshold=(1-NMS_IOU))]
                 boxes_t, scores_t, classes_t = boxes_t[keep], scores_t[keep], classes_t[keep] 
                
-                if self.use_roi and self.args.save: 
+                if self.use_roi: 
                     boxes_t = self.logic_module['ROI'].translate_bounding_boxes(
                         results=boxes_t,
                         orig_img_shape=self.original_imgsz, 
@@ -638,7 +641,7 @@ class OptimizedStreamer(Streamer):
                     filename=Path(paths[bni])
 
                     if self.args.save or self.args.show:
-                        self.__optional_save_or_show(r, filename)
+                        self.optional_save_or_show(r, filename)
 
                     self.save_queue.put(("save_results", r, filename, fid))
 
