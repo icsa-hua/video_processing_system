@@ -259,7 +259,6 @@ class CBORMQTTCropClientCV2(MQTTInterface):
     ):
 
         payload = self.encode_batch_from_crops(crops=crops, cam_id=cam_id, ts_ms=ts_ms, frame_id=frame_id, include_bbox=include_bbox)
-
         return self.publish(topic or self.topic, payload)
 
     
@@ -292,3 +291,15 @@ class CBORMQTTCropClientCV2(MQTTInterface):
             logger.debug(f"Subscribing to topic {self.topic} qos={self.qos}")
         else:
             logger.debug("Failed to connect, return code %d\n", rc)
+
+
+def on_batch(batch: CropBatchMessage):
+    os.makedirs(OUTDIR, exist_ok=True)
+    for i, item in enumerate(batch.items):
+        arr = np.frombuffer(item.img, dtype=np.uint8)
+        crop_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if crop_bgr is None:
+            continue
+        path = os.path.join(OUTDIR, f"{batch.cam}_{batch.ts}_{i}_{item.cls}_{item.track_id or 'na'}.jpg")
+        cv2.imwrite(path, crop_bgr)
+

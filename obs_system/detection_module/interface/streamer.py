@@ -521,26 +521,37 @@ class Streamer(ABC):
             self.save_predicted_images(str(self.save_dir / p.name), int(self.dataset.count))    
 
 
-    def __generate_mqtt_message(self, preds:Any, mqtt_messages, frame_index:int)->str: 
-            crops = defaultdict() 
-            pdb.set_trace()
-            for r, mes in zip(preds, mqtt_messages): 
-                for bb in enumerate(r.boxes.xyxy): 
-                    tmp = {
-                        "img": r.path, 
-                        "cls": self.converter.class_names[r.boxes.cls[bb]],
-                        "conf": r.boxes.conf[bb], 
-                        "track_id": r.boxes.id[bb] if r.boxes.id is not None else None
-
+    def __generate_mqtt_message(self, preds:Any, mqtt_messages, frame_index_list:list)->str: 
+            crops = defaultdict()
+            for r, mes, fid in zip(preds, mqtt_messages, frame_index_list): 
+                crops[fid] = []
+                for bb in range(len(r.boxes.xyxy)):
+                    cls_id = int(r.boxes.cls[bb].item())
+                    cropped_detection = {
+                        "img": mes["crops"][bb],
+                        "bbox": r.boxes.xyxy[bb],
+                        "cls":self.converter.class_names[cls_id],
+                        "conf":r.boxes.conf[bb].item(),
+                        "track_id":r.boxes.id[bb] if r.boxes.id is not None else None
                     }
+                    crops[fid].append(cropped_detection)
 
-            return json.dumps({
-                "frame_id":frame_index, 
-                "classes":preds.boxes.cls.tolist(), 
-                "boxes": preds.boxes.xyxy.tolist(), 
-                "tm_ms":time.time()*1000, 
-                "track_ids": preds.boxes.id.tolist(), 
-            })
+            for cr_fr in crops: 
+                self.mqtt_interface.publish_batch_from_crops(
+                    crops=crops[cr_fr], 
+                    cam_id="camera-1",
+                    frame_id=cr_fr,
+                    include_bbox=True
+                ) 
+                   
+            #
+            # return json.dumps({
+            #     "frame_id":frame_index, 
+            #     "classes":preds.boxes.cls.tolist(), 
+            #     "boxes": preds.boxes.xyxy.tolist(), 
+            #     "tm_ms":time.time()*1000, 
+            #     "track_ids": preds.boxes.id.tolist(), 
+            # })
     
     def __generate_mqtt_message_no_motion(self, preds:Any, frame_index:list)->str: 
         messages = [] 
@@ -560,7 +571,7 @@ class Streamer(ABC):
     @abstractmethod
     def _publish_mqtt_message(self, preds, mqtt_messages, frame_ids)->None: 
         if self.mqtt_interface is not None: 
-            message = self.__generate_mqtt_message(preds, frame_ids)
+            message = self.__generate_mqtt_message(preds, mqtt_messages, frame_ids)
             self.mqtt_interface.publish(self.mqtt_interface.topic, message)
 
 

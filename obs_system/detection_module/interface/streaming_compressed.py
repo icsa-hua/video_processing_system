@@ -664,7 +664,6 @@ class OptimizedStreamer(Streamer):
                     # if self.seen == len(im0s)-1 and self.args.verbose: 
                     #     elapsed_time=time.perf_counter() - start_time 
                     #     Streamer.logger.info(f"Time from capturing batch to meaningful information: {elapsed_time:.2f}")
-            pdb.set_trace() 
             self._publish_mqtt_message(preds=preds, mqtt_messages=mqtt_messages, frame_ids=frame_ids) 
             last_frame_id = bni 
         

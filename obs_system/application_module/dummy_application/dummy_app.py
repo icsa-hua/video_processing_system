@@ -3,7 +3,7 @@ from obs_system.detection_module.dummy_predictor.stream_yolov5 import Yolov5Stre
 from obs_system.detection_module.dummy_predictor.stream_yolov8 import Yolov8Streamer 
 from obs_system.detection_module.dummy_predictor.stream_y8_onnx import OnnxY8Streamer
 from obs_system.detection_module.dummy_predictor.stream_trt import TensorRTRTXStreamer
-from obs_system.communication_module.mqtt_com.message_transmitter import CBORMQTTCropClientCV2, RealMQTT
+from obs_system.communication_module.mqtt_com.message_transmitter import CBORMQTTCropClientCV2, RealMQTT, on_batch
 from obs_system.logic_module.dummy_logic.region_setter import RegionSetter
 from obs_system.logic_module.dummy_logic.subtractor import Subtractor
 from obs_system.logic_module.dummy_logic.fisheye import FishEyeProjection
@@ -46,6 +46,7 @@ class Application:
         self.mqtt:bool = False
         self.streamer:Any = None 
         self.mqtt_publisher:Any = None 
+        self.mqtt_subscriber:Any = None
         self.logic_module = defaultdict() 
         self.gpu_enabled:bool = False 
 
@@ -254,7 +255,8 @@ class Application:
             )
             self.mqtt_subscriber.client.on_message = self.mqtt_subscriber.on_message 
             self.mqtt_subscriber.client.on_connect = self.mqtt_subscriber.on_connect
-
+            pdb.set_trace()
+            self.mqtt_subscriber.set_on_batch_callback(on_batch)
             self.mqtt_subscriber.connect(port=PORT, keepalive=KEEPALIVE) 
             self.mqtt_subscriber.start_loop(background=True) 
 
@@ -285,9 +287,9 @@ class Application:
                 logger.info(f"|  Free GPU memory: {free_gpu_mem:.2f} MB")
             
             except pynvml.NVMLError as e: 
-                logger.error(" | Failed to get GPU metrics: {e}")
+                logger.error(f"| Failed to get GPU metrics: {e}")
 
-        logger.info(f"------------------------------------------------------------------------------------")
+        logger.info(f"-"*84)
 
 
     def close_app(self): 
