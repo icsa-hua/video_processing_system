@@ -507,7 +507,6 @@ class Streamer(ABC):
                 cv2.imwrite(str(fn), crop) 
                 paths.append(str(fn))
 
-        pdb.set_trace()
         return {"crops": crops, "boxes_xyxy": xyxyi, "paths":paths}
 
 
@@ -578,8 +577,8 @@ class Streamer(ABC):
     @abstractmethod
     def _publish_mqtt_message(self, preds, mqtt_messages, frame_ids)->None: 
         if self.mqtt_interface is not None: 
-            message = self.__generate_mqtt_message(preds, mqtt_messages, frame_ids)
-            self.mqtt_interface.publish(self.mqtt_interface.topic, message)
+            self.__generate_mqtt_message(preds, mqtt_messages, frame_ids)
+            # self.mqtt_interface.publish(self.mqtt_interface.topic, message)
 
 
     @abstractmethod

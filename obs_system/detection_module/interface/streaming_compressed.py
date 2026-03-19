@@ -497,8 +497,7 @@ class OptimizedStreamer(Streamer):
                 if self.use_roi: 
                     boxes_t = self.logic_module['ROI'].translate_bounding_boxes(
                         results=boxes_t,
-                        orig_img_shape=self.original_imgsz, 
-                        crop_shape=self.cropped_imgsz, 
+                        orig_img_shape=self.original_imgsz
                     )
 
                 frame_bundles.append({

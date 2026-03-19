@@ -56,11 +56,7 @@ class RegionSetter(EventExtractorInterface):
         ]
     
 
-    def translate_bounding_boxes(self, results,  # results[0]
-                         orig_img_shape,      # (H, W) of original, e.g. (1080, 1920)
-                         crop_shape,          # (h, w) of crop BEFORE letterbox, e.g. (572, 1290)
-                         lb_shape=(640, 640)  # letterboxed image shape given to model
-                         ):
+    def translate_bounding_boxes(self, results, orig_img_shape):
         x0, y0 = self.x_start, self.y_start
         H, W = orig_img_shape
 

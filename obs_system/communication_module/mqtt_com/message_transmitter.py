@@ -248,6 +248,7 @@ class CBORMQTTCropClientCV2(MQTTInterface):
         }
         if frame_id is not None:
             msg["frame_id"] = int(frame_id)
+        import pdb; pdb.set_trace()
 
         return cbor2.dumps(msg)
 
@@ -300,7 +301,8 @@ class CBORMQTTCropClientCV2(MQTTInterface):
             logger.debug("Failed to connect, return code %d\n", rc)
 
 
-    def on_batch(self, batch: CropBatchMessage, topic:str):
+    def on_batch(self,batch: CropBatchMessage, topic:str):
+        os.makedirs(DECODED_JPEG_DIR, exist_ok=True)
         for i, item in enumerate(batch.items):
             arr = np.frombuffer(item.img, dtype=np.uint8)
             crop_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
