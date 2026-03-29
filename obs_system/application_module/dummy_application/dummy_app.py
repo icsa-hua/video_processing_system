@@ -15,8 +15,10 @@ import numpy as np
 import psutil
 import pynvml
 import time
+import platform
 import tracemalloc
 
+from jtop import jtop
 from pathlib import Path
 from typing import Any, Optional
 from collections import defaultdict
@@ -45,7 +47,7 @@ class Application:
         self.mqtt_subscriber: Any = None
         self.logic_module = defaultdict()
         self.gpu_enabled: bool = False
-
+        self.machine_type: bool = False 
         self.model_registry = build_default_model_registry()
         self.streamer_factory = StreamerFactory(
             registry=self.model_registry,
@@ -53,6 +55,18 @@ class Application:
             overrides={},
             callbacks=None,
         )
+
+
+    def get_device_type(self): 
+        arch = platform.machine() 
+
+        if arch in ['x86_64', 'AMD64']: 
+            return "desktop" 
+
+        if arch == 'aarch64': 
+            return 'jetson' 
+
+        return 'unknown_arm' 
 
 
     def setup_process(self, args):
@@ -217,20 +231,25 @@ class Application:
         logger.info(f"|  Current memory usage (Tracemalloc): {current / (1024 ** 2):.2f} MB.")
         logger.info(f"|  Peak memory usage (Tracemalloc): {peak / (1024 ** 2):.2f} MB.")
 
-        if self.gpu_enabled and hasattr(self, "handle"):
-            try:
-                mem_info = pynvml.nvmlDeviceGetMemoryInfo(self.handle)
+        if self.machine_type == 'desktop' : 
+            if self.gpu_enabled and hasattr(self, "handle"):
+                try:
+                    mem_info = pynvml.nvmlDeviceGetMemoryInfo(self.handle)
 
-                total_gpu_mem = int(mem_info.total) / (1024 ** 2)
-                used_gpu_mem = int(mem_info.used) / (1024 ** 2)
-                free_gpu_mem = int(mem_info.free) / (1024 ** 2)
+                    total_gpu_mem = int(mem_info.total) / (1024 ** 2)
+                    used_gpu_mem = int(mem_info.used) / (1024 ** 2)
+                    free_gpu_mem = int(mem_info.free) / (1024 ** 2)
 
-                logger.info(f"|  Total GPU memory: {total_gpu_mem:.2f} MB")
-                logger.info(f"|  Used GPU memory: {used_gpu_mem:.2f} MB")
-                logger.info(f"|  Free GPU memory: {free_gpu_mem:.2f} MB")
+                    logger.info(f"|  Total GPU memory: {total_gpu_mem:.2f} MB")
+                    logger.info(f"|  Used GPU memory: {used_gpu_mem:.2f} MB")
+                    logger.info(f"|  Free GPU memory: {free_gpu_mem:.2f} MB")
 
-            except pynvml.NVMLError as e:
-                logger.error(f"| Failed to get GPU metrics: {e}")
+                except pynvml.NVMLError as e:
+                    logger.error(f"| Failed to get GPU metrics: {e}")
+        elif self.machine_type == 'jetson': 
+            with jtop() as jetson: 
+                if jetson.ok(): 
+                    print(jetson.memory)
 
         logger.info(f"-" * 84)
 
