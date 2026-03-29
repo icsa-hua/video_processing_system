@@ -394,7 +394,6 @@ class TensorRTYOLO:
             self.orig_shapes = None
 
         original_batch_size = im.shape[0] if isinstance(im, torch.Tensor) else 1
-
         if isinstance(im, torch.Tensor):
 
             self.img_height, self.img_width = self.orig_shapes[0] if self.orig_shapes else im.shape[2], im.shape[3]

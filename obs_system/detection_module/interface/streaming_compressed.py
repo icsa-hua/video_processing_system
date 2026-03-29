@@ -13,7 +13,6 @@ from obs_system.utils.tiles import *
 
 import os 
 import cv2 
-import pdb
 import time
 import glob
 import torch 
@@ -148,27 +147,27 @@ class OptimizedStreamer(Streamer):
             else: 
                 self.logic_module['SUBTRACTOR'].warm_up(empty_image, trials=TRIALS)
             
-            tile_flag = True if (self.orig_width // TILE_SIZE) > TILE_THR or (self.orig_height //TILE_SIZE) >= TILE_THR else False  
-            if tile_flag : 
+            tile_flag = True if (self.orig_width // TILE_SIZE) > TILE_THR or (self.orig_height // TILE_SIZE) >= TILE_THR else False
+            force_no_tiles = bool(getattr(self, "force_streaming_no_tiles", False))
+            if tile_flag and not force_no_tiles:
                 Streamer.logger.info("Run Inference with Tiles")
                 return self._stream_inference_impl_tiles(
                     model=model,
-                    producer_flag = producer_flag, 
-                    queue_list=queue_list, 
-                    profilers=profilers, 
-                    activities=activities, 
-                    start_time=start_time
+                    producer_flag=producer_flag,
+                    queue_list=queue_list,
+                    profilers=profilers,
+                    activities=activities,
+                    start_time=start_time,
                 )
 
             Streamer.logger.info("Run Inference without Tiles")
-            print("Run Inference without TILES")
             return self._stream_inference_impl(
-                  model=model,
-                  producer_flag = producer_flag, 
-                  queue_list=queue_list, 
-                  profilers=profilers, 
-                  activities=activities, 
-                  start_time=start_time  
+                model=model,
+                producer_flag=producer_flag,
+                queue_list=queue_list,
+                profilers=profilers,
+                activities=activities,
+                start_time=start_time,
             )
 
 
@@ -407,32 +406,42 @@ class OptimizedStreamer(Streamer):
                 _t0 = time.perf_counter()
                 _t0_rel = _t0 - stream_start
 
-            with profilers[1]: 
-                if self.seen == 0 and self.args.verbose: 
+            
+            with profilers[1]:
+                event = None
+                if self.seen == 0 and self.args.verbose:
                     with profile(activities=activities) as prof:
-                        (i_boxes, i_scores, i_classes), event = self.model(images, orig_imgs=original_images, debug=self.args.verbose)
-                    
-                    if not os.path.exists("assets/trace_jsons"):
-                        os.mkdir("assets/trace_jsons")
-                    
-                    prof.export_chrome_trace(f"assets/trace_jsons/trace_{model}.json")
-                else: 
-                    # The shape of image is (3, 640, 640) | original_images shape is (1080, 1920, 3) 
-                    # If the roi is enabled then original images shape should be the cropped size. 
-                    # Results should match the appropriate original_image size.  
-                    (i_boxes, i_scores, i_classes), event = self.model(
+                        infer_outputs = self.model(
                             images,
                             orig_imgs=original_images if not self.use_roi else cropped_original_images,
-                            debug=self.args.verbose
+                            debug=self.args.verbose,
+                        )
+
+                    if not os.path.exists("assets/trace_jsons"):
+                        os.mkdir("assets/trace_jsons")
+
+                    model_tag = getattr(self, "model_tag", type(self.model).__name__)
+                    prof.export_chrome_trace(f"assets/trace_jsons/trace_{model_tag}.json")
+                else:
+                    # The shape of image is (3, 640, 640) | original_images shape is (1080, 1920, 3)
+                    # If ROI is enabled then original_images shape should be the cropped size.
+                    infer_outputs = self.model(
+                        images,
+                        orig_imgs=original_images if not self.use_roi else cropped_original_images,
+                        debug=self.args.verbose,
                     )
+
+                if isinstance(infer_outputs, tuple) and len(infer_outputs) == 2 and isinstance(infer_outputs[0], tuple):
+                    (i_boxes, i_scores, i_classes), event = infer_outputs
+                else:
+                    i_boxes, i_scores, i_classes = infer_outputs
             
             if self.args.plot_performance:
                 inference_ms = (time.perf_counter() - _t0) * 1e3
                 timeline_logger.log_span(batch_idx, 'inference', _t0_rel, time.perf_counter() - stream_start)
 
-            if model=='engine':
-                # End event and synchronize the engine after we don't need the tensors anymore 
-                # Transfer them into the CPU stream 
+            if event is not None and torch.cuda.is_available():
+                # Synchronize only when the backend provides a CUDA completion event.
                 torch.cuda.current_stream().wait_event(event)
 
             if self.args.plot_performance:
