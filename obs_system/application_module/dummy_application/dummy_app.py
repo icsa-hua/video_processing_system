@@ -47,7 +47,7 @@ class Application:
         self.mqtt_subscriber: Any = None
         self.logic_module = defaultdict()
         self.gpu_enabled: bool = False
-        self.machine_type: bool = False 
+        self.machine_type = self.get_device_type()
         self.model_registry = build_default_model_registry()
         self.streamer_factory = StreamerFactory(
             registry=self.model_registry,

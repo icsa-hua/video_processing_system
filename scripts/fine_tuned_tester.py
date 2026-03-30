@@ -8,5 +8,5 @@ TEST_MODEL_PATH = 'assets/unified_dataset/images/test'
 
 model = YOLO(MODEL_PATH)
 
-results = model.predict(TEST_MODEL_PATH, save=True, save_txt=False, conf=0.25)
+results = model.predict(TEST_MODEL_PATH, save=True, save_txt=False, conf=0.4)
 

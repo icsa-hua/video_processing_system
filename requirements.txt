@@ -5,7 +5,7 @@ numpy
 paho_mqtt==2.1.0
 Pillow
 psutil
-pynvml
+nvidia-ml-py
 Shapely
 #silence_tensorflow
 #streamlit
@@ -24,3 +24,4 @@ kiwisolver
 tqdm
 cbor2
 defusedxml
+jetson-stats
