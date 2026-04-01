@@ -210,7 +210,7 @@ class Application:
             broker_address=BROKER,
             topic=self.mqtt_topic,
             callback_version=CALLBACK_API_VERSION,
-            client_id="obs-sender",
+            client_id=CLIENT_NAME,
             qos=qos,
             jpeg_quality=jpeg_quality,
         )
