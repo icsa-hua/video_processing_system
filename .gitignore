@@ -47,3 +47,4 @@ lanes_final.png
 samples/fisheye8k_large.png
 cprofile.txt
 obs_system/compressed/compressed_models/*
+train_freeze_unified_dataset_512
