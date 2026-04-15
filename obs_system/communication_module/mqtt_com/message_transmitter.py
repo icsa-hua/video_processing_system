@@ -248,7 +248,6 @@ class CBORMQTTCropClientCV2(MQTTInterface):
         }
         if frame_id is not None:
             msg["frame_id"] = int(frame_id)
-        import pdb; pdb.set_trace()
 
         return cbor2.dumps(msg)
 

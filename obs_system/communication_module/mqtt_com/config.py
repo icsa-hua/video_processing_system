@@ -2,18 +2,20 @@ import os
 import paho.mqtt.client as mqtt 
 from pathlib import Path
 
-BROKER = "localhost" 
-PORT = 1883 
-TOPIC = "test/topic" 
+BROKER = "edgejet2.edi.lv"
+PORT = 8884 
+TOPIC = "reid-vehicle-detection" 
 MESSAGE = "" 
 CALLBACK_API_VERSION = mqtt.CallbackAPIVersion.VERSION2 
 PROTOCOL = mqtt.MQTTv311 
 QOS = 1 
 TIMEOUT_S = 10 
 
-CLIENT_CRT = "path/to/client.crt" 
-CLIENT_KEY = "path/to/client.key" 
-CA_CRT = "path/to/ca.crt" 
+CLIENT_NAME="edgeai-vcd42-hua"
+
+CLIENT_CRT = "assets/mqtt_credentials/client.crt" 
+CLIENT_KEY = "assets/mqtt_credentials/client.key" 
+CA_CRT = "assets/mqtt_credentials/ca-cert" 
 
 JPEG_QUALITY = 75 
 KEEPALIVE = 60 
