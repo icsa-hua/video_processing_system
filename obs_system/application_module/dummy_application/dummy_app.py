@@ -1,6 +1,7 @@
 from obs_system.communication_module.mqtt_com.config import BROKER, CALLBACK_API_VERSION, CREATE_SUBSCRIBER, KEEPALIVE, PORT
 from obs_system.communication_module.mqtt_com.config import *
 from obs_system.communication_module.mqtt_com.message_transmitter import CBORMQTTCropClientCV2, RealMQTT
+from obs_system.application_module.dummy_application.pipeline_config import PipelineConfig
 from obs_system.detection_module.interface.factory import StreamerFactory
 from obs_system.detection_module.interface.model_registry import build_default_model_registry
 from obs_system.logic_module.dummy_logic.region_setter import RegionSetter
@@ -69,7 +70,7 @@ class Application:
         return 'unknown_arm' 
 
 
-    def setup_process(self, args):
+    def setup_process(self, config: PipelineConfig):
         # Check for GPU (NVIDIA) to allow the program to run GPU statistics
         self.gpu_enabled = check_nvidia_existence()
 
@@ -78,21 +79,28 @@ class Application:
             self.handle = pynvml.nvmlDeviceGetHandleByIndex(0)
 
         self.process_memory = psutil.Process(os.getpid())
-        self.source = os.path.join(self.parent_path, args.video_source) if args.video_source else self.source
-        self.use_TRT = args.use_TRT if args.use_TRT is not None else False
-        self.mqtt = args.mqtt if args.mqtt is not None else False
+        if "://" in config.video_source:
+            self.source = config.video_source
+        else:
+            source_path = Path(config.video_source)
+            self.source = str(source_path if source_path.is_absolute() else Path(self.parent_path) / source_path)
+        self.use_TRT = bool(config.use_TRT)
+        self.mqtt = bool(config.mqtt)
         self.start_time = time.time()
 
-        DEFAULT_CFG.show = args.show if args.show is not None else False
-        DEFAULT_CFG.gui = args.gui if args.gui is not None else False
+        DEFAULT_CFG.show = bool(config.show)
+        DEFAULT_CFG.gui = bool(config.gui)
         DEFAULT_CFG.save = self.save_outputs
         DEFAULT_CFG.verbose = self.verbose_outputs
-        DEFAULT_CFG.half = args.half
-        DEFAULT_CFG.bench = args.bench
-        DEFAULT_CFG.bench_labels = args.bench_labels
-        DEFAULT_CFG.roi = args.roi if args.roi is not None else False
-        DEFAULT_CFG.plot_performance = args.plot_perf if args.plot_perf is not None else False
-        DEFAULT_CFG.only_FPS = args.only_FPS if args.only_FPS is not None else False
+        DEFAULT_CFG.half = bool(config.half)
+        DEFAULT_CFG.bench = bool(config.bench)
+        DEFAULT_CFG.bench_labels = config.bench_labels
+        DEFAULT_CFG.roi = bool(config.roi)
+        DEFAULT_CFG.plot_performance = bool(config.plot_perf)
+        DEFAULT_CFG.only_FPS = bool(config.only_FPS)
+        DEFAULT_CFG.preview_max_width = int(config.preview_max_width)
+        DEFAULT_CFG.preview_jpeg_quality = int(config.preview_jpeg_quality)
+        DEFAULT_CFG.preview_fps = float(config.preview_fps)
 
         tracemalloc.start()
 
@@ -130,21 +138,21 @@ class Application:
         )
 
 
-    def setup_logic_module(self, args):
+    def setup_logic_module(self, config: PipelineConfig):
         # Change this based on your video. Get the first frame.
         self.logic_module["SUBTRACTOR"] = Subtractor()
         self.logic_module["ROI"] = RegionSetter()
 
-        if args.fep:
+        if config.fep:
             self.logic_module["FEP"] = FishEyeProjection(crop=0.00)
         else:
             self.logic_module["FEP"] = None
 
 
-    def run_app(self, producer_flag=None, queue=None):
+    def run_app(self, producer_flag=None, preview_queue=None):
         self.statistics()
 
-        self.process_stream(producer_flag=producer_flag, queue=queue)
+        self.process_stream(producer_flag=producer_flag, preview_queue=preview_queue)
         perf.finalize()
         stats = perf.results()
 
@@ -164,7 +172,7 @@ class Application:
         return
 
 
-    def process_stream(self, producer_flag=None, queue=None):
+    def process_stream(self, producer_flag=None, preview_queue=None):
         logger.debug("-- Starting the video streaming process --")
 
         kwargs = {"save": self.save_outputs, "verbose": self.verbose_outputs}
@@ -174,7 +182,7 @@ class Application:
             logic_module=self.logic_module,
             mqtt_broker=self.mqtt_publisher,
             producer_flag=producer_flag,
-            queue_list=queue,
+            preview_queue=preview_queue,
             **{key: kwargs[key] for key in ["verbose", "save"]},
         )
 
@@ -257,6 +265,43 @@ class Application:
         logger.debug("-- Terminating the application --")
 
         self.statistics()
+
+
+def run_application(
+    config: PipelineConfig,
+    *,
+    producer_flag=None,
+    preview_queue=None,
+) -> None:
+    model_specification = config.resolve_model()
+
+    app = Application(
+        save=bool(config.save),
+        verbose=bool(config.verbose),
+    )
+
+    with StepContext(name="Setup Process", catch=(KeyError, ModuleNotFoundError)):
+        app.setup_process(config)
+
+    with StepContext(name="Setup Model", catch=(OSError, ValueError)):
+        app.setup_model(
+            model_name=f"{model_specification.name}.{model_specification.kind}",
+            path_to_load=model_specification.path,
+            opt=config.type,
+        )
+
+    with StepContext(name="Setup Logic", catch=(KeyError, IndexError)):
+        app.setup_logic_module(config)
+
+    with StepContext(name="Setup MQTT", catch=(ConnectionError, TimeoutError)):
+        if app.mqtt:
+            app.setup_mqtt()
+        else:
+            logger.debug("[MQTT] interface is disabled")
+
+    with StepContext(name="Run_App", catch=(RuntimeError,)):
+        app.run_app(producer_flag=producer_flag, preview_queue=preview_queue)
+        app.close_app()
 
         if self.mqtt_subscriber is not None:
             self.mqtt_subscriber.client.loop_stop()

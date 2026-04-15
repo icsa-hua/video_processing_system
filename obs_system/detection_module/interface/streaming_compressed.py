@@ -40,7 +40,7 @@ class OptimizedStreamer(Streamer):
         super().__init__(cfg=cfg, overrides=overrides, _callbacks=_callbacks)
         
 
-    def __call__(self, source:str, model:str, logic_module=None, mqtt_broker=None, producer_flag=None, queue_list=None, *args, **kwargs)->None:
+    def __call__(self, source:str, model:str, logic_module=None, mqtt_broker=None, producer_flag=None, preview_queue=None, *args, **kwargs)->None:
         self.mqtt_interface = mqtt_broker 
         self.args.stream_buffer = True 
         self.logic_module = logic_module 
@@ -50,7 +50,7 @@ class OptimizedStreamer(Streamer):
             self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if os.path.isfile(source) else source, 
                 model=model, 
                 producer_flag=producer_flag, 
-                queue_list=queue_list
+                preview_queue=preview_queue
             )
 
         except KeyboardInterrupt as ke: 
@@ -93,7 +93,7 @@ class OptimizedStreamer(Streamer):
 
 
     @smart_inference_mode()
-    def stream_inference(self, source:str, model:str, producer_flag:Any, queue_list:Any, *args, **kwargs)->Generator[Optional[Any], None, None]:
+    def stream_inference(self, source:str, model:str, producer_flag:Any, preview_queue:Any, *args, **kwargs)->Generator[Optional[Any], None, None]:
 
         self.source = source 
 
@@ -154,7 +154,7 @@ class OptimizedStreamer(Streamer):
                 return self._stream_inference_impl_tiles(
                     model=model,
                     producer_flag=producer_flag,
-                    queue_list=queue_list,
+                    preview_queue=preview_queue,
                     profilers=profilers,
                     activities=activities,
                     start_time=start_time,
@@ -164,7 +164,7 @@ class OptimizedStreamer(Streamer):
             return self._stream_inference_impl(
                 model=model,
                 producer_flag=producer_flag,
-                queue_list=queue_list,
+                preview_queue=preview_queue,
                 profilers=profilers,
                 activities=activities,
                 start_time=start_time,
@@ -199,7 +199,7 @@ class OptimizedStreamer(Streamer):
 
         model = kwargs["model"] 
         producer_flag  = kwargs["producer_flag"] 
-        queue_list = kwargs["queue_list"]
+        preview_queue = kwargs["preview_queue"]
         profilers=kwargs["profilers"] 
         activities=kwargs["activities"]
         start_time = kwargs["start_time"]
@@ -661,14 +661,7 @@ class OptimizedStreamer(Streamer):
                                 im= original_images,
                         )
 
-                if producer_flag is not None: 
-                    producer_flag.value = True
-
-                if self.proc_image is not None and queue_list is not None:
-                    queue_list.put(self.proc_image)
-
-                elif self.proc_image is None and queue_list is not None: 
-                    queue_list.put(None)    
+                self.publish_preview(preview_queue, producer_flag)
 
                 preds.append(r)
                 mqtt_messages.append(mqtt_mess)
@@ -731,6 +724,7 @@ class OptimizedStreamer(Streamer):
             self.run_callbacks("on_predict_batch_end")
 
         producer_thread.join()
+        self.close_preview_stream(preview_queue)
 
         self.save_queue.put(None)
         self.save_thread.join()

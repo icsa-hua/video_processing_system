@@ -187,8 +187,8 @@ class UnifiedModelStreamer(OptimizedStreamer):
 
 
     @smart_inference_mode()
-    def stream_inference(self, source, model, producer_flag, queue_list, *args, **kwargs):
-        return super().stream_inference(source, model, producer_flag, queue_list, *args, **kwargs)
+    def stream_inference(self, source, model, producer_flag, preview_queue, *args, **kwargs):
+        return super().stream_inference(source, model, producer_flag, preview_queue, *args, **kwargs)
 
 
     def _stream_inference_impl_tiles(self, **kwargs)->Generator[Optional[Any], None, None]: 

@@ -32,6 +32,7 @@ scripts/homography_test.py
 scripts/calibrate_camera.py
 *.engine 
 scripts/fish8k_test.py
+samples/sample.mp4
 samples/highway.png
 samples/camera9_A_5.png
 samples/fisheye8k.png 
@@ -48,3 +49,5 @@ samples/fisheye8k_large.png
 cprofile.txt
 obs_system/compressed/compressed_models/*
 train_freeze_unified_dataset_512
+AGENTS.md 
+PLAN.md 

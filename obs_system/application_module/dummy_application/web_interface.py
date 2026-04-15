@@ -1,205 +1,190 @@
-from obs_system.utils.logger import get_logger 
+from __future__ import annotations
 
-import os 
-import cv2 
-import sys 
-import time 
-import requests 
-import tempfile 
-import warnings 
-import subprocess    
-import numpy as np  
-import streamlit as st
+from obs_system.application_module.dummy_application.pipeline_config import DEFAULT_BENCH_LABELS
+from obs_system.utils.logger import get_logger
 
-from PIL import Image 
-from typing import Text
+import os
+import tempfile
+import warnings
 from pathlib import Path
+from typing import Text
 
-logger = get_logger("obs_system."+__name__)
+import requests
+import streamlit as st
+from PIL import Image
 
-PACKAGE_ROOT = Path(__file__).resolve().parent.parent  # Moves up to `mypackage/`
+
+logger = get_logger("obs_system." + __name__)
+
+PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 BACKEND_URL = f"http://{st.get_option('server.address')}:8000"
-static_folder =  PACKAGE_ROOT / "static"
-logo_image = static_folder / "logo.png" 
-HOST = st.get_option('server.address')
-PORT = st.get_option('server.port')
+static_folder = PACKAGE_ROOT / "static"
+logo_image = static_folder / "logo.png"
+
+MODEL_OPTIONS = {
+    "TensorRT FP16 engine": "assets/compressed_models/mixed_dataset_trained_yolov8s_fixed_mixed_batch_trt_fp16_noint8.engine",
+    "YOLOv8 ONNX": "assets/compressed_models/mixed_dataset_trained_yolov8s.onnx",
+    "YOLOv8 PT": "assets/compressed_models/mixed_dataset_trained_yolov8s.pt",
+}
+
+
+def _cleanup_uploaded_file() -> None:
+    temp_path = st.session_state.get("uploaded_video_path")
+    if not temp_path:
+        return
+    try:
+        os.remove(temp_path)
+    except OSError as exc:
+        warnings.warn(f"Error deleting temporary file: {exc}. File may not exist.")
+    finally:
+        st.session_state["uploaded_video_path"] = None
+
 
 st.set_page_config(
-    page_title="EDGEAI-VPS", 
+    page_title="EDGEAI-VPS",
     page_icon=logo_image,
-    layout="wide"
+    layout="wide",
 )
 
-#Title 
-# st.title("Video Processing System")
-#Information 
-st.markdown(":snowflake: **Video Processing System** is an application that allows you to process any video or live stream using pretrained Yolov5 and Yolov8 models."
-            "Used for multiple object detection, tracking, and classification in real-time. :snowflake:")
+if "uploaded_video_path" not in st.session_state:
+    st.session_state["uploaded_video_path"] = None
 
-js = """
+st.markdown(
+    ":snowflake: **Video Processing System** is an application that allows you to process any video or live stream using "
+    "pretrained Yolov5 and Yolov8 models. Used for multiple object detection, tracking, and classification in real-time. "
+    ":snowflake:"
+)
+
+js = f"""
 <script>
-window.addEventListener("beforeunload", async function() {
-    fetch("""f'{BACKEND_URL}/shutdown'""", { method: 'POST' });
-});
+window.addEventListener("beforeunload", async function() {{
+    fetch("{BACKEND_URL}/shutdown", {{ method: "POST" }});
+}});
 </script>
 """
 st.markdown(js, unsafe_allow_html=True)
 
-show = False
-mqtt = False 
-save = False 
-verbose = False 
-
 with st.sidebar:
-    logo_image = Image.open(logo_image)
+    logo = Image.open(logo_image)
     icon, title = st.columns([0.4, 0.63])
 
-    with icon: 
-        st.image(logo_image, width=100)
+    with icon:
+        st.image(logo, width=100)
 
-    with title: 
-        repo_link: Text = ("https://edge-ai-tech.eu/")
-        st.markdown(f"""<h4 style='color: #f0eef0;'>Real-Time Intersection Monitoring<a href="{repo_link}" target="_blank">🏢</a></h2>""", unsafe_allow_html=True)        
+    with title:
+        repo_link: Text = "https://edge-ai-tech.eu/"
+        st.markdown(
+            f"""<h4 style='color: #f0eef0;'>Real-Time Intersection Monitoring<a href="{repo_link}" target="_blank">🏢</a></h4>""",
+            unsafe_allow_html=True,
+        )
 
-    #Input Options 
     option = st.radio("Select Video Source", ("Local Video", "Live Stream"))
-    video_path = None
-    
     st.subheader("Select Object Detection Model")
-    model_choice = st.selectbox(
-        "Select a model",
-        ["Yolov5n", "Yolov8n", 
-        "Yolov5s", "Yolov8s", 
-        "Onnx (Yolov8s)"]
-    )
+    model_label = st.selectbox("Select a model", list(MODEL_OPTIONS.keys()), index=0)
 
-    if st.checkbox("Show Real-Time Inference"):
-        show = True
+    show = st.checkbox("Show Real-Time Inference", value=True)
+    mqtt = st.checkbox("Use MQTT to send data to server", value=False)
+    save = st.checkbox("Save Video after Inference", value=False)
+    verbose = st.checkbox("Show logs in Terminal", value=False)
+    roi = st.checkbox("Enable ROI", value=True)
+    use_trt = st.checkbox("Use TensorRT", value=model_label == "TensorRT FP16 engine")
+    only_fps = st.checkbox("Measure FPS Only", value=True)
+    half = st.checkbox("Use Half Precision", value=False)
+    fep = st.checkbox("Enable FishEye Projection", value=False)
 
-    if st.checkbox("Use MQTT to send data to server"):
-       mqtt = True
-    
-    if st.checkbox("Save Video after Inference"):
-       save = True
-    
-    if st.checkbox("Show logs in Terminal"):
-       verbose = True
-
-    start_button = st.button('Start', type='primary')
+    start_button = st.button("Start", type="primary")
     stop_button = st.button("Stop/Close")
-    
+
+video_source = None
 if option == "Local Video":
-    uploaded_file = st.file_uploader("Upload Video",accept_multiple_files=False,type=["mp4", "avi"])
-    if uploaded_file: 
-        # video_path = uploaded_file.name
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
+    uploaded_file = st.file_uploader("Upload Video", accept_multiple_files=False, type=["mp4", "avi"])
+    if uploaded_file:
+        suffix = Path(uploaded_file.name).suffix or ".mp4"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
             temp_file.write(uploaded_file.read())
-            temp_path = temp_file.name
-
-        video_path = temp_path 
-        if not video_path:
-            st.error("Please upload a video file.")
-
-elif option == "Live Stream":
-    video_path = st.text_input("Enter Video Stream URL")
-    if not video_path:
+            st.session_state["uploaded_video_path"] = temp_file.name
+    video_source = st.session_state.get("uploaded_video_path")
+    if uploaded_file and not video_source:
+        st.error("Please upload a video file.")
+else:
+    video_source = st.text_input("Enter Video Stream URL")
+    if not video_source:
         st.warning("Please enter a stream URL.")
 
-if start_button: 
-    col1, col2, col3 = st.columns([1, 2, 1])  
-    if not video_path: 
-        st.error('Please provide a video path or stream URL.')
-    else: 
+if start_button:
+    col1, col2, col3 = st.columns([1, 2, 1])
+    if not video_source:
+        st.error("Please provide a video path or stream URL.")
+    else:
         st.write("Calling Server for processing...")
-        logger.debug(f"video_path:{video_path}, name_model: {model_choice}, show:{show}, mqtt:{mqtt}, save:{save}, verbose:{verbose}")
+        payload = {
+            "video_source": video_source,
+            "model_name": MODEL_OPTIONS[model_label],
+            "type": "tracking",
+            "show": show,
+            "mqtt": mqtt,
+            "save": save,
+            "verbose": verbose,
+            "roi": roi,
+            "half": half,
+            "fep": fep,
+            "bench": False,
+            "bench_labels": DEFAULT_BENCH_LABELS,
+            "use_TRT": use_trt,
+            "plot_perf": False,
+            "only_FPS": only_fps,
+        }
+        logger.debug("UI payload: %s", payload)
 
         try:
-            response = requests.post(f"{BACKEND_URL}/",
-                json={"video_path":video_path, "name_model": model_choice, "show":show, "mqtt":mqtt, 'save':save, 'verbose': verbose}
-            )
-
-            if response.status_code == 200:
-                st.success("Configuration added successfully!")
-                if not show: 
-                    st.write("Processed video will be save locally in ../video_processing_system/runs/detect/")
-                stframe = st.empty()
-                #Stream Frames 
-                with requests.get(f"{BACKEND_URL}/video_feed", stream=True) as video_stream: 
-                    
-                    buffer = b""
-                    for chunk in video_stream.iter_content(chunk_size=1024): 
-                        buffer += chunk 
-                        while b"--frame\r\n" in buffer:
-                            #Find the boundary 
-                            start_buf = buffer.find(b"--frame\r\n")
-                            end_buf = buffer.find(b"--frame\r\n", start_buf+1)
-
-                            if end_buf == -1:
-                                break
-                            # Extract the raw image data 
-                            frame_raw = buffer[start_buf:end_buf]
-                            buffer = buffer[end_buf:]
-                            # Extract JPEG bytes after headers 
-                            try: 
-                                headers_end = frame_raw.find(b"\r\n\r\n") + 4
-                                image_bytes = frame_raw[headers_end:]
-                                if not image_bytes:
-                                    continue
-                                image_array = cv2.imdecode(
-                                    np.frombuffer(image_bytes,dtype=np.uint8),
-                                    cv2.IMREAD_COLOR
-                                )
-                                if image_array is None:
-                                    raise ValueError("Failed to decode image.")
-                                with col2:                                
-                                    stframe.image(image_array, channels="BGR")
-                            except Exception as e:
-                                st.error(f"Error decoding frame: {e}")
-
-            else:
-                st.error(f"Error: {response.json().get('detail')}")
-                sys.exit(1)
-
+            response = requests.post(f"{BACKEND_URL}/", json=payload, timeout=15)
+            response.raise_for_status()
+            st.success("Configuration added successfully!")
             st.write(response.json())
 
-        except requests.exceptions.ConnectionError as coe: 
-            st.error(f"Connection Error: {coe}")
+            if not show:
+                st.info("Preview is disabled. Processed video will be saved under runs/detect when saving is enabled.")
+            else:
+                stframe = st.empty()
+                with requests.get(f"{BACKEND_URL}/video_feed", stream=True, timeout=(5, 60)) as video_stream:
+                    buffer = b""
+                    for chunk in video_stream.iter_content(chunk_size=65536):
+                        if not chunk:
+                            continue
+                        buffer += chunk
+                        while b"--frame\r\n" in buffer:
+                            start_buf = buffer.find(b"--frame\r\n")
+                            end_buf = buffer.find(b"--frame\r\n", start_buf + 1)
+                            if end_buf == -1:
+                                break
 
+                            frame_raw = buffer[start_buf:end_buf]
+                            buffer = buffer[end_buf:]
+                            headers_end = frame_raw.find(b"\r\n\r\n")
+                            if headers_end == -1:
+                                continue
+                            image_bytes = frame_raw[headers_end + 4:].strip()
+                            if not image_bytes:
+                                continue
+                            with col2:
+                                stframe.image(image_bytes)
+        except requests.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.response.json().get("detail", "")
+            except Exception:
+                detail = exc.response.text
+            st.error(f"Error: {detail or exc}")
+        except requests.exceptions.RequestException as exc:
+            st.error(f"Connection Error: {exc}")
 
 if stop_button:
-
     try:
-        os.remove(video_path)
-    except OSError as e:
-        warnings.warn(f"Error deleting temporary file: {e}. File may not exist.")
-    
-    response = requests.post(f"{BACKEND_URL}/shutdown")
-    
-    if response.status_code == 200:
+        response = requests.post(f"{BACKEND_URL}/shutdown", timeout=10)
+        response.raise_for_status()
         st.success("Application stopped successfully!")
-        time.sleep(2) 
-        subprocess.run(["streamlit", "run", 'obs_system/application_module/dummy_application/web_interface.py', f'--server.port={str(PORT)}', f"--server.address={str(HOST)}"])
-
-    else: 
-        st.error("Failed to stop the backend server!")
-
-    st.stop() 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    except requests.exceptions.RequestException as exc:
+        st.error(f"Failed to stop the backend server: {exc}")
+    finally:
+        _cleanup_uploaded_file()
+    st.rerun()

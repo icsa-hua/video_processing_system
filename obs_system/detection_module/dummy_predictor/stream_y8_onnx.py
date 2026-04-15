@@ -43,8 +43,8 @@ class OnnxY8Streamer(OptimizedStreamer):
         return torch.tensor(x).to(self.device) if isinstance(x, np.ndarray) else x
 
 
-    def __call__(self, source=None, model=None, logic_module=None, mqtt_broker=None,producer_flag=None, queue=None, *args, **kwargs): 
-         super().__call__(source, model, logic_module, mqtt_broker, producer_flag, queue , *args, **kwargs)
+    def __call__(self, source=None, model=None, logic_module=None, mqtt_broker=None,producer_flag=None, preview_queue=None, *args, **kwargs): 
+         super().__call__(source, model, logic_module, mqtt_broker, producer_flag, preview_queue , *args, **kwargs)
 
 
     def pre_transform(self, im): 
@@ -124,8 +124,8 @@ class OnnxY8Streamer(OptimizedStreamer):
 
 
     @smart_inference_mode()
-    def stream_inference(self, source, model, producer_flag, queue, *args, **kwargs): 
-        return super().stream_inference(source, model, producer_flag, queue, *args, **kwargs) 
+    def stream_inference(self, source, model, producer_flag, preview_queue, *args, **kwargs): 
+        return super().stream_inference(source, model, producer_flag, preview_queue, *args, **kwargs) 
 
 
     @mem_profile
@@ -133,7 +133,7 @@ class OnnxY8Streamer(OptimizedStreamer):
         
         model = kwargs["model"] 
         producer_flag  = kwargs["producer_flag"] 
-        queue = kwargs["queue"]
+        preview_queue = kwargs["preview_queue"]
         profilers=kwargs["profilers"] 
         activities=kwargs["activities"] 
         start_time = kwargs["start_time"]
@@ -306,13 +306,7 @@ class OnnxY8Streamer(OptimizedStreamer):
                             s = self.batch[2]
                         )
 
-                    if producer_flag is not None : 
-                       producer_flag.value = True 
-
-                    if self.proc_image is not None and queue is not None: 
-                        queue.put(self.proc_image) 
-                    elif self.proc_image is None and queue is not None: 
-                        queue.put(None) 
+                    self.publish_preview(preview_queue, producer_flag)
 
                     with StepContext(name="Crop Objects to Image", catch=(RuntimeError,), verbose=self.args.verbose):
                         try: 
@@ -337,6 +331,8 @@ class OnnxY8Streamer(OptimizedStreamer):
             self.run_callbacks("on_predict_batch_end")
             frame_list.append((time.perf_counter() -t0) * 1000)
 
+        self.close_preview_stream(preview_queue)
+
         for v in self.vid_writer.values(): 
             if isinstance(v, cv2.VideoWriter): 
                 v.release() 
@@ -359,8 +355,6 @@ class OnnxY8Streamer(OptimizedStreamer):
     @mem_profile
     def _stream_inference_impl(self, **kwargs): 
         super()._stream_inference_impl(**kwargs) 
-
-
 
 
 

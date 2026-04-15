@@ -39,7 +39,7 @@ class YOLOStreamer(Streamer):
 
 
     # @abstractmethod
-    def __call__(self, source:str, model:str, logic_module=None, mqtt_broker=None, producer_flag=None, queue=None, *args, **kwargs)->None:
+    def __call__(self, source:str, model:str, logic_module=None, mqtt_broker=None, producer_flag=None, preview_queue=None, *args, **kwargs)->None:
         pass
 
 
@@ -99,7 +99,7 @@ class YOLOStreamer(Streamer):
         
 
     @smart_inference_mode()
-    def stream_inference(self, source:str, model:str, producer_flag:Any, queue:Any, *args, **kwargs):
+    def stream_inference(self, source:str, model:str, producer_flag:Any, preview_queue:Any, *args, **kwargs):
         """Streams real-time inference on camera feed and saves results to file."""
         if self.args.verbose:
             logger.info("")
@@ -209,12 +209,7 @@ class YOLOStreamer(Streamer):
 
                     if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
                         s[i] += self.write_results(i, Path(paths[i]), images, im0s, s)
-                        if producer_flag is not None: 
-                            producer_flag.value = True
-                        if self.proc_image is not None and queue is not None:
-                            queue.put(self.proc_image)
-                        elif self.proc_image is None and queue is not None: 
-                            queue.put(None)    
+                        self.publish_preview(preview_queue, producer_flag)
                         time.sleep(0.08)
 
                     self.capture_object_boxes(i, im0s[i], self.results[i], cropped_dirname=self.cropped_image_dirname) 
@@ -242,7 +237,8 @@ class YOLOStreamer(Streamer):
             nl = len(list(self.save_dir.glob("labels/*.txt")))  # number of labels
             s = f"\n{nl} label{'s' * (nl > 1)} saved to {self.save_dir / 'labels'}" if self.args.save_txt else ""
             logger.info(f"Results saved to {colorstr('bold', self.save_dir)}{s}")
-        
+
+        self.close_preview_stream(preview_queue)
         self.run_callbacks("on_predict_end")
 
    

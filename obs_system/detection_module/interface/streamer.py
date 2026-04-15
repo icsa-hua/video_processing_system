@@ -79,11 +79,12 @@ class Streamer(ABC):
         self.source_type: Any = None 
         self.results: Optional[List[Any]] = []
         # self.txt_path: Optional[str] = None 
-        self.proc_image: Optional[bool] = None 
+        self.proc_image: Optional[bytes] = None 
         self.mqtt_interface:Any = None 
         self.logic_module: Any = None 
         self.tracker_model: Any = None 
         self.points = dict() 
+        self.preview_last_emit_ts = 0.0
 
         self._lock = threading.Lock() 
         self.converter = ConverterResults() 
@@ -117,7 +118,7 @@ class Streamer(ABC):
 
 
     @abstractmethod
-    def __call__(self, source:str, model:str, logic_module=None, mqtt_broker=None, producer_flag=None, queue_list=None, *args, **kwargs)->None:
+    def __call__(self, source:str, model:str, logic_module=None, mqtt_broker=None, producer_flag=None, preview_queue=None, *args, **kwargs)->None:
         pass
 
 
@@ -192,7 +193,7 @@ class Streamer(ABC):
 
 
     @final
-    def predict_cli(self, source:str, model:str, producer_flag:Any=None, queue_list:Any=None)->None: 
+    def predict_cli(self, source:str, model:str, producer_flag:Any=None, preview_queue:Any=None)->None: 
         """
         Method used for Command Line Interface (CLI) prediction.
 
@@ -204,7 +205,7 @@ class Streamer(ABC):
             Do not modify this function or remove the generator. The generator ensures that no outputs are
             accumulated in memory, which is critical for preventing memory issues during long-running predictions.
         """
-        gen = self.stream_inference(source=source, model=model, producer_flag=producer_flag, queue_list=queue_list)
+        gen = self.stream_inference(source=source, model=model, producer_flag=producer_flag, preview_queue=preview_queue)
         for _ in gen: 
             pass 
 
@@ -241,7 +242,7 @@ class Streamer(ABC):
 
     @abstractmethod 
     @smart_inference_mode()
-    def stream_inference(self, source:str, model:str, producer_flag:Any, queue_list:Any, *args, **kwargs)->Generator[Optional[Any], None, None]: 
+    def stream_inference(self, source:str, model:str, producer_flag:Any, preview_queue:Any, *args, **kwargs)->Generator[Optional[Any], None, None]: 
         raise NotImplemented
 
 
@@ -411,7 +412,7 @@ class Streamer(ABC):
             cv2.polylines(im, [self.points[cls]], isClosed=False, color=colors(cls, True), thickness=2)
 
         if self.docker_flag:
-            self.proc_image = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
+            self.proc_image = self._encode_preview_frame(cv2.cvtColor(im, cv2.COLOR_RGB2BGR))
             return 
 
         elif platform.system() == "Linux" and p not in self.windows: 
@@ -423,11 +424,77 @@ class Streamer(ABC):
 
         if DEFAULT_CFG.gui:
             cv2.destroyAllWindows()
-            self.proc_image = im
+            self.proc_image = self._encode_preview_frame(im)
 
         elif self.args.show: 
             cv2.imshow(winname=p, mat=im)
             cv2.waitKey(300 if self.dataset.mode == 'image' else 1)
+
+
+    def _encode_preview_frame(self, frame: np.ndarray) -> Optional[bytes]:
+        if frame is None:
+            return None
+
+        preview_fps = float(getattr(self.args, "preview_fps", 8.0) or 0.0)
+        now = time.perf_counter()
+        if preview_fps > 0 and (now - self.preview_last_emit_ts) < (1.0 / preview_fps):
+            return None
+
+        self.preview_last_emit_ts = now
+
+        max_width = int(getattr(self.args, "preview_max_width", 960) or 960)
+        quality = int(getattr(self.args, "preview_jpeg_quality", 70) or 70)
+        preview = frame
+
+        if max_width > 0 and frame.shape[1] > max_width:
+            scale = max_width / float(frame.shape[1])
+            preview = cv2.resize(
+                frame,
+                (max_width, max(1, int(frame.shape[0] * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        ok, encoded_image = cv2.imencode(".jpg", preview, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+        if not ok:
+            return None
+        return encoded_image.tobytes()
+
+
+    def publish_preview(self, preview_queue: Any, producer_flag: Any = None) -> None:
+        if preview_queue is None or self.proc_image is None:
+            return
+
+        if producer_flag is not None:
+            producer_flag.value = True
+
+        try:
+            preview_queue.put_nowait(self.proc_image)
+        except queue.Full:
+            try:
+                preview_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                preview_queue.put_nowait(self.proc_image)
+            except queue.Full:
+                pass
+
+
+    def close_preview_stream(self, preview_queue: Any) -> None:
+        if preview_queue is None:
+            return
+
+        try:
+            preview_queue.put_nowait(None)
+        except queue.Full:
+            try:
+                preview_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                preview_queue.put_nowait(None)
+            except queue.Full:
+                pass
 
 
     def run_callbacks(self, event:str)->None: 
@@ -627,4 +694,3 @@ def _unletterbox_xyxy_to_orig(
     out[:, 1] = np.clip(out[:, 1], 0, orig_h)
     out[:, 3] = np.clip(out[:, 3], 0, orig_h)
     return out
-

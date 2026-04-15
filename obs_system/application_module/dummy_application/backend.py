@@ -1,192 +1,181 @@
-from obs_system.application_module.dummy_application.dummy_app import Application
-from obs_system.utils.common import *
-from obs_system.utils.logger import get_logger 
-from obs_system.utils.appraisal import StepContext 
+from __future__ import annotations
 
-import os 
-import sys
-import cv2
-import signal
-import time
-import argparse 
 import logging
+import queue as queue_module
+import time
+from multiprocessing import Process, Queue, Value
+from threading import Lock
 
-from pydantic import BaseModel
-from fastapi import FastAPI, BackgroundTasks, Response
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
-from multiprocessing import Process, Queue, Value 
+from pydantic import BaseModel
+
+from obs_system.application_module.dummy_application.dummy_app import run_application
+from obs_system.application_module.dummy_application.pipeline_config import PipelineConfig
+from obs_system.utils.logger import get_logger
+
 
 logger = get_logger(f"obs_system.{__name__}")
 logging.getLogger("uvicorn.error").propagate = False
 
-process = None 
-server = FastAPI() 
-application_inst = None
-video_processing = False 
-frame_queue = Queue(maxsize=100)
-
-# Define the flag as a shared variable
-producer_ready = Value('b', False)  # Boolean flag
-
-class VideoProcessingRequest(BaseModel): 
-    video_path: str
-    name_model: str
-    show: bool
-    mqtt: bool
-    save: bool 
-    verbose: bool
+server = FastAPI()
+worker_lock = Lock()
+worker_process: Process | None = None
+video_processing = False
+frame_queue: Queue = Queue(maxsize=2)
+producer_ready = Value("b", False)
 
 
-def gracefully_close_server(signum, frame):
-    logger.info("Terminating Server...") 
-    sys.exit(0)
+class VideoProcessingRequest(BaseModel):
+    model_name: str
+    video_source: str
+    type: str = "tracking"
+    mqtt: bool = False
+    show: bool = False
+    verbose: bool = False
+    save: bool = False
+    roi: bool = False
+    half: bool = False
+    fep: bool = False
+    bench: bool = False
+    bench_labels: str = "samples/labels"
+    use_TRT: bool = False
+    plot_perf: bool = False
+    only_FPS: bool = False
+    preview_max_width: int = 960
+    preview_jpeg_quality: int = 70
+    preview_fps: float = 8.0
 
 
-signal.signal(signal.SIGINT, gracefully_close_server)
+def _is_worker_alive() -> bool:
+    return worker_process is not None and worker_process.is_alive()
 
 
-def produce_images(args, config, queue, producer_flag):
-    global application_inst
-
-    app = Application()
-
-    with StepContext(name='Setup Process', catch=(KeyError, ModuleNotFoundError)):
-        app.setup_process(config['source'], args)
-    
-    with StepContext(name='Setup Model', catch=(OSError,ValueError)):
-        app.setup_model(
-            model_name=config['model_name'], 
-            stream=config['stream'],
-            opt=config['model_type']
-        )
-
-    if app.model is None: 
-        logger.error("Model not initialized")
-        raise ValueError("Model not initialized")
-   
-    with StepContext(name='Setup Logic',catch=(KeyError,IndexError)):
-        app.setup_logic_module(args) 
-
-    with StepContext(name='Setup MQTT', catch=(ConnectionError, TimeoutError)): 
-        if app.mqtt: 
-            app.setup_mqtt(
-                topic="test/topic", 
-                broker_address="mqtt.eclipseprojects.io",
-                port=1883
-            )
-        else: logger.debug("[MQTT] interface is disabled") 
-    
-
-    app.statistics() 
-    application_inst = app 
-
-    if isinstance(app.source,str): 
-        with StepContext(name="RunApp", catch=(RuntimeError,)): 
-            app.streamer(
-                         source=app.source,
-                         model=config['model_name'],
-                         stream=app.stream,
-                         mqtt_broker=app.mqtt_interface, 
-                         producer_flag=producer_flag, 
-                         queue=queue)
-            
-            app.close_app()
-        
-        logger.debug("-- Function produce_images finished --")
+def _offer_queue_item(target_queue: Queue, item: bytes | None) -> None:
+    try:
+        target_queue.put_nowait(item)
+    except queue_module.Full:
+        try:
+            target_queue.get_nowait()
+        except queue_module.Empty:
+            pass
+        try:
+            target_queue.put_nowait(item)
+        except queue_module.Full:
+            pass
 
 
-def read_frames_from_queue(queue, ready_flag):
+def _reset_preview_state() -> None:
+    global frame_queue, producer_ready
+    frame_queue = Queue(maxsize=2)
+    producer_ready.value = False
 
-    while not ready_flag.value:  # Wait for producer readiness
+
+def _stop_worker() -> None:
+    global worker_process, video_processing
+
+    video_processing = False
+    producer_ready.value = False
+    _offer_queue_item(frame_queue, None)
+
+    if worker_process is not None:
+        if worker_process.is_alive():
+            worker_process.terminate()
+            worker_process.join(timeout=5)
+        worker_process.close()
+        worker_process = None
+
+
+def _worker_main(config: PipelineConfig, preview_queue: Queue, ready_flag: Value) -> None:
+    try:
+        run_application(config, producer_flag=ready_flag, preview_queue=preview_queue)
+    except Exception:
+        logger.exception("Video processing worker failed")
+        raise
+    finally:
+        ready_flag.value = False
+        _offer_queue_item(preview_queue, None)
+
+
+def _build_config(request: VideoProcessingRequest) -> PipelineConfig:
+    config = PipelineConfig(**request.model_dump(), gui=True)
+    return config.validate()
+
+
+def _frame_stream(queue_ref: Queue, ready_flag: Value):
+    while not ready_flag.value:
+        if not _is_worker_alive():
+            return
         time.sleep(0.03)
 
     while True:
-        frame = queue.get()
-        if frame is None:  # End of stream
-            break
-        _, encoded_image = cv2.imencode(".jpg", frame)
-        yield (b"--frame\r\n"
-               b"Content-Type: image/jpeg\r\n\r\n" +
-               encoded_image.tobytes() + b"\r\n")
+        try:
+            frame_bytes = queue_ref.get(timeout=0.5)
+        except queue_module.Empty:
+            if not _is_worker_alive():
+                return
+            continue
+
+        if frame_bytes is None:
+            return
+
+        yield (
+            b"--frame\r\n"
+            b"Content-Type: image/jpeg\r\n\r\n" +
+            frame_bytes +
+            b"\r\n"
+        )
 
 
 @server.post("/")
-def start_video_processing(request: VideoProcessingRequest, background_tasks:BackgroundTasks):
-    global video_processing, frame_queue
-    
-    video_path = request.video_path
-    model_name = request.name_model
-    
-    show = request.show
-    mqtt = request.mqtt
-    save = request.save 
-    verbose = request.verbose 
+def start_video_processing(request: VideoProcessingRequest):
+    global worker_process, video_processing
 
-    if video_processing:
-        return {"status": "Already running"}
+    try:
+        config = _build_config(request)
+    except (TypeError, ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    video_processing = True
+    with worker_lock:
+        if _is_worker_alive():
+            return {"status": "Already running"}
 
-    background_tasks.add_task(dummy_processing, video_path, model_name, show, mqtt, save, verbose)
-    return {'status':"Processing started", "model": model_name, "video_path": video_path}
+        _reset_preview_state()
+        worker_process = Process(target=_worker_main, args=(config, frame_queue, producer_ready))
+        worker_process.start()
+        video_processing = True
 
-    
+    return {
+        "status": "Processing started",
+        "model": config.model_name,
+        "video_source": config.video_source,
+    }
+
+
 @server.post("/shutdown")
 def stop_video_processing():
-    global video_processing, process, application_inst
+    with worker_lock:
+        if not _is_worker_alive():
+            return {"status": "Not running"}
+        _stop_worker()
 
-    if not video_processing:
-        return {"status": "Not running"}
-    
-    video_processing = False
-    
-    if application_inst is not None: 
-        application_inst.close_app()
-    
-    if process and process.is_alive(): 
-        process.terminate()
-        process.join()
+    return {"status": "Worker stopped"}
 
-    logger.info("-- Terminating application --")
-    os.kill(os.getpid(), signal.SIGTERM)
-    
-    return {"status": "Server shutting down"}
+
+@server.get("/status")
+def get_status():
+    return {
+        "running": _is_worker_alive(),
+        "preview_ready": bool(producer_ready.value),
+    }
 
 
 @server.get("/video_feed")
 def get_frame():
-    global frame_queue
-    logger.debug("-- Getting frame from queue --")
+    if not _is_worker_alive() and not producer_ready.value:
+        raise HTTPException(status_code=409, detail="No active video processing worker")
+
     return StreamingResponse(
-        read_frames_from_queue(frame_queue, producer_ready),
-        media_type="multipart/x-mixed-replace; boundary=frame"
+        _frame_stream(frame_queue, producer_ready),
+        media_type="multipart/x-mixed-replace; boundary=frame",
     )
-
-
-def dummy_processing(video_path, model_name, show, mqtt, save, verbose):
-    global process
-
-    args = argparse.Namespace(name=model_name, source=video_path, type="tracking", gui=True, mqtt=mqtt, show=show, save=save, verbose=verbose)
-    if " " in model_name.lower(): 
-        args.name = model_name.lower().split()[0]
-    else: 
-        args.name = model_name.lower() 
-    
-    config = {
-        'model_name':args.name,
-        'stream':True,
-        'source':args.source,
-        'model_type':args.type,
-        'save':args.save,
-        'verbose':args.verbose       
-    }
-
-    model_key = config['model_name'].lower()
-    config['model_name'] = check_model_name(model_key=model_key, condition= config['model_type'], condition_type='tracking')
-
-    logger.info("-- Setting up process --")
-    
-    process = Process(target=produce_images, args=(args, config, frame_queue, producer_ready))
-    process.start()    
-    
-         

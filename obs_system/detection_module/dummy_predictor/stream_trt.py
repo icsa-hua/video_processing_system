@@ -40,8 +40,8 @@ class TensorRTRTXStreamer(OptimizedStreamer):
         self.__gt_labels = None if self.args.bench is None else defaultdict()
 
 
-    def __call__(self, source=None, model=None, logic_module=None, mqtt_broker=None,producer_flag=None, queue_list=None, *args, **kwargs): 
-        super().__call__(source, model, logic_module, mqtt_broker, producer_flag, queue_list , *args, **kwargs)
+    def __call__(self, source=None, model=None, logic_module=None, mqtt_broker=None,producer_flag=None, preview_queue=None, *args, **kwargs): 
+        super().__call__(source, model, logic_module, mqtt_broker, producer_flag, preview_queue , *args, **kwargs)
 
 
     def pre_transform(self, im): 
@@ -103,8 +103,8 @@ class TensorRTRTXStreamer(OptimizedStreamer):
 
 
     @smart_inference_mode()
-    def stream_inference(self, source, model, producer_flag, queue_list, *args, **kwargs): 
-        return super().stream_inference(source, model, producer_flag, queue_list, *args, **kwargs) 
+    def stream_inference(self, source, model, producer_flag, preview_queue, *args, **kwargs): 
+        return super().stream_inference(source, model, producer_flag, preview_queue, *args, **kwargs) 
 
 
     @mem_profile
@@ -120,7 +120,7 @@ class TensorRTRTXStreamer(OptimizedStreamer):
 
         model = kwargs["model"] 
         producer_flag  = kwargs["producer_flag"] 
-        queue_list = kwargs["queue_list"]
+        preview_queue = kwargs["preview_queue"]
         profilers=kwargs["profilers"] 
         activities=kwargs["activities"] 
         start_time = kwargs["start_time"]
@@ -334,13 +334,7 @@ class TensorRTRTXStreamer(OptimizedStreamer):
                             s = self.batch[2]
                         )
 
-                    if producer_flag is not None : 
-                       producer_flag.value = True 
-
-                    if self.proc_image is not None and queue_list is not None: 
-                        queue_list[0].put(self.proc_image) 
-                    elif self.proc_image is None and queue_list is not None: 
-                        queue_list[0].put(None) 
+                    self.publish_preview(preview_queue, producer_flag)
 
                     with StepContext(name="Crop Objects to Image", catch=(RuntimeError,), verbose=self.args.verbose):
                         try: 
@@ -366,6 +360,7 @@ class TensorRTRTXStreamer(OptimizedStreamer):
             self.run_callbacks("on_predict_batch_end")
             frame_list.append((time.perf_counter() - t0) * 1000)
 
+        self.close_preview_stream(preview_queue)
         self.save_queue.put(None)
         self.save_thread.join() 
 
@@ -400,8 +395,6 @@ class TensorRTRTXStreamer(OptimizedStreamer):
 
     def _publish_mqtt_message_no_detection(self, preds, frame_index)->None: 
         super()._publish_mqtt_message_no_detection(preds, frame_index)
-
-
 
 
 

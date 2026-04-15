@@ -43,7 +43,7 @@ class Yolov8Streamer(YOLOStreamer):
         return torch.tensor(x).to(self.device) if isinstance(x, np.ndarray) else x
 
 
-    def __call__(self, source=None, model=None, logic_module=None, mqtt_broker=None, producer_flag=None, queue=None, *args, **kwargs):
+    def __call__(self, source=None, model=None, logic_module=None, mqtt_broker=None, producer_flag=None, preview_queue=None, *args, **kwargs):
         
         """Performs inference on an image, video or stream."""
         self.mqtt_interface = mqtt_broker
@@ -54,7 +54,7 @@ class Yolov8Streamer(YOLOStreamer):
             self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if  os.path.isfile(source)  else source,
                              model=model,
                              producer_flag=producer_flag,
-                             queue=queue)
+                             preview_queue=preview_queue)
             
         except KeyboardInterrupt as ke: 
             if producer_flag is not None: 
@@ -117,8 +117,8 @@ class Yolov8Streamer(YOLOStreamer):
     
   
     
-    def predict_cli(self, source, model, producer_flag=None, queue=None): 
-        return super().predict_cli(source, model, producer_flag, queue) #sourcery skip: remove-empty-nested-block noqa
+    def predict_cli(self, source, model, producer_flag=None, preview_queue=None): 
+        return super().predict_cli(source, model, producer_flag, preview_queue) #sourcery skip: remove-empty-nested-block noqa
 
 
     def setup_source(self, source=""): 
@@ -162,8 +162,8 @@ class Yolov8Streamer(YOLOStreamer):
         
 
     @smart_inference_mode()
-    def stream_inference(self, source, model, producer_flag, queue, *args, **kwargs):
-        return super().stream_inference(source, model, producer_flag, queue, *args, **kwargs)
+    def stream_inference(self, source, model, producer_flag, preview_queue, *args, **kwargs):
+        return super().stream_inference(source, model, producer_flag, preview_queue, *args, **kwargs)
         # ""Streams real-time inference on camera feed and saves results to file."""
     
       
