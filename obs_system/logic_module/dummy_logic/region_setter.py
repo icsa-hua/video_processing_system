@@ -137,5 +137,5 @@ class RegionSetter(EventExtractorInterface):
             cv2.putText(im, region_label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, region_text_color, 2)
             cv2.polylines(im, [polygon_coords], isClosed=True, color=region_color, thickness=2)
         
-        cv2.imshow("Regions", im)
-        cv2.waitKey(1)
+        # cv2.imshow("Regions", im)
+        # cv2.waitKey(1)

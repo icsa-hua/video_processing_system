@@ -22,7 +22,7 @@ static_folder = PACKAGE_ROOT / "static"
 logo_image = static_folder / "logo.png"
 
 MODEL_OPTIONS = {
-    "TensorRT FP16 engine": "assets/compressed_models/mixed_dataset_trained_yolov8s_fixed_mixed_batch_trt_fp16_noint8.engine",
+    "TensorRT FP16 engine": "assets/compressed_models/mixed_dataset_trained_yolov8s_mixed_batch_trt_fp16_noint8.engine",
     "YOLOv8 ONNX": "assets/compressed_models/mixed_dataset_trained_yolov8s.onnx",
     "YOLOv8 PT": "assets/compressed_models/mixed_dataset_trained_yolov8s.pt",
 }

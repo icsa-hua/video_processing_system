@@ -103,10 +103,10 @@ class HomographicSetter(EventExtractorInterface):
             bird
         ])
         
-        cv2.imshow("Left: source w/ ROI  |  Right: bird's-eye (red=projected ROI)", vis)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-         
+        # cv2.imshow("Left: source w/ ROI  |  Right: bird's-eye (red=projected ROI)", vis)
+        # cv2.waitKey(0)
+        # cv2.destroyAllWindows()
+        #  
 
         return bird, poly_be
 

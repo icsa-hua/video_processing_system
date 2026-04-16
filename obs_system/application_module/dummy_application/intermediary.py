@@ -57,6 +57,8 @@ def gui_connector(host_address: str = "localhost", port_address: int = 8503):
                 str(host),
                 "--port",
                 "8000",
+                "--loop", 
+                "asyncio"
             ]
         )
         streamlit_process = subprocess.Popen(
