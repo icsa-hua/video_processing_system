@@ -1,3 +1,4 @@
+.codex
 *.onnx
 *.pt
 *.ipynb

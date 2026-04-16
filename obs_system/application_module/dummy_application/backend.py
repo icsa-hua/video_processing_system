@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from obs_system.application_module.dummy_application.dummy_app import run_application
+from obs_system.application_module.dummy_application.dummy_app import Application
 from obs_system.application_module.dummy_application.pipeline_config import PipelineConfig
 from obs_system.utils.logger import get_logger
 
@@ -88,7 +88,8 @@ def _stop_worker() -> None:
 
 def _worker_main(config: PipelineConfig, preview_queue: Queue, ready_flag: Value) -> None:
     try:
-        run_application(config, producer_flag=ready_flag, preview_queue=preview_queue)
+        app = Application() 
+        app.run_application(config, producer_flag=ready_flag, preview_queue=preview_queue)
     except Exception:
         logger.exception("Video processing worker failed")
         raise

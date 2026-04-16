@@ -77,15 +77,18 @@ class TrackerHandler(EventExtractorInterface):
     
     def update_tracker_history(self,results, logic_module:Any): 
 
+        if results is None or results.boxes is None:
+            return {}
+
         if results.boxes.id is None or self.__history is None: 
-            return 
+            return {}
 
         boxes = results.boxes.xyxy.cpu().numpy() 
         tr_ids = results.boxes.id.int().cpu().numpy() 
         classes = results.boxes.cls.cpu().numpy()
 
         if boxes.size == 0: 
-            return 
+            return {}
         bbox_center =np.column_stack((
                 (boxes[:, 0] + boxes[:, 2]) * 0.5,
                 (boxes[:, 1] + boxes[:, 3]) * 0.5,
@@ -126,7 +129,6 @@ class TrackerHandler(EventExtractorInterface):
 
          
     
-
 
 
 

@@ -110,7 +110,8 @@ class Streamer(ABC):
                 if "WARNING ⚠️" in log_contents:
                     self.args.show = True # Probably we are on a docker, where with streamlit we can show the images. 
             else: 
-                self.args.show = check_imshow(warn=True)
+                self.args.show = True
+                #self.args.show = check_imshow(warn=True)
 
 
     def from_numpy(self, x:np.ndarray)->torch.Tensor:
@@ -415,8 +416,9 @@ class Streamer(ABC):
             self.proc_image = self._encode_preview_frame(cv2.cvtColor(im, cv2.COLOR_RGB2BGR))
             return 
 
-        elif platform.system() == "Linux" and p not in self.windows: 
+        elif platform.system() == "Linux" and p not in self.windows and not DEFAULT_CFG.gui: 
             self.windows.append(p)
+
             cv2.namedWindow(p, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
             cv2.resizeWindow(p, im.shape[1], im.shape[0])
 
@@ -427,8 +429,9 @@ class Streamer(ABC):
             self.proc_image = self._encode_preview_frame(im)
 
         elif self.args.show: 
-            cv2.imshow(winname=p, mat=im)
-            cv2.waitKey(300 if self.dataset.mode == 'image' else 1)
+            # cv2.imshow(winname=p, mat=im)
+            # cv2.waitKey(300 if self.dataset.mode == 'image' else 1)
+            pass
 
 
     def _encode_preview_frame(self, frame: np.ndarray) -> Optional[bytes]:

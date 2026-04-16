@@ -9,7 +9,7 @@ from obs_system.logic_module.dummy_logic.subtractor import Subtractor
 from obs_system.logic_module.dummy_logic.fisheye import FishEyeProjection
 from obs_system.utils.common import check_nvidia_existence
 from obs_system.utils.logger import get_logger
-from obs_system.utils.appraisal import perf, frame_list
+from obs_system.utils.appraisal import perf, frame_list, StepContext
 
 import os
 import numpy as np
@@ -267,50 +267,51 @@ class Application:
         self.statistics()
 
 
-def run_application(
-    config: PipelineConfig,
-    *,
-    producer_flag=None,
-    preview_queue=None,
-) -> None:
-    model_specification = config.resolve_model()
+    def run_application(
+        self,
+        config: PipelineConfig,
+        *,
+        producer_flag=None,
+        preview_queue=None,
+    ) -> None:
+        model_specification = config.resolve_model()
 
-    app = Application(
-        save=bool(config.save),
-        verbose=bool(config.verbose),
-    )
-
-    with StepContext(name="Setup Process", catch=(KeyError, ModuleNotFoundError)):
-        app.setup_process(config)
-
-    with StepContext(name="Setup Model", catch=(OSError, ValueError)):
-        app.setup_model(
-            model_name=f"{model_specification.name}.{model_specification.kind}",
-            path_to_load=model_specification.path,
-            opt=config.type,
+        app = Application(
+            save=bool(config.save),
+            verbose=bool(config.verbose),
         )
 
-    with StepContext(name="Setup Logic", catch=(KeyError, IndexError)):
-        app.setup_logic_module(config)
+        with StepContext(name="Setup Process", catch=(KeyError, ModuleNotFoundError)):
+            app.setup_process(config)
 
-    with StepContext(name="Setup MQTT", catch=(ConnectionError, TimeoutError)):
-        if app.mqtt:
-            app.setup_mqtt()
-        else:
-            logger.debug("[MQTT] interface is disabled")
+        with StepContext(name="Setup Model", catch=(OSError, ValueError)):
+            app.setup_model(
+                model_name=f"{model_specification.name}.{model_specification.kind}",
+                path_to_load=model_specification.path,
+                opt=config.type,
+            )
 
-    with StepContext(name="Run_App", catch=(RuntimeError,)):
-        app.run_app(producer_flag=producer_flag, preview_queue=preview_queue)
-        app.close_app()
+        with StepContext(name="Setup Logic", catch=(KeyError, IndexError)):
+            app.setup_logic_module(config)
 
-        if self.mqtt_subscriber is not None:
-            self.mqtt_subscriber.client.loop_stop()
-            self.mqtt_subscriber.client.disconnect()
+        with StepContext(name="Setup MQTT", catch=(ConnectionError, TimeoutError)):
+            if app.mqtt:
+                app.setup_mqtt()
+            else:
+                logger.debug("[MQTT] interface is disabled")
 
-        if self.mqtt_publisher is not None:
-            self.mqtt_publisher.client.disconnect()
+        with StepContext(name="Run_App", catch=(RuntimeError,)):
+            app.run_app(producer_flag=producer_flag, preview_queue=preview_queue)
+            app.close_app()
 
-        if self.gpu_enabled:
-            pynvml.nvmlShutdown()
+            if self.mqtt_subscriber is not None:
+                self.mqtt_subscriber.client.loop_stop()
+                self.mqtt_subscriber.client.disconnect()
 
-        tracemalloc.stop()
+            if self.mqtt_publisher is not None:
+                self.mqtt_publisher.client.disconnect()
+
+            if self.gpu_enabled:
+                pynvml.nvmlShutdown()
+
+            tracemalloc.stop()

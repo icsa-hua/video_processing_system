@@ -1,4 +1,4 @@
-from obs_system.application_module.dummy_application.dummy_app import run_application
+from obs_system.application_module.dummy_application.dummy_app import Application
 from obs_system.application_module.dummy_application.intermediary import gui_connector
 from obs_system.application_module.dummy_application.pipeline_config import PipelineConfig, build_arg_parser
 from obs_system.utils.logger import get_logger, remove_logger
@@ -21,7 +21,8 @@ def main():
         gui_connector(config.host_address, config.port_address)
         return
 
-    run_application(config)
+    app = Application()
+    app.run_application(config)
 
    
 if __name__ == "__main__":
