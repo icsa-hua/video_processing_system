@@ -23,7 +23,8 @@ class TrackerHandler(EventExtractorInterface):
         self.__tracker_choice = tracker_choice.lower() 
         self.__tracker = self._create_tracker(**kwargs)
         self.__tracker.reset()
-        self.__history = defaultdict(lambda:deque(maxlen=30))
+        self.__history_len = 30
+        self.__history = defaultdict(lambda:deque(maxlen=self.__history_len))
         self.__track_class = {}
         self.__box_anotator = sv.BoxAnnotator(color = self.color, color_lookup=sv.ColorLookup.TRACK)
 
@@ -113,6 +114,17 @@ class TrackerHandler(EventExtractorInterface):
             points = {cls:pts for cls, pts in points.items() if cls not in lost_ids}
 
         return points 
+
+    def set_history_persistence(self, history_len: int) -> None:
+        history_len = max(5, int(history_len))
+        if history_len == self.__history_len:
+            return
+
+        self.__history_len = history_len
+        old_items = list(self.__history.items())
+        self.__history = defaultdict(lambda: deque(maxlen=self.__history_len))
+        for tid, track_hist in old_items:
+            self.__history[tid].extend(track_hist)
                     
 
 
@@ -126,7 +138,6 @@ class TrackerHandler(EventExtractorInterface):
 
          
     
-
 
 
 

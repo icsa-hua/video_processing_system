@@ -299,6 +299,9 @@ class OptimizedStreamer(Streamer):
                 if lanes_final is not None: 
                     self.lanes_final = lanes_final
 
+            if self.should_force_inference_all_frames():
+                mfgs = [True] * len(mfgs)
+
             with StepContext(name="FishEyE Processing (Defish)", catch=(RuntimeError, ), verbose=self.args.verbose):    
                 # Defish FishEye camera frames to increase accuracy
                 if self.logic_module["FEP"] is not None: 
@@ -382,7 +385,7 @@ class OptimizedStreamer(Streamer):
                     batch_idx += 1
 
                 self._publish_mqtt_message_no_detection(preds=empty_preds, frame_index=frame_ids)
-                
+                self.step_attention_state()
                 continue # to the next batch 
                 
             for i, keep_frame in enumerate(mfgs):
@@ -722,6 +725,7 @@ class OptimizedStreamer(Streamer):
                 # ----------------------------------
            
             self.run_callbacks("on_predict_batch_end")
+            self.step_attention_state()
 
         producer_thread.join()
         self.close_preview_stream(preview_queue)
@@ -814,6 +818,9 @@ class OptimizedStreamer(Streamer):
                 if lanes_final is not None: 
                     self.lanes_final = lanes_final
 
+            if self.should_force_inference_all_frames():
+                mfgs = [True] * len(mfgs)
+
             if not any(mfgs):
                 print("No motion detected in the batch - skipping inference")
                 empty_preds = return_no_motion_frames(
@@ -823,6 +830,7 @@ class OptimizedStreamer(Streamer):
                 yield empty_preds 
 
                 self._publish_mqtt_message_no_detection(preds=empty_preds, frame_index=frame_ids)
+                self.step_attention_state()
                 continue 
 
             for i, keep_frame in enumerate(mfgs):
@@ -862,6 +870,8 @@ class OptimizedStreamer(Streamer):
                 for passed, f_id, img in zip(mfgs, frame_ids, im0s): 
                     if passed: 
                         yield (int(f_id), img)
+
+            self.step_attention_state()
 
 
 

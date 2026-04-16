@@ -1,11 +1,18 @@
 from obs_system.logic_module.interface.event_extractor import EventExtractorInterface
-from obs_system.utils.global_config import TRIALS, HISTORY, VARTHRESHOLD,THR_RATIO, K_CONSECUTIVE, HOLD_FRAMES, MIN_OBJ_AREA, VARTHRESHOLD
+from obs_system.utils.global_config import (
+    TRIALS,
+    HISTORY,
+    VARTHRESHOLD,
+    THR_RATIO,
+    K_CONSECUTIVE,
+    HOLD_FRAMES,
+    MIN_OBJ_AREA,
+)
 from obs_system.utils.logger import get_logger
 
 import numpy as np
 import cv2
 import os
-import pdb
 
 from collections import deque
 from typing import Optional
@@ -58,6 +65,9 @@ class Subtractor(EventExtractorInterface):
 
         # Stores per-frame motion scores (foreground ratio) from the last detect() call
         self.last_motion_scores = []  # list[float], same length as batch
+        self.lanes_mask: Optional[np.ndarray] = None
+        self.crosswalk_mask: Optional[np.ndarray] = None
+        self._last_frame_shape: Optional[tuple[int, int]] = None
 
 
     def warm_up(self, empty_background_image:Optional[np.ndarray], trials:int=TRIALS):
@@ -99,7 +109,8 @@ class Subtractor(EventExtractorInterface):
             save_idx = 0 
         
         
-        h, w = batch[0].shape[:2] 
+        h, w = batch[0].shape[:2]
+        self._last_frame_shape = (h, w)
 
         if not self.__calibration_started: 
             self.acc_mask = np.zeros((h, w), np.float32) 
@@ -239,12 +250,139 @@ class Subtractor(EventExtractorInterface):
                 lanes_clean[labels == i] = 255
 
         lanes_smooth = cv2.GaussianBlur(lanes_clean, (11,11), 0) 
-        _, lanes_final = cv2.threshold(lanes_smooth, 50, 255, cv2.THRESH_BINARY) 
+        _, lanes_final = cv2.threshold(lanes_smooth, 50, 255, cv2.THRESH_BINARY)
+        self.lanes_mask = lanes_final
+        self.crosswalk_mask = self.__detect_crosswalks(last_frame=frame, lanes_mask=lanes_final)
         
         if save_img and self.save_path: 
             self.__save_calibration(frame, lanes_final)
         
         return lanes_final
+
+    def get_scene_masks(self, expand_px: int = 0) -> dict:
+        """
+        Returns lane and crosswalk masks in current frame coordinates.
+        `expand_px` dilates regions to increase tolerance (high-attention mode).
+        """
+        lane = None if self.lanes_mask is None else self.lanes_mask.copy()
+        crosswalk = None if self.crosswalk_mask is None else self.crosswalk_mask.copy()
+
+        if lane is None:
+            if self._last_frame_shape is None:
+                return {"lane_mask": None, "crosswalk_mask": None}
+            h, w = self._last_frame_shape
+            return {
+                "lane_mask": np.zeros((h, w), dtype=np.uint8),
+                "crosswalk_mask": np.zeros((h, w), dtype=np.uint8),
+            }
+
+        if expand_px > 0:
+            k = max(3, int(expand_px) * 2 + 1)
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+            lane = cv2.dilate(lane, kernel, iterations=1)
+            if crosswalk is not None:
+                crosswalk = cv2.dilate(crosswalk, kernel, iterations=1)
+                crosswalk = cv2.bitwise_and(crosswalk, lane)
+
+        if crosswalk is None:
+            crosswalk = np.zeros_like(lane, dtype=np.uint8)
+
+        return {"lane_mask": lane, "crosswalk_mask": crosswalk}
+
+    def __detect_crosswalks(self, last_frame: Optional[np.ndarray], lanes_mask: Optional[np.ndarray]) -> np.ndarray:
+        """
+        Non-ML crosswalk detection from lane region:
+        find repeated bright stripe-like blobs and merge them into a crosswalk region.
+        Runs only when lane calibration is finalized.
+        """
+        if last_frame is None or lanes_mask is None:
+            if self._last_frame_shape is None:
+                return np.zeros((1, 1), dtype=np.uint8)
+            return np.zeros(self._last_frame_shape, dtype=np.uint8)
+
+        if lanes_mask.ndim != 2:
+            lanes_mask = cv2.cvtColor(lanes_mask, cv2.COLOR_BGR2GRAY)
+        lanes_mask = (lanes_mask > 0).astype(np.uint8) * 255
+
+        if cv2.countNonZero(lanes_mask) == 0:
+            return np.zeros_like(lanes_mask, dtype=np.uint8)
+
+        if last_frame.ndim == 3:
+            gray = cv2.cvtColor(last_frame, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = last_frame.copy()
+
+        lane_gray = cv2.bitwise_and(gray, gray, mask=lanes_mask)
+        lane_gray = cv2.GaussianBlur(lane_gray, (5, 5), 0)
+
+        # Enhance bright zebra-like paint marks.
+        top_hat_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (17, 17))
+        enhanced = cv2.morphologyEx(lane_gray, cv2.MORPH_TOPHAT, top_hat_kernel)
+        _, stripes = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        stripes = cv2.morphologyEx(
+            stripes, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)), iterations=1
+        )
+        stripes = cv2.morphologyEx(
+            stripes, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (13, 3)), iterations=2
+        )
+        stripes = cv2.bitwise_and(stripes, lanes_mask)
+
+        contours, _ = cv2.findContours(stripes, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        lane_area = float(cv2.countNonZero(lanes_mask))
+        min_area = max(50.0, 0.00015 * lane_area)
+
+        stripe_mask = np.zeros_like(lanes_mask, dtype=np.uint8)
+        valid_stripes = 0
+
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area < min_area:
+                continue
+
+            x, y, w, h = cv2.boundingRect(cnt)
+            if w <= 0 or h <= 0:
+                continue
+
+            aspect = float(w) / float(max(h, 1))
+            if aspect < 2.2:
+                continue
+
+            extent = area / float(w * h)
+            if extent < 0.30:
+                continue
+
+            valid_stripes += 1
+            cv2.drawContours(stripe_mask, [cnt], -1, 255, thickness=-1)
+
+        # At least a few repeated bars to avoid random lane highlights.
+        if valid_stripes < 3:
+            return np.zeros_like(lanes_mask, dtype=np.uint8)
+
+        crosswalk = cv2.morphologyEx(
+            stripe_mask,
+            cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (25, 9)),
+            iterations=2,
+        )
+        crosswalk = cv2.dilate(
+            crosswalk,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)),
+            iterations=1,
+        )
+        crosswalk = cv2.bitwise_and(crosswalk, lanes_mask)
+
+        # Remove tiny islands.
+        _, labels, stats, _ = cv2.connectedComponentsWithStats(crosswalk, connectivity=8)
+        min_cc_area = max(200.0, 0.0025 * lane_area)
+        final_mask = np.zeros_like(crosswalk, dtype=np.uint8)
+        for i, stat in enumerate(stats):
+            if i == 0:
+                continue
+            if stat[cv2.CC_STAT_AREA] >= min_cc_area:
+                final_mask[labels == i] = 255
+
+        return final_mask
 
 
 
@@ -260,4 +398,3 @@ class Subtractor(EventExtractorInterface):
         # cv2.destroyAllWindows() 
 
             
-

@@ -296,6 +296,8 @@ class TensorRTRTXStreamer(OptimizedStreamer):
                             f_id=f_id, 
                             class_names=self.converter.class_names
                         )
+
+                    results, _ = self.postprocess(results, self.frame_images[f_id])
                     if self.results is not None: 
                         self.results.append(results)     
                                                                 
@@ -325,27 +327,19 @@ class TensorRTRTXStreamer(OptimizedStreamer):
                         filename=Path(self.batch[0][self.seen])
                         if not filename: 
                             logger.warning("[WARNING]: filename to save image is invalid")
-                        
-                        self.batch[2][self.seen] += self.write_results(
-                            i = self.seen, 
-                            p = filename,  
-                            im= tbuf[:n0],
-                            original_images=self.batch[1], 
-                            s = self.batch[2]
-                        )
+
+                        if self.args.save or self.args.show:
+                            self.optional_save_or_show(self.results[self.seen], filename)
+                        self.save_queue.put(("save_results", self.results[self.seen], filename, f_id))
+
+                        if self.args.save_txt or self.args.save_crop:
+                            self.batch[2][self.seen] += self.write_results(
+                                preds=self.results[self.seen],
+                                i=self.seen,
+                                im=self.batch[1],
+                            )
 
                     self.publish_preview(preview_queue, producer_flag)
-
-                    with StepContext(name="Crop Objects to Image", catch=(RuntimeError,), verbose=self.args.verbose):
-                        try: 
-                            self.capture_object_boxes(
-                                    image=self.batch[1][self.seen],
-                                    results=self.results[self.seen],
-                                    cropped_dirname=self.cropped_image_dirname,
-                                    save=self.args.save
-                            )
-                        except IndexError as ie: 
-                            logger.exception(ie)
 
                     self.seen += 1 
                     if self.seen >= len(self.batch[1]): 
@@ -395,8 +389,6 @@ class TensorRTRTXStreamer(OptimizedStreamer):
 
     def _publish_mqtt_message_no_detection(self, preds, frame_index)->None: 
         super()._publish_mqtt_message_no_detection(preds, frame_index)
-
-
 
 
 

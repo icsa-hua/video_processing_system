@@ -1,10 +1,9 @@
 from obs_system.compressed.interface.convert_to_Results import ConverterResults 
-from obs_system.logic_module.dummy_logic.obstacle_filtering import classification_obstacles
+from obs_system.logic_module.dummy_logic.obstacle_filtering import analyze_lane_hazards
 from obs_system.utils.logger import get_logger
 from obs_system.utils.common import *
 #
 import os
-import pdb
 import cv2
 import torch
 import logging
@@ -13,11 +12,12 @@ import threading
 import numpy as np 
 import time, json
 import queue 
+import csv
 
 from pathlib import Path
 from io import StringIO
 from collections import defaultdict
-from typing import Union, List, Any, Optional, final, Generator, Tuple
+from typing import Union, List, Any, Optional, final, Generator, Tuple, Dict
 from abc import ABC, abstractmethod
 from ultralytics.cfg import get_cfg, get_save_dir
 from ultralytics.utils.plotting import colors
@@ -26,6 +26,7 @@ from ultralytics.utils.checks import check_imgsz
 from ultralytics.utils import DEFAULT_CFG, callbacks
 from ultralytics.data.build import load_inference_source
 from ultralytics.utils.torch_utils import smart_inference_mode
+from datetime import datetime, timezone
 
 
 class Streamer(ABC): 
@@ -85,11 +86,20 @@ class Streamer(ABC):
         self.tracker_model: Any = None 
         self.points = dict() 
         self.preview_last_emit_ts = 0.0
+        self.current_hazards: List[Dict[str, Any]] = []
+        self.last_scene_masks: Dict[str, Any] = {"lane_mask": None, "crosswalk_mask": None}
+        self.high_attention_countdown = 0
+        self.high_attention_default_frames = 18
+        self.normal_lane_expand_px = 0
+        self.high_attention_lane_expand_px = 14
+        self.normal_tracker_history = 30
+        self.high_attention_tracker_history = 60
 
         self._lock = threading.Lock() 
         self.converter = ConverterResults() 
         self.callbacks = _callbacks or callbacks.get_default_callbacks() 
         self.cropped_image_dirname = f'cropped_trial_{np.random.randint(44)}'
+        self._init_hazard_store()
         
         callbacks.add_integration_callbacks(self) 
         
@@ -111,6 +121,109 @@ class Streamer(ABC):
                     self.args.show = True # Probably we are on a docker, where with streamlit we can show the images. 
             else: 
                 self.args.show = check_imshow(warn=True)
+
+    def _init_hazard_store(self) -> None:
+        self.hazard_root = Path("assets") / "hazard_events"
+        self.hazard_frames_dir = self.hazard_root / "frames"
+        self.hazard_crops_dir = self.hazard_root / "crops"
+        _ensure_dir(self.hazard_frames_dir)
+        _ensure_dir(self.hazard_crops_dir)
+        self.hazard_csv_path = self.hazard_root / "hazard_events.csv"
+        if not self.hazard_csv_path.exists():
+            with self.hazard_csv_path.open("w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(
+                    [
+                        "timestamp_utc",
+                        "frame_id",
+                        "class_name",
+                        "category",
+                        "risk",
+                        "kind",
+                        "action",
+                        "bbox_x1",
+                        "bbox_y1",
+                        "bbox_x2",
+                        "bbox_y2",
+                        "lane_overlap",
+                        "crosswalk_overlap",
+                        "event_image",
+                        "crop_image",
+                    ]
+                )
+
+    def _resolve_scene_masks(self, target_hw: Optional[Tuple[int, int]] = None) -> Dict[str, Optional[np.ndarray]]:
+        subtractor = None
+        if self.logic_module is not None:
+            subtractor = self.logic_module.get("SUBTRACTOR")
+
+        if subtractor is None or not hasattr(subtractor, "get_scene_masks"):
+            self.last_scene_masks = {"lane_mask": self.lanes_final, "crosswalk_mask": None}
+            return self.last_scene_masks
+
+        expand_px = self.high_attention_lane_expand_px if self.high_attention_countdown > 0 else self.normal_lane_expand_px
+        scene_masks = subtractor.get_scene_masks(expand_px=expand_px)
+        if self.lanes_final is not None and (scene_masks.get("lane_mask") is None):
+            scene_masks["lane_mask"] = self.lanes_final
+
+        if self.use_roi and self.logic_module is not None and self.logic_module.get("ROI") is not None:
+            roi = self.logic_module["ROI"]
+            lane = scene_masks.get("lane_mask")
+            lane_shape = None if lane is None else lane.shape[:2]
+            target_shape = tuple(target_hw) if target_hw is not None else None
+            should_embed_to_full = (
+                target_shape is not None
+                and self.original_imgsz is not None
+                and target_shape == tuple(self.original_imgsz)
+                and lane_shape != target_shape
+            )
+
+            if should_embed_to_full:
+                full_h, full_w = self.original_imgsz
+
+                def _embed(mask: Optional[np.ndarray]) -> Optional[np.ndarray]:
+                    if mask is None:
+                        return None
+                    out = np.zeros((full_h, full_w), dtype=np.uint8)
+                    y0, y1 = int(roi.y_start), int(roi.y_end)
+                    x0, x1 = int(roi.x_start), int(roi.x_end)
+                    h = max(0, min(y1 - y0, mask.shape[0]))
+                    w = max(0, min(x1 - x0, mask.shape[1]))
+                    if h > 0 and w > 0:
+                        out[y0 : y0 + h, x0 : x0 + w] = mask[:h, :w]
+                    return out
+
+                scene_masks["lane_mask"] = _embed(scene_masks.get("lane_mask"))
+                scene_masks["crosswalk_mask"] = _embed(scene_masks.get("crosswalk_mask"))
+
+        self.last_scene_masks = scene_masks
+        return scene_masks
+
+    def _activate_high_attention(self, hazards: List[Dict[str, Any]]) -> None:
+        if not hazards:
+            return
+        max_bonus = 0
+        for hz in hazards:
+            risk = str(hz.get("risk", "")).lower()
+            if risk == "high":
+                max_bonus = max(max_bonus, 10)
+            elif risk == "medium":
+                max_bonus = max(max_bonus, 6)
+            else:
+                max_bonus = max(max_bonus, 3)
+        self.high_attention_countdown = max(self.high_attention_countdown, self.high_attention_default_frames + max_bonus)
+        if self.tracker_model is not None and hasattr(self.tracker_model, "set_history_persistence"):
+            self.tracker_model.set_history_persistence(self.high_attention_tracker_history)
+
+    def step_attention_state(self) -> None:
+        if self.high_attention_countdown > 0:
+            self.high_attention_countdown -= 1
+            if self.high_attention_countdown == 0:
+                if self.tracker_model is not None and hasattr(self.tracker_model, "set_history_persistence"):
+                    self.tracker_model.set_history_persistence(self.normal_tracker_history)
+
+    def should_force_inference_all_frames(self) -> bool:
+        return self.high_attention_countdown > 0
 
 
     def from_numpy(self, x:np.ndarray)->torch.Tensor:
@@ -139,26 +252,21 @@ class Streamer(ABC):
 
         preds.save_dir = self.save_dir.__str__() 
 
-        if preds.boxes is not None and preds.boxes.xyxy.numel() > 0: 
-            updated_labels, orig_classes_updated = classification_obstacles(
-                boxes=preds.boxes, 
-                classes=preds.boxes.cls, 
-                lanes_final=self.lanes_final, 
-                orig_shape=self.imgsz, 
-                orig_classes=self.converter.class_names
+        hazards: List[Dict[str, Any]] = []
+        target_hw = None if orig_image is None else orig_image.shape[:2]
+        scene_masks = self._resolve_scene_masks(target_hw=target_hw)
+        lane_mask = scene_masks.get("lane_mask")
+        crosswalk_mask = scene_masks.get("crosswalk_mask")
+
+        if preds.boxes is not None and preds.boxes.xyxy.numel() > 0:
+            hazards = analyze_lane_hazards(
+                boxes=preds.boxes.xyxy,
+                classes=preds.boxes.cls,
+                class_names=self.converter.class_names,
+                lane_mask=lane_mask,
+                crosswalk_mask=crosswalk_mask,
             )
-            
-            # Update class names only if changed and Valid
-            if orig_classes_updated is not None and len(orig_classes_updated) != len(self.converter.class_names): 
-                self.converter.class_names = orig_classes_updated 
-                preds.names = {i: name for i, name in enumerate(self.converter.class_names)}
-
-            if len(self.converter.class_names) != len(orig_classes_updated) and orig_classes_updated is not None: 
-                self.converter.class_names = orig_classes_updated
-
-            # Update Labels if same length
-            if preds.boxes.cls.numel() == updated_labels.numel(): 
-                preds.boxes.cls[:] = updated_labels
+            self._activate_high_attention(hazards)
 
         try:  
             self.points.clear()
@@ -169,6 +277,7 @@ class Streamer(ABC):
             self.points = self.tracker_model.update_tracker_history(preds, logic_module=self.logic_module)
 
 
+        mqtt_batch_messages = {"crops": [], "boxes_xyxy": np.zeros((0, 4), dtype=np.int32), "paths": []}
         try: 
             # TODO: Don't have only the option to save the image but instead also be able to transmit them through mqtt. 
             mqtt_batch_messages = self.capture_object_boxes(
@@ -180,6 +289,12 @@ class Streamer(ABC):
         except IndexError as ie: 
             Streamer.logger.exception(ie)
 
+        self.current_hazards = hazards
+        preds.hazard_events = hazards
+        preds.hazard_mode = "high_attention" if self.high_attention_countdown > 0 else "normal"
+
+        if hazards:
+            self._record_hazard_evidence(preds=preds, image=orig_image, hazards=hazards)
 
         return preds, mqtt_batch_messages
 
@@ -253,10 +368,9 @@ class Streamer(ABC):
 
         if self.source_type.stream or self.source_type.from_img or self.source_type.tensor:  # batch_size >= 1
             string += f"{i}: "
-            frame = self.dataset.count
+            _ = self.dataset.count
         else:
-            match = re.search(r"frame (\d+)/", s[i])
-            frame = int(match[1]) if match else None  # 0 if frame undetermined
+            _ = getattr(self.dataset, "count", i)
 
         # # Ensure batch dimension
         if isinstance(im, list): 
@@ -554,13 +668,11 @@ class Streamer(ABC):
         paths: List[str] = [] 
 
         out_dir = Path("assets") / self.cropped_image_dirname 
-        save = True 
         if save: 
             _ensure_dir(out_dir)
 
         for idx, (x1, y1, x2, y2) in enumerate(xyxyi): 
             if x2 <= x1 or y2 <= y1: 
-                print("dafuck")
                 continue 
 
             crop = image[y1:y2, x1:x2] 
@@ -576,6 +688,155 @@ class Streamer(ABC):
 
         return {"crops": crops, "boxes_xyxy": xyxyi, "paths":paths}
 
+    def _extract_frame_id(self, preds: Any) -> str:
+        path = str(getattr(preds, "path", "frame"))
+        stem = Path(path).stem
+        if "_" in stem and stem.split("_")[-1].isdigit():
+            return stem.split("_")[-1]
+        return stem
+
+    def _draw_scene_regions(self, image: np.ndarray) -> np.ndarray:
+        lane = self.last_scene_masks.get("lane_mask")
+        crosswalk = self.last_scene_masks.get("crosswalk_mask")
+        if lane is None and crosswalk is None:
+            return image
+
+        out = image.copy()
+        overlay = out.copy()
+
+        if lane is not None and lane.size > 0 and cv2.countNonZero(lane) > 0:
+            lane_contours, _ = cv2.findContours(lane, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            lane_contours = [c for c in lane_contours if cv2.contourArea(c) >= 1000]
+            if lane_contours:
+                cv2.drawContours(overlay, lane_contours, -1, (0, 140, 255), thickness=-1)
+                cv2.drawContours(out, lane_contours, -1, (0, 180, 255), thickness=2)
+
+        if crosswalk is not None and crosswalk.size > 0 and cv2.countNonZero(crosswalk) > 0:
+            cw_contours, _ = cv2.findContours(crosswalk, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cw_contours = [c for c in cw_contours if cv2.contourArea(c) >= 300]
+            if cw_contours:
+                cv2.drawContours(overlay, cw_contours, -1, (255, 255, 0), thickness=-1)
+                cv2.drawContours(out, cw_contours, -1, (255, 255, 0), thickness=2)
+
+        return cv2.addWeighted(overlay, 0.18, out, 0.82, 0.0)
+
+    def _draw_hazard_boxes(self, image: np.ndarray, hazards: List[Dict[str, Any]]) -> np.ndarray:
+        out = image.copy()
+        for hz in hazards:
+            x1, y1, x2, y2 = hz.get("bbox_xyxy", [0, 0, 0, 0])
+            cv2.rectangle(out, (x1, y1), (x2, y2), (0, 0, 255), 2)
+            label = f"{hz.get('kind', 'Hazard')} | {str(hz.get('risk', '')).upper()}"
+            cv2.putText(
+                out,
+                label,
+                (x1, max(y1 - 8, 16)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.52,
+                (0, 0, 255),
+                2,
+                cv2.LINE_AA,
+            )
+        return out
+
+    def _to_bgr(self, image: np.ndarray) -> np.ndarray:
+        if image is None:
+            return image
+        if image.ndim == 2:
+            return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        if image.ndim == 3 and image.shape[2] == 3:
+            return image.copy()
+        return image
+
+    def _append_hazard_csv(self, rows: List[List[Any]]) -> None:
+        if not rows:
+            return
+        with self.hazard_csv_path.open("a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerows(rows)
+
+    def _record_hazard_evidence(self, preds: Any, image: np.ndarray, hazards: List[Dict[str, Any]]) -> None:
+        if image is None or not hazards:
+            return
+
+        frame_bgr = self._to_bgr(image)
+        annotated = self._draw_scene_regions(frame_bgr)
+        annotated = self._draw_hazard_boxes(annotated, hazards)
+
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        frame_id = self._extract_frame_id(preds)
+        frame_name = f"hazard_{ts}_f{frame_id}.jpg"
+        frame_path = self.hazard_frames_dir / frame_name
+        cv2.imwrite(str(frame_path), annotated)
+
+        csv_rows: List[List[Any]] = []
+        for idx, hz in enumerate(hazards):
+            x1, y1, x2, y2 = hz.get("bbox_xyxy", [0, 0, 0, 0])
+            x1 = int(np.clip(x1, 0, max(frame_bgr.shape[1] - 1, 0)))
+            y1 = int(np.clip(y1, 0, max(frame_bgr.shape[0] - 1, 0)))
+            x2 = int(np.clip(x2, 0, frame_bgr.shape[1]))
+            y2 = int(np.clip(y2, 0, frame_bgr.shape[0]))
+            crop_name = f"hazard_{ts}_f{frame_id}_obj{idx}.jpg"
+            crop_path = self.hazard_crops_dir / crop_name
+            if x2 > x1 and y2 > y1:
+                crop = frame_bgr[y1:y2, x1:x2]
+                cv2.imwrite(str(crop_path), crop)
+            else:
+                crop_name = ""
+
+            csv_rows.append(
+                [
+                    datetime.now(timezone.utc).isoformat(),
+                    frame_id,
+                    hz.get("class_name", ""),
+                    hz.get("category", ""),
+                    hz.get("risk", ""),
+                    hz.get("kind", ""),
+                    hz.get("action", ""),
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    float(hz.get("lane_overlap", 0.0)),
+                    float(hz.get("crosswalk_overlap", 0.0)),
+                    frame_name,
+                    crop_name,
+                ]
+            )
+
+        self._append_hazard_csv(csv_rows)
+        self._publish_hazard_alert(preds=preds, hazards=hazards, frame_name=frame_name)
+
+    def _publish_hazard_alert(self, preds: Any, hazards: List[Dict[str, Any]], frame_name: str) -> None:
+        if self.mqtt_interface is None or not hazards:
+            return
+
+        risk_rank = {"low": 1, "medium": 2, "high": 3}
+        highest = max((str(h.get("risk", "low")).lower() for h in hazards), key=lambda r: risk_rank.get(r, 1))
+        payload = {
+            "type": "hazard_event",
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "frame_id": self._extract_frame_id(preds),
+            "attention_mode": "high_attention" if self.high_attention_countdown > 0 else "normal",
+            "severity": highest,
+            "event_image": frame_name,
+            "hazards": [
+                {
+                    "class_name": h.get("class_name", ""),
+                    "category": h.get("category", ""),
+                    "risk": h.get("risk", ""),
+                    "kind": h.get("kind", ""),
+                    "bbox_xyxy": h.get("bbox_xyxy", []),
+                    "action": h.get("action", ""),
+                }
+                for h in hazards
+            ],
+        }
+        topic = f"{self.mqtt_interface.topic}/hazard"
+        try:
+            self.mqtt_interface.publish(topic, json.dumps(payload))
+        except Exception:
+            Streamer.logger.exception("Failed to publish hazard MQTT event")
+
 
     def optional_save_or_show(self, preds:Any, p:Any)-> None: 
 
@@ -586,6 +847,11 @@ class Streamer(ABC):
                     conf=self.args.show_conf,
                     labels=self.args.show_labels,
             )
+            if self.last_scene_masks.get("lane_mask") is not None:
+                self.plotted_img = self._draw_scene_regions(self.plotted_img)
+            hazards = getattr(preds, "hazard_events", None) or self.current_hazards
+            if hazards:
+                self.plotted_img = self._draw_hazard_boxes(self.plotted_img, hazards)
 
         if self.args.show:
             self.show(p)     
