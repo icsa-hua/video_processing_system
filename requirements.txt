@@ -1,21 +1,20 @@
 fastapi[standard]
 mss
 numpy
-opencv_python==4.11.0.86
+# opencv_python==4.11.0.86
 paho_mqtt==2.1.0
 Pillow
-psutil
 nvidia-ml-py
 Shapely
 silence_tensorflow
 streamlit
-torch[cuda]
-torchvision
+# torch[cuda]
+# torchvision
 ultralytics
 viztracer
 trackers
-onnx 
-onnxruntime
+# onnx 
+# onnxruntime
 matplotlib
 memory_profiler
 supervision==0.27.0rc4

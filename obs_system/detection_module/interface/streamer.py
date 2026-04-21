@@ -520,7 +520,7 @@ class Streamer(ABC):
         if im is None: 
             return 
         
-        if self.logic_module is not None and self.logic_module['ROI'] is not None:
+        if self.use_roi and self.logic_module is not None and self.logic_module.get("ROI") is not None:
             self.logic_module["ROI"]._show_regions(im)
 
         for cls in self.points.keys(): 

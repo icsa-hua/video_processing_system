@@ -127,6 +127,10 @@ ENV PATH="${VENV_PATH}/bin:${PATH}"
 
 WORKDIR /workspace
 
+COPY requirements.txt . 
+
+RUN python3 -m pip install --no-cache-dir --no-deps -r requirements.txt
+
 CMD ["bash"]
 
 

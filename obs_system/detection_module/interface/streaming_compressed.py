@@ -87,6 +87,52 @@ class OptimizedStreamer(Streamer):
     def postprocess(self, preds:Any, orig_image:Any)->Any : 
         return super().postprocess(preds, orig_image=orig_image) 
 
+    def _get_batch_frame_ids(self, labels: List[str], frame_count: int) -> List[int]:
+        labels = list(labels or [])
+        if len(labels) < frame_count:
+            labels.extend([""] * (frame_count - len(labels)))
+        else:
+            labels = labels[:frame_count]
+
+        fallback_start = getattr(self, "_next_generated_frame_id", 0)
+        frame_ids = get_frame_ids(labels=labels, fallback_start=fallback_start)
+        if frame_ids:
+            self._next_generated_frame_id = max(fallback_start + len(frame_ids), max(frame_ids) + 1)
+        return frame_ids
+
+
+    def _map_boxes_to_original_frame(
+        self,
+        boxes: torch.Tensor,
+        model_input_shape: tuple[int, int],
+        original_shape: tuple[int, int],
+        inference_shape: tuple[int, int],
+    ) -> torch.Tensor:
+        if boxes is None or boxes.numel() == 0:
+            return boxes
+
+        if self.use_roi:
+            return self.logic_module["ROI"].translate_bounding_boxes(
+                results=boxes,
+                orig_img_shape=original_shape,
+                input_img_shape=model_input_shape,
+                crop_img_shape=inference_shape,
+            )
+
+        return ops.scale_boxes(model_input_shape, boxes.clone(), original_shape)
+
+
+    def _publish_no_motion_preview(self, original_images, preview_queue, producer_flag) -> None:
+        if not self.args.show or not original_images:
+            return
+
+        preview = original_images[-1].copy()
+        if self.use_roi and self.logic_module is not None and self.logic_module.get("ROI") is not None:
+            self.logic_module["ROI"]._show_regions(preview)
+
+        self.proc_image = self._encode_preview_frame(cv2.cvtColor(preview, cv2.COLOR_RGB2BGR))
+        self.publish_preview(preview_queue, producer_flag)
+
 
     def setup_model(self, model_name:str, path_to_load:Optional[str|Path], opt:str)->None:
         pass 
@@ -107,8 +153,13 @@ class OptimizedStreamer(Streamer):
             self.seen = 0  
             self.batch = None 
             self.mp = None 
+            self._next_generated_frame_id = 0
                        
-            self.use_roi = True if self.args.roi and self.logic_module["ROI"] is not None else False 
+            self.use_roi = bool(
+                self.args.roi
+                and self.logic_module is not None
+                and self.logic_module.get("ROI") is not None
+            )
             # self.use_roi = self.args.roi
 
             profilers = (
@@ -257,7 +308,7 @@ class OptimizedStreamer(Streamer):
             self.run_callbacks("on_predict_batch_start")
 
             paths, im0s, s = self.batch
-            frame_ids = get_frame_ids(labels=s)
+            frame_ids = self._get_batch_frame_ids(labels=s, frame_count=len(im0s))
             original_images = [cv2.cvtColor(im, cv2.COLOR_BGR2RGB) for im in im0s.copy()]
             
             _t0, _t0_rel = 0.0,0.0
@@ -315,7 +366,7 @@ class OptimizedStreamer(Streamer):
                 Streamer.logger.debug("No motion detected in the batch - skipping inference")
                 empty_preds = return_no_motion_frames(
                     im0s=im0s,
-                    batch_size=BATCH_SIZE 
+                    batch_size=len(im0s),
                 )
                 yield empty_preds 
                 if self.args.plot_performance:
@@ -385,6 +436,7 @@ class OptimizedStreamer(Streamer):
                     batch_idx += 1
 
                 self._publish_mqtt_message_no_detection(preds=empty_preds, frame_index=frame_ids)
+                self._publish_no_motion_preview(original_images, preview_queue, producer_flag)
                 self.step_attention_state()
                 continue # to the next batch 
                 
@@ -400,6 +452,7 @@ class OptimizedStreamer(Streamer):
             with profilers[0]: 
                 # if cropped the im0s here have a (572, 1290, 3) shape. Otherwise same shape with original images
                 images = self.preprocess(im0s) 
+                model_input_shape = tuple(int(v) for v in images.shape[-2:])
                             
             if self.args.plot_performance:
                 preprocess_ms = (time.perf_counter() - _t0) * 1e3 
@@ -506,11 +559,17 @@ class OptimizedStreamer(Streamer):
                 # keep = keep_pc if keep_pc.numel()==0 else keep_pc[nms(boxes_t[keep_pc],scores_t[keep_pc], iou_threshold=(1-NMS_IOU))]
                 boxes_t, scores_t, classes_t = boxes_t[keep], scores_t[keep], classes_t[keep] 
                
-                if self.use_roi: 
-                    boxes_t = self.logic_module['ROI'].translate_bounding_boxes(
-                        results=boxes_t,
-                        orig_img_shape=self.original_imgsz
-                    )
+                inference_shape = (
+                    cropped_original_images[bni].shape[:2]
+                    if self.use_roi
+                    else orig_img.shape[:2]
+                )
+                boxes_t = self._map_boxes_to_original_frame(
+                    boxes=boxes_t,
+                    model_input_shape=model_input_shape,
+                    original_shape=orig_img.shape[:2],
+                    inference_shape=inference_shape,
+                )
 
                 frame_bundles.append({
                     "frame_id": fid, 
@@ -800,7 +859,7 @@ class OptimizedStreamer(Streamer):
                 return 
 
             _, im0s, s = self.batch 
-            frame_ids = get_frame_ids(labels=s) 
+            frame_ids = self._get_batch_frame_ids(labels=s, frame_count=len(im0s))
             original_images = im0s.copy() 
             if self.use_roi:
                 with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
@@ -825,7 +884,7 @@ class OptimizedStreamer(Streamer):
                 print("No motion detected in the batch - skipping inference")
                 empty_preds = return_no_motion_frames(
                     im0s=im0s,
-                    batch_size=BATCH_SIZE 
+                    batch_size=len(im0s),
                 )
                 yield empty_preds 
 

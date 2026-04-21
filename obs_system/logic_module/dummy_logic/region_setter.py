@@ -25,6 +25,8 @@ class RegionSetter(EventExtractorInterface):
 
 
     def set_regions(self, image) -> list: 
+        if image is None or not hasattr(image, "shape"):
+            raise ValueError("A valid image is required to initialize ROI regions.")
         
         # This should be modified base on the camera feed, cannot be applied to all camera feeds. 
         # NOTE: ROI in this case considers the road network exclusively. 
@@ -42,49 +44,76 @@ class RegionSetter(EventExtractorInterface):
         y_start = int(ROI_Y1 * aspect_ratio_height)
         y_end = int(ROI_Y2 * aspect_ratio_height)
         
-        self.x_start, self.x_end = sorted([x_start, x_end])
-        self.y_start, self.y_end = sorted([y_start, y_end])
+        x_start, x_end = sorted([x_start, x_end])
+        y_start, y_end = sorted([y_start, y_end])
 
-        return [{
+        self.x_start = max(0, min(x_start, original_width))
+        self.x_end = max(0, min(x_end, original_width))
+        self.y_start = max(0, min(y_start, original_height))
+        self.y_end = max(0, min(y_end, original_height))
+
+        if self.x_end <= self.x_start or self.y_end <= self.y_start:
+            self.x_start, self.y_start = 0, 0
+            self.x_end, self.y_end = original_width, original_height
+
+        self.regions = [{
                     "name": "Road Polygon Region",
-                    "polygon": Polygon([(x_start, y_start), (x_end, y_start), (x_end, y_end), (x_start, y_end)]),  # Polygon points
+                    "polygon": Polygon([
+                        (self.x_start, self.y_start),
+                        (self.x_end, self.y_start),
+                        (self.x_end, self.y_end),
+                        (self.x_start, self.y_end),
+                    ]),
                     "counts": 0,
                     "dragging": False,
                     "region_color": REGION_COLOR,  # BGR Value
                     "text_color": (255, 255, 255),  # Region Text Color
                 },
         ]
+        return self.regions
     
 
-    def translate_bounding_boxes(self, results, orig_img_shape):
+    def translate_bounding_boxes(self, results, orig_img_shape, input_img_shape=None, crop_img_shape=None):
         x0, y0 = self.x_start, self.y_start
         H, W = orig_img_shape
 
-        # 1) bring boxes from 640-letterboxed coords back to crop coords (572x1290)
-        xyxy = results
-        # This is necessary if the detections are in the 640x640 format
-        # h0, w0 = crop_shape
-        # xyxy = scale_boxes(lb_shape, xyxy, (h0, w0))
+        xyxy = results.clone() if isinstance(results, torch.Tensor) else np.array(results, copy=True)
 
-        # 2) add crop offset -> original image coords
+        if input_img_shape is not None and crop_img_shape is not None and len(xyxy):
+            xyxy = scale_boxes(input_img_shape, xyxy, crop_img_shape)
+
         xyxy[:, [0, 2]] += x0
         xyxy[:, [1, 3]] += y0
 
-        # optional clamp
-        xyxy[:, [0, 2]].clamp_(0, W)
-        xyxy[:, [1, 3]].clamp_(0, H)
+        if isinstance(xyxy, torch.Tensor):
+            xyxy[:, [0, 2]].clamp_(0, W)
+            xyxy[:, [1, 3]].clamp_(0, H)
+        else:
+            xyxy[:, [0, 2]] = np.clip(xyxy[:, [0, 2]], 0, W)
+            xyxy[:, [1, 3]] = np.clip(xyxy[:, [1, 3]], 0, H)
 
         return xyxy
 
 
     def crop_image(self, images):
-        
-        if len(images) > 1 and isinstance(images, list): 
-            return [image[self.y_start:self.y_end, self.x_start:self.x_end] for image in images]
-        elif isinstance(images, np.ndarray): 
-            return images[self.y_start:self.y_end, self.x_start:self.x_end]
-        else: 
-            raise ValueError("No images to crop in crop_image method of RegionSetter.")
+        def _crop_one(image):
+            if image is None:
+                raise ValueError("No image to crop in crop_image method of RegionSetter.")
+            h, w = image.shape[:2]
+            x0 = max(0, min(self.x_start, w))
+            x1 = max(0, min(self.x_end, w))
+            y0 = max(0, min(self.y_start, h))
+            y1 = max(0, min(self.y_end, h))
+            if x1 <= x0 or y1 <= y0:
+                return image
+            return image[y0:y1, x0:x1]
+
+        if isinstance(images, (list, tuple)):
+            return [_crop_one(image) for image in images]
+        if isinstance(images, np.ndarray):
+            return _crop_one(images)
+
+        raise ValueError("No images to crop in crop_image method of RegionSetter.")
 
 
     def count_regions(self, bbox) -> None:

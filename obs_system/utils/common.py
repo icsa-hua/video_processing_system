@@ -152,13 +152,37 @@ def check_model_name(model:Union[str,Path], *, model_dirs:Optional[Iterable[Unio
     return ModelSpecification(kind=kind, name=name, path=resolved, resolved_from="auto")
 
 
-def get_frame_ids(labels:List[str])->List[int]: 
+def get_frame_ids(labels: List[str], fallback_start: Optional[int] = None) -> List[int]:
+    """
+    Extract frame ids from Ultralytics batch metadata.
 
-    frame_ids = [value.split(' ') for value in labels]
-    frame_ids = [id[3] for id in frame_ids]  
-    frame_ids = [re.sub(r'[^\w]','|', id) for id in frame_ids]
-    frame_ids = [id.split('|') for id in frame_ids]
-    frame_ids = [int(id[0]) for id in frame_ids] 
+    Video labels include a frame token, for example:
+        "video 1/1 (frame 12/345) /tmp/video.mp4: "
+
+    Live streams currently return empty labels, so callers can pass
+    fallback_start to generate stable sequential ids instead of failing.
+    """
+
+    next_fallback = 0 if fallback_start is None else int(fallback_start)
+    frame_ids = []
+
+    for label in labels:
+        label = str(label or "")
+        frame_match = re.search(r"\(frame\s+(\d+)(?:/|\))", label)
+        if frame_match:
+            frame_ids.append(int(frame_match.group(1)))
+            continue
+
+        tokens = label.split()
+        path_token = tokens[-1].rstrip(":") if tokens else ""
+        stem = Path(path_token).stem
+        if stem.isdigit():
+            frame_ids.append(int(stem))
+            continue
+
+        frame_ids.append(next_fallback)
+        next_fallback += 1
+
     return frame_ids
 
 
@@ -463,6 +487,7 @@ def empty_image(image):
 
 
 def return_no_motion_frames(im0s, batch_size): 
+    batch_size = min(int(batch_size), len(im0s))
     results = [
         _empty_results(
             orig_image=im0s[i], 
@@ -471,4 +496,4 @@ def return_no_motion_frames(im0s, batch_size):
         ) for i in range(batch_size)
     ]
 
-    return results 
+    return results
