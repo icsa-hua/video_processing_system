@@ -94,6 +94,13 @@ class Streamer(ABC):
         self.high_attention_lane_expand_px = 14
         self.normal_tracker_history = 30
         self.high_attention_tracker_history = 60
+        self.stream_limit_hours = 0.0
+        self.stream_limit_seconds = 0.0
+        self.stream_limit_deadline: Optional[float] = None
+        self.stream_limit_active = False
+        self.stop_reason: Optional[str] = None
+        self._save_worker_stopped = False
+        self._session_resources_released = False
 
         self._lock = threading.Lock() 
         self.converter = ConverterResults() 
@@ -339,6 +346,7 @@ class Streamer(ABC):
         )
         
         self.source_type = self.dataset.source_type
+        self.configure_runtime_limit()
         if not getattr(self,"stream", True ) and (
             self.source_type.stream
             or self.source_type.screenshot
@@ -349,6 +357,126 @@ class Streamer(ABC):
 
         if self.args.verbose:
             Streamer.logger.debug("Dataset Source Type | {}".format(self.source_type))
+
+
+    def configure_runtime_limit(self) -> None:
+        raw_limit = float(getattr(self.args, "stream_limit_hours", 0.0) or 0.0)
+        self.stream_limit_hours = max(0.0, raw_limit)
+        self.stream_limit_seconds = self.stream_limit_hours * 3600.0
+        self.stop_reason = None
+        self.stream_limit_active = bool(
+            self.stream_limit_seconds > 0.0
+            and self.source_type is not None
+            and getattr(self.source_type, "stream", False)
+        )
+        self.stream_limit_deadline = (
+            time.monotonic() + self.stream_limit_seconds if self.stream_limit_active else None
+        )
+
+        if self.stream_limit_active:
+            Streamer.logger.info(
+                "Live stream runtime limit enabled: %.2f hour(s)",
+                self.stream_limit_hours,
+            )
+
+
+    def runtime_limit_reached(self) -> bool:
+        if not self.stream_limit_active or self.stream_limit_deadline is None:
+            return False
+
+        if time.monotonic() < self.stream_limit_deadline:
+            return False
+
+        self.stream_limit_active = False
+        self.stop_reason = "stream_limit"
+        Streamer.logger.warning(
+            "Live stream runtime limit of %.2f hour(s) reached. Stopping inference and releasing resources.",
+            self.stream_limit_hours,
+        )
+        return True
+
+
+    def stop_save_worker(self) -> None:
+        if self._save_worker_stopped:
+            return
+
+        self._save_worker_stopped = True
+        try:
+            self.save_queue.put_nowait(None)
+        except queue.Full:
+            try:
+                self.save_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self.save_queue.put_nowait(None)
+            except queue.Full:
+                pass
+
+        if self.save_thread.is_alive():
+            self.save_thread.join(timeout=5)
+
+
+    def release_dataset_resources(self) -> None:
+        if self.dataset is None:
+            return
+
+        close_fn = getattr(self.dataset, "close", None)
+        if callable(close_fn):
+            try:
+                close_fn()
+            except Exception:
+                Streamer.logger.debug("Dataset close() raised during cleanup", exc_info=True)
+
+        release_targets = []
+        for attr_name in ("cap", "caps", "vid_cap", "vid_caps"):
+            resource = getattr(self.dataset, attr_name, None)
+            if resource is None:
+                continue
+            if isinstance(resource, (list, tuple)):
+                release_targets.extend(resource)
+            else:
+                release_targets.append(resource)
+
+        for resource in release_targets:
+            release_fn = getattr(resource, "release", None)
+            if callable(release_fn):
+                try:
+                    release_fn()
+                except Exception:
+                    Streamer.logger.debug("Dataset release() raised during cleanup", exc_info=True)
+
+
+    def release_video_writers(self) -> None:
+        for writer in self.vid_writer.values():
+            if isinstance(writer, cv2.VideoWriter):
+                writer.release()
+        self.vid_writer.clear()
+
+
+    def release_session_resources(self, preview_queue: Any = None, producer_flag: Any = None) -> None:
+        if self._session_resources_released:
+            return
+
+        self._session_resources_released = True
+
+        if producer_flag is not None:
+            producer_flag.value = False
+
+        self.close_preview_stream(preview_queue)
+        self.stop_save_worker()
+        self.release_video_writers()
+        self.release_dataset_resources()
+        self.proc_image = None
+        self.batch = None
+        self.dataset = None
+        self.frame_images.clear()
+        self.points.clear()
+
+        if isinstance(self.results, list):
+            self.results.clear()
+
+        cv2.destroyAllWindows()
 
 
     @abstractmethod

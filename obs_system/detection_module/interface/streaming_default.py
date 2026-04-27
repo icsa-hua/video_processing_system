@@ -146,6 +146,9 @@ class YOLOStreamer(Streamer):
             activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
             
             for self.batch in self.dataset:
+                if self.runtime_limit_reached():
+                    break
+
                 self.run_callbacks("on_predict_batch_start")
                 paths, im0s, s = self.batch
                 
@@ -220,11 +223,6 @@ class YOLOStreamer(Streamer):
                 self.run_callbacks("on_predict_batch_end")
                 yield from self.results
 
-        # Release assets
-        for v in self.vid_writer.values():
-            if isinstance(v, cv2.VideoWriter):
-                v.release()
-
         # Print final results
         if self.args.verbose and self.seen:
             t = tuple(x.t / self.seen * 1e3 for x in profilers)  # speeds per image
@@ -238,7 +236,7 @@ class YOLOStreamer(Streamer):
             s = f"\n{nl} label{'s' * (nl > 1)} saved to {self.save_dir / 'labels'}" if self.args.save_txt else ""
             logger.info(f"Results saved to {colorstr('bold', self.save_dir)}{s}")
 
-        self.close_preview_stream(preview_queue)
+        self.release_session_resources(preview_queue=preview_queue, producer_flag=producer_flag)
         self.run_callbacks("on_predict_end")
 
    

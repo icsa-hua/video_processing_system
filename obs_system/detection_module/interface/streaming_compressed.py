@@ -301,7 +301,14 @@ class OptimizedStreamer(Streamer):
             inference_ms = 0.0
             postprocess_ms = 0.0
 
-            self.batch = batch_queue.get()
+            if self.runtime_limit_reached():
+                break
+
+            try:
+                self.batch = batch_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
             if self.batch is None:
                 break
 
@@ -786,19 +793,12 @@ class OptimizedStreamer(Streamer):
             self.run_callbacks("on_predict_batch_end")
             self.step_attention_state()
 
-        producer_thread.join()
-        self.close_preview_stream(preview_queue)
-
-        self.save_queue.put(None)
-        self.save_thread.join()
+        if self.stop_reason != "stream_limit":
+            producer_thread.join()
 
         if self.args.bench and self.mp is not None: 
             self.mp.finalize() 
             Streamer.logger.info(self.mp.results())
-        
-        for v in self.vid_writer.values(): 
-            if isinstance(v, cv2.VideoWriter): 
-                v.release() 
 
         if self.args.save or self.args.save_txt or self.args.save_crop:
             nl = len(list(self.save_dir.glob("labels/*.txt")))  # number of labels
@@ -830,6 +830,7 @@ class OptimizedStreamer(Streamer):
             except Exception:
                 pass
 
+        self.release_session_resources(preview_queue=preview_queue, producer_flag=producer_flag)
         self.run_callbacks("on_predict_end")
 
 
@@ -853,6 +854,9 @@ class OptimizedStreamer(Streamer):
         
         self.dataset = iter(self.dataset) 
         while True: 
+            if self.runtime_limit_reached():
+                return
+
             try: 
                 self.batch = next(self.dataset)
             except StopIteration: 

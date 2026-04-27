@@ -13,6 +13,7 @@ DEFAULT_VIDEO_SOURCE = "samples/highway.mp4"
 DEFAULT_HOST = "localhost"
 DEFAULT_PORT = 8503
 DEFAULT_BENCH_LABELS = "samples/labels"
+DEFAULT_STREAM_LIMIT_HOURS = 1.0
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class PipelineConfig:
     preview_max_width: int = 960
     preview_jpeg_quality: int = 70
     preview_fps: float = 8.0
+    stream_limit_hours: float = DEFAULT_STREAM_LIMIT_HOURS
 
     @classmethod
     def from_namespace(cls, args: argparse.Namespace) -> "PipelineConfig":
@@ -72,6 +74,9 @@ class PipelineConfig:
 
         if self.host_address != "localhost":
             raise ValueError("Set host address to 'localhost'")
+
+        if float(self.stream_limit_hours) < 0:
+            raise ValueError("Set stream_limit_hours to a value greater than or equal to 0")
 
         return self
 
@@ -113,4 +118,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     argparser.add_argument("--use_TRT", metavar="TRT", action=argparse.BooleanOptionalAction, help="Use TensorRT engine for model inference")
     argparser.add_argument("--plot_perf", metavar="TRT", action=argparse.BooleanOptionalAction, help="Plot performance diagrams")
     argparser.add_argument("--only_FPS", metavar="TRT", action=argparse.BooleanOptionalAction, help="Measure average FPS regardless of plotting.")
+    argparser.add_argument(
+        "--stream_limit_hours",
+        metavar="SL",
+        type=float,
+        default=DEFAULT_STREAM_LIMIT_HOURS,
+        help="Maximum runtime in hours for live streams only. Set to 0 to disable the limit.",
+    )
     return argparser

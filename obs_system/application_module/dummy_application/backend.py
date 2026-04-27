@@ -45,6 +45,7 @@ class VideoProcessingRequest(BaseModel):
     preview_max_width: int = 960
     preview_jpeg_quality: int = 70
     preview_fps: float = 8.0
+    stream_limit_hours: float = 1.0
 
 
 def _is_worker_alive() -> bool:

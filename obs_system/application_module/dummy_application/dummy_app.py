@@ -12,12 +12,14 @@ from obs_system.utils.logger import get_logger
 from obs_system.utils.appraisal import perf, frame_list, StepContext
 
 import os
+import gc
 import numpy as np
 import psutil
 import pynvml
 import time
 import platform
 import tracemalloc
+import torch
 
 from jtop import jtop
 from pathlib import Path
@@ -101,6 +103,7 @@ class Application:
         DEFAULT_CFG.preview_max_width = int(config.preview_max_width)
         DEFAULT_CFG.preview_jpeg_quality = int(config.preview_jpeg_quality)
         DEFAULT_CFG.preview_fps = float(config.preview_fps)
+        DEFAULT_CFG.stream_limit_hours = float(config.stream_limit_hours)
 
         tracemalloc.start()
 
@@ -267,6 +270,54 @@ class Application:
         self.statistics()
 
 
+    def cleanup_runtime_resources(self, *, producer_flag=None, preview_queue=None) -> None:
+        if self.mqtt_subscriber is not None:
+            try:
+                self.mqtt_subscriber.client.loop_stop()
+                self.mqtt_subscriber.client.disconnect()
+            except Exception:
+                logger.exception("Failed to close MQTT subscriber cleanly")
+            finally:
+                self.mqtt_subscriber = None
+
+        if self.mqtt_publisher is not None:
+            try:
+                self.mqtt_publisher.client.disconnect()
+            except Exception:
+                logger.exception("Failed to close MQTT publisher cleanly")
+            finally:
+                self.mqtt_publisher = None
+
+        if self.streamer is not None and hasattr(self.streamer, "release_session_resources"):
+            self.streamer.release_session_resources(
+                preview_queue=preview_queue,
+                producer_flag=producer_flag,
+            )
+
+        self.model = None
+        self.streamer = None
+        self.logic_module.clear()
+
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.empty_cache()
+                if hasattr(torch.cuda, "ipc_collect"):
+                    torch.cuda.ipc_collect()
+            except Exception:
+                logger.exception("Failed to release CUDA cache cleanly")
+
+        if self.gpu_enabled:
+            try:
+                pynvml.nvmlShutdown()
+            except pynvml.NVMLError:
+                logger.debug("NVML was already shut down")
+
+        if tracemalloc.is_tracing():
+            tracemalloc.stop()
+
+        gc.collect()
+
+
     def run_application(
         self,
         config: PipelineConfig,
@@ -275,43 +326,40 @@ class Application:
         preview_queue=None,
     ) -> None:
         model_specification = config.resolve_model()
+        self.save_outputs = bool(config.save)
+        self.verbose_outputs = bool(config.verbose)
+        process_initialized = False
 
-        app = Application(
-            save=bool(config.save),
-            verbose=bool(config.verbose),
-        )
+        try:
+            with StepContext(name="Setup Process", catch=(KeyError, ModuleNotFoundError)):
+                self.setup_process(config)
+                process_initialized = True
 
-        with StepContext(name="Setup Process", catch=(KeyError, ModuleNotFoundError)):
-            app.setup_process(config)
+            with StepContext(name="Setup Model", catch=(OSError, ValueError)):
+                self.setup_model(
+                    model_name=f"{model_specification.name}.{model_specification.kind}",
+                    path_to_load=model_specification.path,
+                    opt=config.type,
+                )
 
-        with StepContext(name="Setup Model", catch=(OSError, ValueError)):
-            app.setup_model(
-                model_name=f"{model_specification.name}.{model_specification.kind}",
-                path_to_load=model_specification.path,
-                opt=config.type,
+            with StepContext(name="Setup Logic", catch=(KeyError, IndexError)):
+                self.setup_logic_module(config)
+
+            with StepContext(name="Setup MQTT", catch=(ConnectionError, TimeoutError)):
+                if self.mqtt:
+                    self.setup_mqtt()
+                else:
+                    logger.debug("[MQTT] interface is disabled")
+
+            with StepContext(name="Run_App", catch=(RuntimeError,)):
+                self.run_app(producer_flag=producer_flag, preview_queue=preview_queue)
+        finally:
+            if process_initialized:
+                try:
+                    self.close_app()
+                except Exception:
+                    logger.exception("Failed to collect final application statistics")
+            self.cleanup_runtime_resources(
+                producer_flag=producer_flag,
+                preview_queue=preview_queue,
             )
-
-        with StepContext(name="Setup Logic", catch=(KeyError, IndexError)):
-            app.setup_logic_module(config)
-
-        with StepContext(name="Setup MQTT", catch=(ConnectionError, TimeoutError)):
-            if app.mqtt:
-                app.setup_mqtt()
-            else:
-                logger.debug("[MQTT] interface is disabled")
-
-        with StepContext(name="Run_App", catch=(RuntimeError,)):
-            app.run_app(producer_flag=producer_flag, preview_queue=preview_queue)
-            app.close_app()
-
-            if self.mqtt_subscriber is not None:
-                self.mqtt_subscriber.client.loop_stop()
-                self.mqtt_subscriber.client.disconnect()
-
-            if self.mqtt_publisher is not None:
-                self.mqtt_publisher.client.disconnect()
-
-            if self.gpu_enabled:
-                pynvml.nvmlShutdown()
-
-            tracemalloc.stop()
