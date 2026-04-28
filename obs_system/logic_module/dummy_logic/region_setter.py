@@ -151,18 +151,24 @@ class RegionSetter(EventExtractorInterface):
 
     def _show_regions(self, im:np.ndarray)->None:
         for region in self.regions:
-            region_label = str(region["counts"])
-            region_color = region["region_color"]
-            region_text_color = region["text_color"]
             polygon_coords = np.array(region["polygon"].exterior.coords, dtype=np.int32)
-            centroid_x, centroid_y = int(region["polygon"].centroid.x), int(region["polygon"].centroid.y)
+            region_color = (0, 0, 0)
+            region_label = "ROI-Inference"
+            region_text_color = (255, 255, 255)
+            x, y, w, h = cv2.boundingRect(polygon_coords)
             text_size, _ = cv2.getTextSize(
                 region_label, cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.7, thickness=2
             )
-            text_x = centroid_x - text_size[0] // 2
-            text_y = centroid_y + text_size[1] // 2
+            text_x = max(x, 0)
+            text_y = max(y - 10, text_size[1] + 6)
 
-            cv2.rectangle(im,(text_x - 5, text_y - text_size[1] - 5),(text_x + text_size[0] + 5, text_y + 5),region_color,-1,)
+            cv2.rectangle(
+                im,
+                (text_x - 5, text_y - text_size[1] - 5),
+                (text_x + text_size[0] + 5, text_y + 5),
+                region_color,
+                -1,
+            )
             cv2.putText(im, region_label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, region_text_color, 2)
             cv2.polylines(im, [polygon_coords], isClosed=True, color=region_color, thickness=2)
         

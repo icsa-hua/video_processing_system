@@ -589,17 +589,23 @@ class OptimizedStreamer(Streamer):
                 # keep = keep_pc if keep_pc.numel()==0 else keep_pc[nms(boxes_t[keep_pc],scores_t[keep_pc], iou_threshold=(1-NMS_IOU))]
                 boxes_t, scores_t, classes_t = boxes_t[keep], scores_t[keep], classes_t[keep] 
                
-                inference_shape = (
-                    cropped_original_images[bni].shape[:2]
-                    if self.use_roi
-                    else orig_img.shape[:2]
-                )
-                boxes_t = self._map_boxes_to_original_frame(
-                    boxes=boxes_t,
-                    model_input_shape=model_input_shape,
-                    original_shape=orig_img.shape[:2],
-                    inference_shape=inference_shape,
-                )
+                # inference_shape = (
+                #     cropped_original_images[bni].shape[:2]
+                #     if self.use_roi
+                #     else orig_img.shape[:2]
+                # )
+                # boxes_t = self._map_boxes_to_original_frame(
+                #     boxes=boxes_t,
+                #     model_input_shape=model_input_shape,
+                #     original_shape=orig_img.shape[:2],
+                #     inference_shape=inference_shape,
+                # )
+
+                if self.use_roi: 
+                    boxes_t = self.logic_module['ROI'].translate_bounding_boxes(
+                        results=boxes_t,
+                        orig_img_shape=self.original_imgsz
+                    )
 
                 frame_bundles.append({
                     "frame_id": fid, 
