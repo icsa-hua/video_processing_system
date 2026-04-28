@@ -118,11 +118,5 @@ def build_arg_parser() -> argparse.ArgumentParser:
     argparser.add_argument("--use_TRT", metavar="TRT", action=argparse.BooleanOptionalAction, help="Use TensorRT engine for model inference")
     argparser.add_argument("--plot_perf", metavar="TRT", action=argparse.BooleanOptionalAction, help="Plot performance diagrams")
     argparser.add_argument("--only_FPS", metavar="TRT", action=argparse.BooleanOptionalAction, help="Measure average FPS regardless of plotting.")
-    argparser.add_argument(
-        "--stream_limit_hours",
-        metavar="SL",
-        type=float,
-        default=DEFAULT_STREAM_LIMIT_HOURS,
-        help="Maximum runtime in hours for live streams only. Set to 0 to disable the limit.",
-    )
+    argparser.add_argument( "--stream_limit_hours", metavar="SL", type=float, default=DEFAULT_STREAM_LIMIT_HOURS, help="Maximum runtime in hours for live streams only. Set to 0 to disable the limit.")
     return argparser
