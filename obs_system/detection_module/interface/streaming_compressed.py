@@ -134,6 +134,16 @@ class OptimizedStreamer(Streamer):
         self.publish_preview(preview_queue, producer_flag)
 
 
+    def _sync_subtractor_warmup_state(self) -> bool:
+        subtractor = None if self.logic_module is None else self.logic_module.get("SUBTRACTOR")
+        if subtractor is None or not hasattr(subtractor, "is_ready_for_inference"):
+            self.done_warmup = True
+            return self.done_warmup
+
+        self.done_warmup = bool(subtractor.is_ready_for_inference())
+        return self.done_warmup
+
+
     def setup_model(self, model_name:str, path_to_load:Optional[str|Path], opt:str)->None:
         pass 
 
@@ -176,12 +186,7 @@ class OptimizedStreamer(Streamer):
 
             self.original_imgsz = im0s[0].shape[:2] 
             self.orig_height, self.orig_width = self.original_imgsz
-
-            empty_image = f"{EMPTY_IMAGE_PATH}"
-            if not os.path.exists(empty_image):
-                raise FileNotFoundError(f"Empty image path for background subtraction does not exist: {empty_image}")
-
-            empty_image = cv2.imread(empty_image)
+            subtractor = None if self.logic_module is None else self.logic_module.get("SUBTRACTOR")
             if self.use_roi :
                 with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
                     
@@ -193,10 +198,21 @@ class OptimizedStreamer(Streamer):
                         self.logic_module['ROI']._show_regions(cropped_frame.copy())
                     
                     self.orig_height, self.orig_width = cropped_frame.shape[:2]
+
+            if subtractor is not None and hasattr(subtractor, "configure_source_warmup"):
+                subtractor.configure_source_warmup(source_is_stream=bool(getattr(self.source_type, "stream", False)))
+                self.done_warmup = subtractor.is_ready_for_inference()
+            else:
+                self.done_warmup = True
+
+            if not getattr(self.source_type, "stream", False):
+                empty_image = f"{EMPTY_IMAGE_PATH}"
+                if not os.path.exists(empty_image):
+                    raise FileNotFoundError(f"Empty image path for background subtraction does not exist: {empty_image}")
+
+                empty_image = cv2.imread(empty_image)
                 self.logic_module['SUBTRACTOR'].warm_up(empty_image, trials=TRIALS)
-            
-            else: 
-                self.logic_module['SUBTRACTOR'].warm_up(empty_image, trials=TRIALS)
+                self._sync_subtractor_warmup_state()
             
             tile_flag = True if (self.orig_width // TILE_SIZE) > TILE_THR or (self.orig_height // TILE_SIZE) >= TILE_THR else False
             force_no_tiles = bool(getattr(self, "force_streaming_no_tiles", False))
@@ -268,9 +284,9 @@ class OptimizedStreamer(Streamer):
     
         self.run_callbacks("on_predict_start") 
         with StepContext(name="Warmup Session", catch=(Exception, RuntimeError), verbose=self.args.verbose):
-            if not self.done_warmup: 
+            if not self.model_warmup_done: 
                 self.model.warmup(micro=BATCH_SIZE, warmup_sessions=WARM_UP_SESSIONS)
-                self.done_warmup = True
+                self.model_warmup_done = True
 
         # Asynchronous batch loading to avoid stalls
         batch_queue = queue.Queue(maxsize=8)
@@ -356,6 +372,13 @@ class OptimizedStreamer(Streamer):
                     timeline_logger.log_span(batch_idx, 'mog2', _t0_rel, _t1_rel)
                 if lanes_final is not None: 
                     self.lanes_final = lanes_final
+
+            warmup_pending = not self.done_warmup
+            if warmup_pending:
+                if self._sync_subtractor_warmup_state():
+                    Streamer.logger.info("Background subtractor warmup completed. Detection pipeline enabled for the next batch.")
+                self.step_attention_state()
+                continue
 
             if self.should_force_inference_all_frames():
                 mfgs = [True] * len(mfgs)
@@ -881,6 +904,13 @@ class OptimizedStreamer(Streamer):
                 if lanes_final is not None: 
                     self.lanes_final = lanes_final
 
+            warmup_pending = not self.done_warmup
+            if warmup_pending:
+                if self._sync_subtractor_warmup_state():
+                    Streamer.logger.info("Background subtractor warmup completed. Detection pipeline enabled for the next batch.")
+                self.step_attention_state()
+                continue
+
             if self.should_force_inference_all_frames():
                 mfgs = [True] * len(mfgs)
 
@@ -890,8 +920,6 @@ class OptimizedStreamer(Streamer):
                     im0s=im0s,
                     batch_size=len(im0s),
                 )
-                yield empty_preds 
-
                 self._publish_mqtt_message_no_detection(preds=empty_preds, frame_index=frame_ids)
                 self.step_attention_state()
                 continue 

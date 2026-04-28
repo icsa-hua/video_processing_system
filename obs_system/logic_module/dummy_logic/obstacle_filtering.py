@@ -163,6 +163,11 @@ def analyze_lane_hazards(
 
     h, w = lane_mask.shape[:2]
     lane_bbox = _lane_bounds(lane_mask)
+    crosswalk_available = (
+        crosswalk_mask is not None
+        and crosswalk_mask.size > 0
+        and cv2.countNonZero(crosswalk_mask) > 0
+    )
     hazards: List[Dict[str, Any]] = []
 
     for i in range(min(len(boxes_np), len(cls_np))):
@@ -178,8 +183,11 @@ def analyze_lane_hazards(
         if not in_lane:
             continue
 
-        cross_overlap = _overlap_ratio(crosswalk_mask, (x1, y1, x2, y2))
-        in_crosswalk = cross_overlap >= crosswalk_overlap_threshold
+        cross_overlap = 0.0
+        in_crosswalk = False
+        if name_norm == "person" and crosswalk_available:
+            cross_overlap = _overlap_ratio(crosswalk_mask, (x1, y1, x2, y2))
+            in_crosswalk = cross_overlap >= crosswalk_overlap_threshold
 
         # Explicit policy:
         # - person in crosswalk is allowed

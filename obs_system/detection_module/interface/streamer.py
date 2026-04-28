@@ -51,7 +51,8 @@ class Streamer(ABC):
         self.args = get_cfg(cfg, overrides)
         self.save_dir = get_save_dir(self.args)
         self.docker_flag = False 
-        self.done_warmup = False
+        self.done_warmup = True
+        self.model_warmup_done = False
         
         self.save_queue = queue.Queue(maxsize=10)
         self.save_thread = threading.Thread(target=self._save_worker, daemon=True)
@@ -539,6 +540,11 @@ class Streamer(ABC):
             self._do_save_results(preds, p, frame)
             return 
 
+        if task_type == "save_hazard_event":
+            _, frame_path, annotated, crop_specs, csv_rows = task
+            self._do_save_hazard_event(frame_path, annotated, crop_specs, csv_rows)
+            return
+
         # if task_type == "save_crops": 
         #     _, crops_payload = task
         #     self._do_save_crops(crops_payload)
@@ -632,6 +638,18 @@ class Streamer(ABC):
         
         if self.args.save_crop:
             preds.save_crop(save_dir=self.save_dir / "crops", file_name=txt_path.stem if txt_path is not None else Path("unknown"))
+
+    def _do_save_hazard_event(
+        self,
+        frame_path: Path,
+        annotated: np.ndarray,
+        crop_specs: List[Tuple[Path, np.ndarray]],
+        csv_rows: List[List[Any]],
+    ) -> None:
+        cv2.imwrite(str(frame_path), annotated)
+        for crop_path, crop in crop_specs:
+            cv2.imwrite(str(crop_path), crop)
+        self._append_hazard_csv(csv_rows)
 
 
     def save_predicted_images(self, save_path:str, frame:int) ->None: 
@@ -893,13 +911,15 @@ class Streamer(ABC):
         annotated = self._draw_scene_regions(frame_bgr)
         annotated = self._draw_hazard_boxes(annotated, hazards)
 
-        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        event_ts = datetime.now(timezone.utc)
+        event_ts_iso = event_ts.isoformat()
+        ts = event_ts.strftime("%Y%m%dT%H%M%S.%fZ")
         frame_id = self._extract_frame_id(preds)
         frame_name = f"hazard_{ts}_f{frame_id}.jpg"
         frame_path = self.hazard_frames_dir / frame_name
-        cv2.imwrite(str(frame_path), annotated)
 
         csv_rows: List[List[Any]] = []
+        crop_specs: List[Tuple[Path, np.ndarray]] = []
         for idx, hz in enumerate(hazards):
             x1, y1, x2, y2 = hz.get("bbox_xyxy", [0, 0, 0, 0])
             x1 = int(np.clip(x1, 0, max(frame_bgr.shape[1] - 1, 0)))
@@ -910,13 +930,13 @@ class Streamer(ABC):
             crop_path = self.hazard_crops_dir / crop_name
             if x2 > x1 and y2 > y1:
                 crop = frame_bgr[y1:y2, x1:x2]
-                cv2.imwrite(str(crop_path), crop)
+                crop_specs.append((crop_path, crop.copy()))
             else:
                 crop_name = ""
 
             csv_rows.append(
                 [
-                    datetime.now(timezone.utc).isoformat(),
+                    event_ts_iso,
                     frame_id,
                     hz.get("class_name", ""),
                     hz.get("category", ""),
@@ -934,7 +954,7 @@ class Streamer(ABC):
                 ]
             )
 
-        self._append_hazard_csv(csv_rows)
+        self.save_queue.put(("save_hazard_event", frame_path, annotated.copy(), crop_specs, csv_rows))
         self._publish_hazard_alert(preds=preds, hazards=hazards, frame_name=frame_name)
 
     def _publish_hazard_alert(self, preds: Any, hazards: List[Dict[str, Any]], frame_name: str) -> None:

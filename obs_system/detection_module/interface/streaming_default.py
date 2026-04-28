@@ -121,7 +121,7 @@ class YOLOStreamer(Streamer):
                 (self.save_dir / "labels" if self.args.save_txt else self.save_dir).mkdir(parents=True, exist_ok=True)
             
             # Warmup model
-            if not self.done_warmup and not isinstance(self.model, YOLO) :
+            if not self.model_warmup_done and not isinstance(self.model, YOLO) :
 
                 if model == "yolov8":
                     self.model.warmup(imgsz=(1 if self.model.pt or self.model.triton else self.dataset.bs, 3, *self.imgsz))
@@ -129,11 +129,11 @@ class YOLOStreamer(Streamer):
                     self.warmup(imgsz=(1 if self.model.pt else self.dataset.bs, 3, *self.imgsz))
                 elif model == 'engine': 
                    pass 
-                self.done_warmup = True
+                self.model_warmup_done = True
 
             else: 
                 self.warmup(imgsz=(1, 3, *self.imgsz))
-                self.done_warmup = True 
+                self.model_warmup_done = True 
 
             self.seen, self.windows, self.batch = 0, [], None
             profilers = (

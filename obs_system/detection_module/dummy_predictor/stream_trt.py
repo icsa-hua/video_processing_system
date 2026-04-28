@@ -142,9 +142,9 @@ class TensorRTRTXStreamer(OptimizedStreamer):
 
         # Warmup for Better Inference. Reduces Initial frames high inference time and is more stable. 
         with StepContext(name="Warmup Session", catch=(Exception, RuntimeError), verbose=self.args.verbose):
-            if not self.done_warmup: 
+            if not self.model_warmup_done: 
                 self.model.warmup(micro=micro, warmup_sessions=WARM_UP_SESSIONS)
-                self.done_warmup = True
+                self.model_warmup_done = True
 
         # use_roi = True if self.logic_module is not None and self.logic_module["ROI"] is not None else False 
 
@@ -389,7 +389,6 @@ class TensorRTRTXStreamer(OptimizedStreamer):
 
     def _publish_mqtt_message_no_detection(self, preds, frame_index)->None: 
         super()._publish_mqtt_message_no_detection(preds, frame_index)
-
 
 
 

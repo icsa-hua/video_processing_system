@@ -32,7 +32,8 @@ class Subtractor(EventExtractorInterface):
     ):
         self.downscale = downscale
         self.threshold_ratio = float(threshold_ratio)
-        self.accum_time = accum_time
+        self.initial_accum_time = max(int(accum_time), 0)
+        self.accum_time = self.initial_accum_time
         self.save_path = save_path
         
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
@@ -68,6 +69,36 @@ class Subtractor(EventExtractorInterface):
         self.lanes_mask: Optional[np.ndarray] = None
         self.crosswalk_mask: Optional[np.ndarray] = None
         self._last_frame_shape: Optional[tuple[int, int]] = None
+        self._source_is_stream = False
+        self._startup_warmup_active = False
+        self._startup_frames_seen = 0
+        self._ready_for_inference = True
+
+
+    def configure_source_warmup(self, source_is_stream: bool) -> None:
+        self._source_is_stream = bool(source_is_stream)
+        self._startup_frames_seen = 0
+        self._startup_warmup_active = bool(
+            self._source_is_stream
+            and not self.static_bg
+            and not self.__calibration_ended
+            and self.initial_accum_time > 0
+        )
+        self._ready_for_inference = not self._startup_warmup_active
+
+        if self._startup_warmup_active:
+            logger.info(
+                "Subtractor startup warmup enabled for live stream: %d frames before inference",
+                self.initial_accum_time,
+            )
+
+
+    def is_ready_for_inference(self) -> bool:
+        return bool(self._ready_for_inference)
+
+
+    def get_startup_warmup_progress(self) -> tuple[int, int]:
+        return int(self._startup_frames_seen), int(self.initial_accum_time)
 
 
     def warm_up(self, empty_background_image:Optional[np.ndarray], trials:int=TRIALS):
@@ -93,6 +124,8 @@ class Subtractor(EventExtractorInterface):
                 self.bg_subtractor.apply(empty_bg, learningRate=1.0) 
 
             self.static_bg = True #Shows that we entered the first time. 
+            self._startup_warmup_active = False
+            self._ready_for_inference = True
 
 
     def detect(self, batch, save_img:bool=False): 
@@ -121,6 +154,7 @@ class Subtractor(EventExtractorInterface):
         motion_scores = []
         lanes_final = None
         last_frame = batch[-1]
+        startup_skip_batch = self._startup_warmup_active and not self._ready_for_inference
 
         for frame in batch:
 
@@ -135,12 +169,22 @@ class Subtractor(EventExtractorInterface):
             if save_img and save_idx is not None: 
                 save_idx += 1 
 
-            if motion_flag and self.accum_time > 0:
+            if startup_skip_batch and self.accum_time > 0:
+                self.__cal_calibrator(frame, size=(h,w))
+                self._startup_frames_seen = min(self.initial_accum_time, self._startup_frames_seen + 1)
+            elif motion_flag and self.accum_time > 0:
                 self.__cal_calibrator(frame, size=(h,w))
 
         if self.accum_time == 0 and self.__calibration_ended :
             lanes_final = self.__apply_calibration(last_frame, save_img=save_img)
             self.accum_time = -1
+            self._startup_warmup_active = False
+            self._ready_for_inference = True
+            self._recent.clear()
+            self._hold = 0
+
+        if startup_skip_batch:
+            motion_flags = [False] * len(motion_flags)
 
         self.last_motion_scores = motion_scores
         return motion_flags, lanes_final
@@ -218,7 +262,7 @@ class Subtractor(EventExtractorInterface):
         self.prev_mask = blended
         self.acc_mask = cv2.add(self.acc_mask, blended) 
 
-        if not self.__calibration_ended: 
+        if not self.__calibration_ended and self.accum_time > 0: 
             self.accum_time -= 1
 
         if self.accum_time == 0: 
