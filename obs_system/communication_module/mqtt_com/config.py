@@ -2,7 +2,7 @@ import os
 import paho.mqtt.client as mqtt 
 from pathlib import Path
 
-JETSON_DEVICE_ID = 2
+JETSON_DEVICE_ID = 3
 BROKER = f"edgejet{JETSON_DEVICE_ID}vpn.edi.lv"
 PORT = 8884 
 TOPIC = "reid-vehicle-detection" 

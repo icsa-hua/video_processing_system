@@ -477,7 +477,8 @@ class Streamer(ABC):
         if isinstance(self.results, list):
             self.results.clear()
 
-        cv2.destroyAllWindows()
+        if self.args.show or self.args.save:
+            cv2.destroyAllWindows()
 
 
     @abstractmethod
