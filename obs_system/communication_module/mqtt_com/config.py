@@ -2,7 +2,8 @@ import os
 import paho.mqtt.client as mqtt 
 from pathlib import Path
 
-BROKER = "edgejet2.edi.lv"
+JETSON_DEVICE_ID = 2
+BROKER = f"edgejet{JETSON_DEVICE_ID}vpn.edi.lv"
 PORT = 8884 
 TOPIC = "reid-vehicle-detection" 
 MESSAGE = "" 
@@ -13,9 +14,9 @@ TIMEOUT_S = 10
 
 CLIENT_NAME="edgeai-vcd42-hua"
 
-CLIENT_CRT = "assets/mqtt_credentials/client.crt" 
-CLIENT_KEY = "assets/mqtt_credentials/client.key" 
-CA_CRT = "assets/mqtt_credentials/ca-cert" 
+CLIENT_CRT = f"assets/mqtt_credentials/jetson{JETSON_DEVICE_ID}/edgeai-vcd42-hua-edgejet{JETSON_DEVICE_ID}vpn/client-certs/client.crt" 
+CLIENT_KEY = f"assets/mqtt_credentials/jetson{JETSON_DEVICE_ID}/edgeai-vcd42-hua-edgejet{JETSON_DEVICE_ID}vpn/client-certs/client.key" 
+CA_CRT = f"assets/mqtt_credentials/jetson{JETSON_DEVICE_ID}/edgeai-vcd42-hua-edgejet{JETSON_DEVICE_ID}vpn/ca-cert" 
 
 JPEG_QUALITY = 75 
 KEEPALIVE = 60 
