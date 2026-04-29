@@ -9,7 +9,7 @@ from obs_system.utils.common import ModelSpecification, check_model_name
 
 
 DEFAULT_MODEL = "assets/compressed_models/mixed_dataset_trained_yolov8s.onnx"
-DEFAULT_VIDEO_SOURCE = "samples/highway.mp4"
+DEFAULT_VIDEO_SOURCE = "rtsp://admin:edgeAI!kamera1@tbfw.edi.lv:50854/ISAPI/Streaming/Channels/101"
 DEFAULT_HOST = "localhost"
 DEFAULT_PORT = 8503
 DEFAULT_BENCH_LABELS = "samples/labels"
