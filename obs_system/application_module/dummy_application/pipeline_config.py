@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from obs_system.utils.common import ModelSpecification, check_model_name
+from obs_system.application_module.camera_config import keys
 
 
 DEFAULT_MODEL = "assets/compressed_models/mixed_dataset_trained_yolov8s.onnx"
-DEFAULT_VIDEO_SOURCE = "rtsp://admin:edgeAI!kamera1@tbfw.edi.lv:50854/ISAPI/Streaming/Channels/101"
+# DEFAULT_VIDEO_SOURCE = "rtsp://admin:edgeAI!kamera1@tbfw.edi.lv:50854/ISAPI/Streaming/Channels/101"
+DEFAULT_VIDEO_SOURCE = f"rtsp://{keys.USERNAME}:{keys.PASS}/@vtfw.edi.lv:{keys.PORT1}/axis-media/media.amp?resolution=1280x960"
 DEFAULT_HOST = "localhost"
 DEFAULT_PORT = 8503
 DEFAULT_BENCH_LABELS = "samples/labels"
