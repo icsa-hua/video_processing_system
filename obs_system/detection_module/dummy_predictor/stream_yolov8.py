@@ -59,7 +59,10 @@ class Yolov8Streamer(YOLOStreamer):
         except KeyboardInterrupt as ke: 
             if producer_flag is not None: 
                 producer_flag.value=False
-            cv2.destroyAllWindows()
+            try: 
+                cv2.destroyAllWindows()
+            except cv2.error: 
+                pass 
             logger.exception(f"KeyboardInterrupt: {ke}")
             return 
 

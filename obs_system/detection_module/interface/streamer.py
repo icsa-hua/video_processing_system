@@ -478,7 +478,10 @@ class Streamer(ABC):
             self.results.clear()
 
         if self.args.show or self.args.save:
-            cv2.destroyAllWindows()
+            try: 
+                cv2.destroyAllWindows()
+            except cv2.error: 
+                pass 
 
 
     @abstractmethod
@@ -686,7 +689,10 @@ class Streamer(ABC):
         im = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
 
         if DEFAULT_CFG.gui:
-            cv2.destroyAllWindows()
+            try: 
+                cv2.destroyAllWindows()
+            except cv2.error: 
+                pass
             self.proc_image = self._encode_preview_frame(im)
 
         elif self.args.show: 

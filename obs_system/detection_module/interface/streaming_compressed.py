@@ -57,8 +57,11 @@ class OptimizedStreamer(Streamer):
 
             if producer_flag is not None: 
                 producer_flag.value=False 
-
-            cv2.destroyAllWindows() 
+            
+            try:    
+                cv2.destroyAllWindows() 
+            except cv2.error: 
+                pass 
             Streamer.logger.exception(f"KeyboardInterrupt: {ke}")
         
         return 
