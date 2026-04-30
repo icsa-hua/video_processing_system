@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from obs_system.utils.common import ModelSpecification, check_model_name
-from obs_system.application_module.camera_config import keys
+from obs_system.application_module.dummy_application.camera_config import keys
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp" 
 

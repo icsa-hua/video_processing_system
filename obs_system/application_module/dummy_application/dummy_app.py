@@ -20,6 +20,7 @@ import time
 import platform
 import tracemalloc
 import torch
+import jtop 
 
 from jtop import jtop
 from pathlib import Path
@@ -258,9 +259,13 @@ class Application:
                 except pynvml.NVMLError as e:
                     logger.error(f"| Failed to get GPU metrics: {e}")
         elif self.machine_type == 'jetson': 
-            with jtop() as jetson: 
-                if jetson.ok(): 
-                    print(jetson.memory)
+            try: 
+                with jtop() as jetson: 
+                    if jetson.ok(): 
+                        print(jetson.memory)
+            except jtop.core.exceptions.JtopException as je: 
+                print(f"JTOP Measurements Unavailable {je}")
+
 
         logger.info(f"-" * 84)
 
