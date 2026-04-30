@@ -129,11 +129,7 @@ WORKDIR /workspace
 
 COPY requirements.txt . 
 
-COPY setup.py . 
-
 RUN python3 -m pip install --no-cache-dir --no-deps -r requirements.txt
-
-RUN python3 -m pip install -e . --no-deps
 
 CMD ["bash"]
 
