@@ -263,7 +263,7 @@ class Application:
                 with jtop() as jetson: 
                     if jetson.ok(): 
                         print(jetson.memory)
-            except jtop.core.exceptions.JtopException as je: 
+            except Exception as je: 
                 print(f"JTOP Measurements Unavailable {je}")
 
 
