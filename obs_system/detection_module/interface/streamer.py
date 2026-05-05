@@ -1054,12 +1054,13 @@ class Streamer(ABC):
         messages = [] 
         for idx, frame_id in enumerate(frame_index): 
             boxes = preds[idx].boxes
+            track_ids = boxes.id.tolist() if getattr(boxes, "id", None) is not None else []
             message = {
                 "frame_id":frame_id, 
                 "classes":boxes.cls.tolist(), 
                 "boxes": boxes.xyxy.tolist(), 
                 "tm_ms":time.time()*1000, 
-                "track_ids": boxes.id.tolist(), 
+                "track_ids": track_ids, 
             }
             messages.append(message)
         return json.dumps(messages)

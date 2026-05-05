@@ -13,13 +13,15 @@ def main():
     logger.debug("--- Initializing Application ---")
     argparser = build_arg_parser()
     
-    config = PipelineConfig.from_namespace(argparser.parse_args()).validate()
+    config = PipelineConfig.from_namespace(argparser.parse_args())
  
     logger.warning("If you change the input video source, adjust the background subtractor image. Otherwise, it will classify all frames without movement")
 
     if config.gui:
         gui_connector(config.host_address, config.port_address)
         return
+
+    config = config.validate()
 
     app = Application()
     app.run_application(config)
