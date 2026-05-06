@@ -14,7 +14,7 @@ os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 DEFAULT_MODEL = "assets/compressed_models/yolov8s.engine"
 # DEFAULT_VIDEO_SOURCE = "rtsp://admin:edgeAI!kamera1@tbfw.edi.lv:50854/ISAPI/Streaming/Channels/101"
 DEFAULT_VIDEO_SOURCE = f"rtsp://{keys.USER}:{keys.PASS}@vtfw.edi.lv:{keys.PORT1}/axis-media/media.amp?resolution=1280x960"
-DEFAULT_HOST = "localhost"
+DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8503
 DEFAULT_BENCH_LABELS = "samples/labels"
 DEFAULT_STREAM_LIMIT_HOURS = 1.0
@@ -76,8 +76,8 @@ class PipelineConfig:
                 "You can pass this argument with python3 scripts/obs_pipeline.py --use_TRT"
             )
 
-        if self.host_address != "localhost":
-            raise ValueError("Set host address to 'localhost'")
+        if self.host_address != "localhost" and self.host_address != "0.0.0.0":
+            raise ValueError("Set host address to 'localhost' or '0.0.0.0'")
 
         if float(self.stream_limit_hours) < 0:
             raise ValueError("Set stream_limit_hours to a value greater than or equal to 0")
