@@ -14,7 +14,7 @@ logger = get_logger(name="obs_system." + __name__)
 
 
 def gui_connector(host_address: str = "localhost", port_address: int = 8503):
-    if host_address != "localhost":
+    if host_address != "localhost" and host_address != "0.0.0.0":
         raise ValueError("Set host address to 'localhost'")
 
     host = socket.gethostbyname(host_address)
