@@ -5,10 +5,9 @@ from obs_system.utils.logger import get_logger
 
 import os
 import tempfile
-import time
 import warnings
 from pathlib import Path
-from typing import Text
+from typing import Any, Text
 
 import requests
 import streamlit as st
@@ -50,6 +49,32 @@ def _sync_live_stream_url(source_key: str) -> None:
 
     other_key = "live_stream_url_examine" if source_key == "live_stream_url_inference" else "live_stream_url_inference"
     st.session_state[other_key] = stream_url
+
+
+def _render_mjpeg_stream(feed_url: str, image_placeholder: Any, caption: str) -> None:
+    with requests.get(feed_url, stream=True, timeout=(5, 60)) as video_stream:
+        buffer = b""
+        for chunk in video_stream.iter_content(chunk_size=65536):
+            if not chunk:
+                continue
+            buffer += chunk
+            while b"--frame\r\n" in buffer:
+                start_buf = buffer.find(b"--frame\r\n")
+                end_buf = buffer.find(b"--frame\r\n", start_buf + 1)
+                if end_buf == -1:
+                    break
+
+                frame_raw = buffer[start_buf:end_buf]
+                buffer = buffer[end_buf:]
+                headers_end = frame_raw.find(b"\r\n\r\n")
+                if headers_end == -1:
+                    continue
+
+                image_bytes = frame_raw[headers_end + 4:].strip()
+                if not image_bytes:
+                    continue
+
+                image_placeholder.image(image_bytes, caption=caption)
 
 
 st.set_page_config(
@@ -203,28 +228,12 @@ with tab1:
                     st.info("Preview is disabled. Processed video will be saved under runs/detect when saving is enabled.")
                 else:
                     stframe = st.empty()
-                    with requests.get(f"{BACKEND_URL}/video_feed", stream=True, timeout=(5, 60)) as video_stream:
-                        buffer = b""
-                        for chunk in video_stream.iter_content(chunk_size=65536):
-                            if not chunk:
-                                continue
-                            buffer += chunk
-                            while b"--frame\r\n" in buffer:
-                                start_buf = buffer.find(b"--frame\r\n")
-                                end_buf = buffer.find(b"--frame\r\n", start_buf + 1)
-                                if end_buf == -1:
-                                    break
-
-                                frame_raw = buffer[start_buf:end_buf]
-                                buffer = buffer[end_buf:]
-                                headers_end = frame_raw.find(b"\r\n\r\n")
-                                if headers_end == -1:
-                                    continue
-                                image_bytes = frame_raw[headers_end + 4:].strip()
-                                if not image_bytes:
-                                    continue
-                                with col2:
-                                    stframe.image(image_bytes, caption="Live inference stream")
+                    with col2:
+                        _render_mjpeg_stream(
+                            f"{BACKEND_URL}/video_feed",
+                            stframe,
+                            "Live inference stream",
+                        )
             except requests.HTTPError as exc:
                 detail = ""
                 try:
@@ -313,8 +322,14 @@ if tab_examine is not None:
         if st.session_state.get("examine_stream_active"):
             if not examine_status.get("preview_ready", False):
                 st.info("Connecting to the live stream...")
-
-            st.iframe(f"{BACKEND_URL}/examine_stream/view?ts={int(time.time() * 1000)}", height=620)
+            examine_left, examine_center, examine_right = st.columns([1, 2, 1])
+            with examine_center:
+                examine_frame = st.empty()
+                _render_mjpeg_stream(
+                    f"{BACKEND_URL}/examine_stream/feed",
+                    examine_frame,
+                    "Live camera feed",
+                )
 
 with tab2:
     st.subheader("Technology Stack")
