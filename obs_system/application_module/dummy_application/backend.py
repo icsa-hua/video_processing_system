@@ -7,7 +7,7 @@ from multiprocessing import Process, Queue, Value
 from threading import Lock
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from obs_system.application_module.dummy_application.dummy_app import Application
@@ -155,9 +155,16 @@ def _examine_worker_main(
     stop_flag: Value,
 ) -> None:
     try:
+        print(f"[EXAMINE] Worker started for source: {config.video_source}", flush=True)
         examiner = StreamExaminer(config)
         examiner.run(preview_queue=preview_queue, ready_flag=ready_flag, stop_flag=stop_flag)
     except Exception:
+        print(
+            "[EXAMINE] Worker stopped with an error. "
+            "If the stream-specific messages above mention open/frame timeouts, the source is the issue. "
+            "Otherwise inspect the service traceback below.",
+            flush=True,
+        )
         logger.exception("Live stream examination worker failed")
         raise
     finally:
@@ -315,4 +322,39 @@ def get_examine_frame():
     return StreamingResponse(
         _frame_stream(examine_frame_queue, examine_ready, _is_examine_worker_alive),
         media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
+@server.get("/examine_stream/view")
+def get_examine_view():
+    return HTMLResponse(
+        """
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="utf-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <style>
+                html, body {
+                    margin: 0;
+                    height: 100%;
+                    background: #0f1116;
+                }
+                body {
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+                img {
+                    width: 100%;
+                    max-width: 960px;
+                    border-radius: 0.75rem;
+                }
+            </style>
+        </head>
+        <body>
+            <img src="/examine_stream/feed" alt="Examine stream feed" />
+        </body>
+        </html>
+        """
     )

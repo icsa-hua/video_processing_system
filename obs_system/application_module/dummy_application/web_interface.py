@@ -12,7 +12,6 @@ from typing import Text
 
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
 from PIL import Image
 
 
@@ -45,6 +44,14 @@ def _cleanup_uploaded_file() -> None:
         st.session_state["uploaded_video_path"] = None
 
 
+def _sync_live_stream_url(source_key: str) -> None:
+    stream_url = st.session_state.get(source_key, "")
+    st.session_state["live_stream_url"] = stream_url
+
+    other_key = "live_stream_url_examine" if source_key == "live_stream_url_inference" else "live_stream_url_inference"
+    st.session_state[other_key] = stream_url
+
+
 st.set_page_config(
     page_title="EDGEAI-VPS",
     page_icon=logo_image,
@@ -56,6 +63,12 @@ if "uploaded_video_path" not in st.session_state:
 
 if "live_stream_url" not in st.session_state:
     st.session_state["live_stream_url"] = ""
+
+if "live_stream_url_inference" not in st.session_state:
+    st.session_state["live_stream_url_inference"] = st.session_state["live_stream_url"]
+
+if "live_stream_url_examine" not in st.session_state:
+    st.session_state["live_stream_url_examine"] = st.session_state["live_stream_url"]
 
 if "examine_stream_active" not in st.session_state:
     st.session_state["examine_stream_active"] = False
@@ -143,11 +156,15 @@ with tab1:
         if uploaded_file and not video_source:
             st.error("Please upload a video file.")
     else:
+        st.text_input(
+            "Enter Video Stream URL",
+            key="live_stream_url_inference",
+            on_change=_sync_live_stream_url,
+            args=("live_stream_url_inference",),
+        )
         video_source = st.session_state.get("live_stream_url", "").strip()
         if not video_source:
-            st.warning("Set the live stream URL in the Examine Stream tab before starting inference.")
-        else:
-            st.info("Using the live stream URL configured in the Examine Stream tab.")
+            st.warning("Please enter a live stream URL before starting inference.")
 
     if start_button:
         col1, col2, col3 = st.columns([1, 2, 1])
@@ -232,7 +249,12 @@ with tab1:
 if tab_examine is not None:
     with tab_examine:
         st.warning("Important Note: this tab only shows the incoming camera feed and nothing more.")
-        st.text_input("Enter Video Stream URL", key="live_stream_url")
+        st.text_input(
+            "Enter Video Stream URL",
+            key="live_stream_url_examine",
+            on_change=_sync_live_stream_url,
+            args=("live_stream_url_examine",),
+        )
 
         examine_status = {"running": False, "preview_ready": False}
         try:
@@ -292,22 +314,7 @@ if tab_examine is not None:
             if not examine_status.get("preview_ready", False):
                 st.info("Connecting to the live stream...")
 
-            feed_markup = f"""
-            <div style="display:flex; justify-content:center; margin-top:0.5rem;">
-                <img
-                    src=""
-                    id="examine-stream-feed"
-                    style="width:100%; max-width:960px; border-radius:0.75rem;"
-                />
-            </div>
-            <script>
-                const feed = document.getElementById("examine-stream-feed");
-                const protocol = window.location.protocol;
-                const host = window.location.hostname;
-                feed.src = `${{protocol}}//${{host}}:8000/examine_stream/feed?ts={int(time.time() * 1000)}`;
-            </script>
-            """
-            components.html(feed_markup, height=620)
+            st.iframe(f"{BACKEND_URL}/examine_stream/view?ts={int(time.time() * 1000)}", height=620)
 
 with tab2:
     st.subheader("Technology Stack")

@@ -13,6 +13,8 @@ from obs_system.utils.logger import get_logger
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
 logger = get_logger("obs_system." + __name__)
+STREAM_OPEN_TIMEOUT_SEC = 15.0
+FIRST_FRAME_TIMEOUT_SEC = 20.0
 
 
 @dataclass(frozen=True)
@@ -69,19 +71,47 @@ class StreamExaminer:
 
     def run(self, preview_queue: Any, ready_flag: Any, stop_flag: Any) -> None:
         source = self.config.video_source.strip()
-        self.capture = cv2.VideoCapture(source)
+        print(f"[EXAMINE] Connecting to stream: {source}", flush=True)
+        self.capture = cv2.VideoCapture()
 
-        if not self.capture.isOpened():
+        if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
+            self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        if hasattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC"):
+            self.capture.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, int(STREAM_OPEN_TIMEOUT_SEC * 1000))
+        if hasattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC"):
+            self.capture.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, int(FIRST_FRAME_TIMEOUT_SEC * 1000))
+
+        opened = self.capture.open(source, cv2.CAP_FFMPEG)
+
+        if not opened or not self.capture.isOpened():
+            print(
+                "[EXAMINE] Failed to open the stream. "
+                "This points to the stream source, credentials, or transport rather than the Streamlit service.",
+                flush=True,
+            )
             raise RuntimeError(f"Failed to open live stream: {source}")
 
         preview_fps = float(self.config.preview_fps)
+        first_frame_deadline = time.perf_counter() + FIRST_FRAME_TIMEOUT_SEC
+        first_frame_received = False
 
         try:
             while not bool(stop_flag.value):
                 ok, frame = self.capture.read()
                 if not ok or frame is None:
+                    if not first_frame_received and time.perf_counter() >= first_frame_deadline:
+                        print(
+                            "[EXAMINE] Stream opened but no frames arrived before the timeout. "
+                            "This is most likely a stream-side issue rather than a service issue.",
+                            flush=True,
+                        )
+                        raise RuntimeError(f"No frames received from live stream within {FIRST_FRAME_TIMEOUT_SEC:.0f} seconds")
                     time.sleep(0.05)
                     continue
+
+                if not first_frame_received:
+                    first_frame_received = True
+                    print("[EXAMINE] First frame received successfully. Stream preview is active.", flush=True)
 
                 if preview_fps > 0:
                     now = time.perf_counter()
