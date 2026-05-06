@@ -5,19 +5,24 @@ from obs_system.utils.logger import get_logger
 
 import os
 import tempfile
+import time
 import warnings
 from pathlib import Path
 from typing import Text
 
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 from PIL import Image
 
 
 logger = get_logger("obs_system." + __name__)
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
-BACKEND_URL = f"http://{st.get_option('server.address')}:8000"
+BACKEND_HOST = st.get_option("server.address") or "localhost"
+if BACKEND_HOST == "0.0.0.0":
+    BACKEND_HOST = "localhost"
+BACKEND_URL = f"http://{BACKEND_HOST}:8000"
 static_folder = PACKAGE_ROOT / "static"
 logo_image = static_folder / "logo.png"
 
@@ -49,6 +54,15 @@ st.set_page_config(
 if "uploaded_video_path" not in st.session_state:
     st.session_state["uploaded_video_path"] = None
 
+if "live_stream_url" not in st.session_state:
+    st.session_state["live_stream_url"] = ""
+
+if "examine_stream_active" not in st.session_state:
+    st.session_state["examine_stream_active"] = False
+
+if "source_mode" not in st.session_state:
+    st.session_state["source_mode"] = "Local Video"
+
 js = f"""
 <script>
 window.addEventListener("beforeunload", async function() {{
@@ -73,35 +87,49 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
+    option = st.radio("Select Video Source", ("Local Video", "Live Stream"))
+    st.session_state["source_mode"] = option
+    st.subheader("Select Object Detection Model")
+    model_label = st.selectbox("Select a model", list(MODEL_OPTIONS.keys()), index=0)
+
+    show = st.checkbox("Show Real-Time Inference", value=True)
+    mqtt = st.checkbox("Use MQTT to send data to server", value=False)
+    save = st.checkbox("Save Video after Inference", value=False)
+    verbose = st.checkbox("Show logs in Terminal", value=False)
+    roi = st.checkbox("Enable ROI", value=True)
+    use_trt = st.checkbox("Use TensorRT", value=model_label == "TensorRT FP16 engine")
+    only_fps = st.checkbox("Measure FPS Only", value=True)
+    half = st.checkbox("Use Half Precision", value=False)
+    fep = st.checkbox("Enable FishEye Projection", value=False)
+
+    start_button = st.button("Start", type="primary")
+    stop_button = st.button("Stop/Close")
+
+if option != "Live Stream" and st.session_state.get("examine_stream_active"):
+    try:
+        requests.post(f"{BACKEND_URL}/examine_stream/stop", timeout=5)
+    except requests.exceptions.RequestException:
+        pass
+    st.session_state["examine_stream_active"] = False
+
 st.title("Real-Time Intersection Intelligence")
 st.caption(
     "Edge-based video analytics for real-time traffic monitoring, object tracking, "
     "and road hazard awareness."
 )
 
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["Inference", "Technology Stack", "Development Timeline", "Challenges & Lessons"]
-)
+tab_labels = ["Inference"]
+if option == "Live Stream":
+    tab_labels.append("Examine Stream")
+tab_labels.extend(["Technology Stack", "Development Timeline", "Challenges & Lessons"])
+tabs = st.tabs(tab_labels)
+tab1 = tabs[0]
+tab_examine = tabs[1] if option == "Live Stream" else None
+tab2 = tabs[2] if option == "Live Stream" else tabs[1]
+tab3 = tabs[3] if option == "Live Stream" else tabs[2]
+tab4 = tabs[4] if option == "Live Stream" else tabs[3]
 
 with tab1:
-    with st.sidebar:
-        option = st.radio("Select Video Source", ("Local Video", "Live Stream"))
-        st.subheader("Select Object Detection Model")
-        model_label = st.selectbox("Select a model", list(MODEL_OPTIONS.keys()), index=0)
-
-        show = st.checkbox("Show Real-Time Inference", value=True)
-        mqtt = st.checkbox("Use MQTT to send data to server", value=False)
-        save = st.checkbox("Save Video after Inference", value=False)
-        verbose = st.checkbox("Show logs in Terminal", value=False)
-        roi = st.checkbox("Enable ROI", value=True)
-        use_trt = st.checkbox("Use TensorRT", value=model_label == "TensorRT FP16 engine")
-        only_fps = st.checkbox("Measure FPS Only", value=True)
-        half = st.checkbox("Use Half Precision", value=False)
-        fep = st.checkbox("Enable FishEye Projection", value=False)
-
-        start_button = st.button("Start", type="primary")
-        stop_button = st.button("Stop/Close")
-
     video_source = None
     if option == "Local Video":
         uploaded_file = st.file_uploader("Upload Video", accept_multiple_files=False, type=["mp4", "avi"])
@@ -115,9 +143,11 @@ with tab1:
         if uploaded_file and not video_source:
             st.error("Please upload a video file.")
     else:
-        video_source = st.text_input("Enter Video Stream URL")
+        video_source = st.session_state.get("live_stream_url", "").strip()
         if not video_source:
-            st.warning("Please enter a stream URL.")
+            st.warning("Set the live stream URL in the Examine Stream tab before starting inference.")
+        else:
+            st.info("Using the live stream URL configured in the Examine Stream tab.")
 
     if start_button:
         col1, col2, col3 = st.columns([1, 2, 1])
@@ -198,6 +228,86 @@ with tab1:
         finally:
             _cleanup_uploaded_file()
         st.rerun()
+
+if tab_examine is not None:
+    with tab_examine:
+        st.warning("Important Note: this tab only shows the incoming camera feed and nothing more.")
+        st.text_input("Enter Video Stream URL", key="live_stream_url")
+
+        examine_status = {"running": False, "preview_ready": False}
+        try:
+            status_response = requests.get(f"{BACKEND_URL}/examine_stream/status", timeout=5)
+            status_response.raise_for_status()
+            examine_status = status_response.json()
+        except requests.exceptions.RequestException:
+            pass
+
+        st.session_state["examine_stream_active"] = bool(examine_status.get("running", False))
+
+        examine_col, stop_col = st.columns(2)
+        with examine_col:
+            examine_button = st.button("Examine", type="primary")
+        with stop_col:
+            stop_examine_button = st.button("Stop", key="stop_examine_stream")
+
+        if examine_button:
+            stream_url = st.session_state.get("live_stream_url", "").strip()
+            if not stream_url:
+                st.error("Please enter a stream URL before starting stream examination.")
+            else:
+                payload = {
+                    "video_source": stream_url,
+                    "preview_max_width": 960,
+                    "preview_jpeg_quality": 70,
+                    "preview_fps": 8.0,
+                }
+                try:
+                    response = requests.post(f"{BACKEND_URL}/examine_stream", json=payload, timeout=15)
+                    response.raise_for_status()
+                    st.session_state["examine_stream_active"] = True
+                    st.success("Stream examination started.")
+                    st.rerun()
+                except requests.HTTPError as exc:
+                    detail = ""
+                    try:
+                        detail = exc.response.json().get("detail", "")
+                    except Exception:
+                        detail = exc.response.text
+                    st.error(f"Error: {detail or exc}")
+                except requests.exceptions.RequestException as exc:
+                    st.error(f"Connection Error: {exc}")
+
+        if stop_examine_button:
+            try:
+                response = requests.post(f"{BACKEND_URL}/examine_stream/stop", timeout=10)
+                response.raise_for_status()
+                st.success("Stream examination stopped.")
+            except requests.exceptions.RequestException as exc:
+                st.error(f"Failed to stop stream examination: {exc}")
+            finally:
+                st.session_state["examine_stream_active"] = False
+            st.rerun()
+
+        if st.session_state.get("examine_stream_active"):
+            if not examine_status.get("preview_ready", False):
+                st.info("Connecting to the live stream...")
+
+            feed_markup = f"""
+            <div style="display:flex; justify-content:center; margin-top:0.5rem;">
+                <img
+                    src=""
+                    id="examine-stream-feed"
+                    style="width:100%; max-width:960px; border-radius:0.75rem;"
+                />
+            </div>
+            <script>
+                const feed = document.getElementById("examine-stream-feed");
+                const protocol = window.location.protocol;
+                const host = window.location.hostname;
+                feed.src = `${{protocol}}//${{host}}:8000/examine_stream/feed?ts={int(time.time() * 1000)}`;
+            </script>
+            """
+            components.html(feed_markup, height=620)
 
 with tab2:
     st.subheader("Technology Stack")
