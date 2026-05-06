@@ -34,7 +34,7 @@ services:
         set -e;
         cd /workspace; 
         python3 -V;
-
+        python3 -m pip install --ignore-installed blinker streamlit fastapi "uvicorn[standard]"
         if [ -f setup.py ]; then
           echo 'Setting up OBS package...';
           python3 -m pip install -e . --no-deps;
