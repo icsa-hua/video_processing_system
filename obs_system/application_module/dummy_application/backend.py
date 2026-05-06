@@ -103,6 +103,24 @@ def _reset_examine_preview_state() -> None:
     examine_stop_requested.value = False
 
 
+def _finalize_process(process: Process | None, *, graceful_timeout: float, force_timeout: float, process_name: str) -> Process | None:
+    if process is None:
+        return None
+
+    process.join(timeout=graceful_timeout)
+    if process.is_alive():
+        logger.info("Stopping %s forcefully after graceful shutdown timeout", process_name)
+        process.terminate()
+        process.join(timeout=force_timeout)
+
+    if process.is_alive():
+        logger.warning("%s is still running after terminate(); skipping close for now", process_name)
+        return process
+
+    process.close()
+    return None
+
+
 def _stop_worker() -> None:
     global worker_process, video_processing
 
@@ -110,12 +128,12 @@ def _stop_worker() -> None:
     producer_ready.value = False
     _offer_queue_item(frame_queue, None)
 
-    if worker_process is not None:
-        if worker_process.is_alive():
-            worker_process.terminate()
-            worker_process.join(timeout=5)
-        worker_process.close()
-        worker_process = None
+    worker_process = _finalize_process(
+        worker_process,
+        graceful_timeout=0.5,
+        force_timeout=5.0,
+        process_name="video processing worker",
+    )
 
 
 def _stop_examine_worker() -> None:
@@ -125,13 +143,12 @@ def _stop_examine_worker() -> None:
     examine_ready.value = False
     _offer_queue_item(examine_frame_queue, None)
 
-    if examine_process is not None:
-        examine_process.join(timeout=3)
-        if examine_process.is_alive():
-            examine_process.terminate()
-            examine_process.join(timeout=5)
-        examine_process.close()
-        examine_process = None
+    examine_process = _finalize_process(
+        examine_process,
+        graceful_timeout=3.0,
+        force_timeout=5.0,
+        process_name="stream examination worker",
+    )
 
     examine_stop_requested.value = False
 
