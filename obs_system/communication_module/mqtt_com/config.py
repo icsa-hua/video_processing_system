@@ -12,16 +12,16 @@ PROTOCOL = mqtt.MQTTv311
 QOS = 1 
 TIMEOUT_S = 10 
 
-CLIENT_NAME="edgeai-vcd42-hua"
+CLIENT_NAME="sender-edgeai-vcd42-hua"
 
 CLIENT_CRT = f"assets/mqtt_credentials/jetson{JETSON_DEVICE_ID}/edgeai-vcd42-hua-edgejet{JETSON_DEVICE_ID}vpn/client-certs/client.crt" 
 CLIENT_KEY = f"assets/mqtt_credentials/jetson{JETSON_DEVICE_ID}/edgeai-vcd42-hua-edgejet{JETSON_DEVICE_ID}vpn/client-certs/client.key" 
-CA_CRT = f"assets/mqtt_credentials/jetson{JETSON_DEVICE_ID}/edgeai-vcd42-hua-edgejet{JETSON_DEVICE_ID}vpn/ca-cert" 
+CA_CRT = f"assets/mqtt_credentials/jetson{JETSON_DEVICE_ID}/edgeai-vcd42-hua-edgejet{JETSON_DEVICE_ID}vpn/client-certs/ca-cert" 
 
 JPEG_QUALITY = 75 
 KEEPALIVE = 60 
 
-CREATE_SUBSCRIBER = True
+CREATE_SUBSCRIBER = False
 
 MQTT_DIR = Path("./assets/mqtt") 
 os.makedirs(MQTT_DIR, exist_ok=True)

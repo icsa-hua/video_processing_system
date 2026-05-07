@@ -120,8 +120,8 @@ class CBORMQTTCropClientCV2(MQTTInterface):
         self.client_id = client_id
         # Paho MQTT client (v2 callback API)
         self.client = mqtt.Client(callback_version, client_id=client_id)
-        # self.client.on_connect = self.on_connect
-        # self.client.on_message = self.on_message
+        self.client.on_connect = self.on_connect
+        self.client.on_message = self.on_message
         
         # Enable mqtt.Client logger: 
         self.client.enable_logger(logging.getLogger(__name__))
@@ -298,7 +298,6 @@ class CBORMQTTCropClientCV2(MQTTInterface):
             logger.debug(f"Subscribing to topic {self.topic} qos={self.qos}")
         else:
             logger.debug("Failed to connect, return code %d\n", rc)
-
 
     def on_batch(self,batch: CropBatchMessage, topic:str):
         os.makedirs(DECODED_JPEG_DIR, exist_ok=True)

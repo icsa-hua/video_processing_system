@@ -227,7 +227,17 @@ class Application:
             jpeg_quality=jpeg_quality,
         )
 
+        self.mqtt_publisher.client.on_connect = self.mqtt_publisher.on_connect 
         self.mqtt_publisher.connect(port=PORT, keepalive=KEEPALIVE)
+        self.mqtt_publisher.start_loop(background=True)
+
+        time.sleep(2) 
+
+        if self.mqtt_publisher.client.is_connected(): 
+            print("Publisher Successfully linked") 
+        else: 
+            print("Publisher failed to link. Check TLS paths or Client ID")
+            
 
     def statistics(self):
         logger.debug("-- Performance metrics --")
