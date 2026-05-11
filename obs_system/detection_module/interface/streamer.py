@@ -10,7 +10,7 @@ import logging
 import platform
 import threading 
 import numpy as np 
-import time, json
+import time
 import queue 
 import csv
 
@@ -991,7 +991,7 @@ class Streamer(ABC):
         }
         topic = f"{self.mqtt_interface.topic}/hazard"
         try:
-            self.mqtt_interface.publish(topic, json.dumps(payload))
+            self.mqtt_interface.publish(topic, payload)
         except Exception:
             Streamer.logger.exception("Failed to publish hazard MQTT event")
 
@@ -1041,29 +1041,28 @@ class Streamer(ABC):
                     include_bbox=True
                 ) 
                    
-            #
-            # return json.dumps({
-            #     "frame_id":frame_index, 
-            #     "classes":preds.boxes.cls.tolist(), 
-            #     "boxes": preds.boxes.xyxy.tolist(), 
-            #     "tm_ms":time.time()*1000, 
-            #     "track_ids": preds.boxes.id.tolist(), 
-            # })
-    
-    def __generate_mqtt_message_no_motion(self, preds:Any, frame_index:list)->str: 
-        messages = [] 
+    def __generate_mqtt_message_no_motion(self, preds:Any, frame_index:list) -> Dict[str, Any]:
+        frames = []
         for idx, frame_id in enumerate(frame_index): 
             boxes = preds[idx].boxes
             track_ids = boxes.id.tolist() if getattr(boxes, "id", None) is not None else []
-            message = {
-                "frame_id":frame_id, 
-                "classes":boxes.cls.tolist(), 
-                "boxes": boxes.xyxy.tolist(), 
-                "tm_ms":time.time()*1000, 
-                "track_ids": track_ids, 
-            }
-            messages.append(message)
-        return json.dumps(messages)
+            frames.append(
+                {
+                    "frame_id": frame_id,
+                    "classes": boxes.cls.tolist(),
+                    "boxes": boxes.xyxy.tolist(),
+                    "track_ids": track_ids,
+                }
+            )
+
+        return {
+            "v": 1,
+            "type": "no_detection_batch",
+            "cam": "camera-1",
+            "ts": int(time.time() * 1000),
+            "inference_ran": False,
+            "frames": frames,
+        }
     
 
     @abstractmethod

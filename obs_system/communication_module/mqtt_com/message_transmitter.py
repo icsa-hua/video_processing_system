@@ -17,6 +17,12 @@ import paho.mqtt.client as mqtt
 BBoxXYWH = Tuple[int, int, int, int]
 logger = get_logger("obs_system."+__name__)
 
+
+def _encode_mqtt_payload(message: Union[bytes, bytearray, Dict[str, Any], List[Any]]) -> bytes:
+    if isinstance(message, (bytes, bytearray)):
+        return bytes(message)
+    return cbor2.dumps(message)
+
 class RealMQTT(MQTTInterface):
 
     def __init__(self, broker_address, topic):
@@ -32,7 +38,8 @@ class RealMQTT(MQTTInterface):
         
 
     def publish(self, topic, message):
-        self.client.publish(topic, message)
+        payload = _encode_mqtt_payload(message)
+        self.client.publish(topic, payload)
         logger.debug(f"Publishing '{message}' to topic '{topic}' ")
 
 
@@ -160,8 +167,8 @@ class CBORMQTTCropClientCV2(MQTTInterface):
         logger.info(f"Connecting {self.client_id} to broker {self.broker_address}:{port} keepalive={keepalive}")
 
 
-    def publish(self, topic: str, message: Union[bytes, Dict[str, Any]]):
-        payload = cbor2.dumps(message) if isinstance(message, dict) else message
+    def publish(self, topic: str, message: Union[bytes, bytearray, Dict[str, Any], List[Any]]):
+        payload = _encode_mqtt_payload(message)
         info = self.client.publish(topic, payload=payload, qos=self.qos, retain=False)
         return info
 
