@@ -10,7 +10,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
-from obs_system.application_module.dummy_application.dummy_app import Application
 from obs_system.application_module.dummy_application.pipeline_config import PipelineConfig
 from obs_system.application_module.dummy_application.stream_examiner import (
     StreamExaminer,
@@ -20,7 +19,7 @@ from obs_system.utils.logger import get_logger
 
 
 logger = get_logger(f"obs_system.{__name__}")
-logging.getLogger("uvicorn.error").propagate = False
+# logging.getLogger("uvicorn.error").propagate = False
 
 server = FastAPI()
 worker_lock = Lock()
@@ -162,6 +161,7 @@ def _stop_examine_worker() -> None:
 
 def _worker_main(config: PipelineConfig, preview_queue: Queue, ready_flag: Value) -> None:
     try:
+        from obs_system.application_module.dummy_application.dummy_app import Application
         app = Application() 
         app.run_application(config, producer_flag=ready_flag, preview_queue=preview_queue)
     except Exception:
