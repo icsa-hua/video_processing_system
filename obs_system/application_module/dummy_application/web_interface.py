@@ -19,9 +19,18 @@ logger = get_logger("obs_system." + __name__)
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 BACKEND_HOST = st.get_option("server.address") or "localhost"
+
 if BACKEND_HOST == "0.0.0.0":
     BACKEND_HOST = "localhost"
+
 BACKEND_URL = f"http://{BACKEND_HOST}:8000"
+BACKEND_INTERNAL_URL = os.getenv('BACKEND_INTERNAL_URL',
+                                 "http://localhost:8000")
+
+BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL",
+                               "http://localhost:8000")
+
+
 static_folder = PACKAGE_ROOT / "static"
 logo_image = static_folder / "logo.png"
 
@@ -53,7 +62,8 @@ def _sync_live_stream_url(source_key: str) -> None:
 
 
 def _render_stream_embed(feed_url: str, caption: str) -> None:
-    stream_url = f"{feed_url}?ts={int(time.time() * 1000)}"
+    # stream_url = f"{feed_url}?ts={int(time.time() * 1000)}"
+    stream_url = feed_url
     st.markdown(
         f"""
         <div style="display:flex;justify-content:center;">
@@ -167,7 +177,8 @@ tab4 = tabs[4] if option == "Live Stream" else tabs[3]
 with tab1:
     processing_status = {"running": False, "preview_ready": False}
     try:
-        status_response = requests.get(f"{BACKEND_URL}/status", timeout=5)
+        status_response =
+        requests.get(f"{BACKEND_INTERNAL_URL}/examine_stream/status", timeout=5)
         status_response.raise_for_status()
         processing_status = status_response.json()
     except requests.exceptions.RequestException:
@@ -222,7 +233,8 @@ with tab1:
             logger.debug("UI payload: %s", payload)
 
             try:
-                response = requests.post(f"{BACKEND_URL}/", json=payload, timeout=15)
+                response =
+                requests.post(f"{BACKEND_PUBLIC_URL}/examine_stream", json=payload, timeout=15)
                 response.raise_for_status()
                 st.session_state["inference_preview_enabled"] = bool(show)
                 st.success("Configuration added successfully.")
@@ -328,6 +340,7 @@ if tab_examine is not None:
         if st.session_state.get("examine_stream_active"):
             if not examine_status.get("preview_ready", False):
                 st.info("Connecting to the live stream...")
+
             _render_stream_embed(
                 f"{BACKEND_URL}/examine_stream/feed",
                 "Live camera feed",
