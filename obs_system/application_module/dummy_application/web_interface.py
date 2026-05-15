@@ -5,9 +5,10 @@ from obs_system.utils.logger import get_logger
 
 import os
 import tempfile
+import time
 import warnings
 from pathlib import Path
-from typing import Any, Text
+from typing import Text
 
 import requests
 import streamlit as st
@@ -51,30 +52,23 @@ def _sync_live_stream_url(source_key: str) -> None:
     st.session_state[other_key] = stream_url
 
 
-def _render_mjpeg_stream(feed_url: str, image_placeholder: Any, caption: str) -> None:
-    with requests.get(feed_url, stream=True, timeout=(5, 60)) as video_stream:
-        buffer = b""
-        for chunk in video_stream.iter_content(chunk_size=65536):
-            if not chunk:
-                continue
-            buffer += chunk
-            while b"--frame\r\n" in buffer:
-                start_buf = buffer.find(b"--frame\r\n")
-                end_buf = buffer.find(b"--frame\r\n", start_buf + 1)
-                if end_buf == -1:
-                    break
-
-                frame_raw = buffer[start_buf:end_buf]
-                buffer = buffer[end_buf:]
-                headers_end = frame_raw.find(b"\r\n\r\n")
-                if headers_end == -1:
-                    continue
-
-                image_bytes = frame_raw[headers_end + 4:].strip()
-                if not image_bytes:
-                    continue
-
-                image_placeholder.image(image_bytes, caption=caption)
+def _render_stream_embed(feed_url: str, caption: str) -> None:
+    stream_url = f"{feed_url}?ts={int(time.time() * 1000)}"
+    st.markdown(
+        f"""
+        <div style="display:flex;justify-content:center;">
+            <div style="width:min(100%, 960px);">
+                <div style="margin:0 0 0.5rem 0;font-size:0.95rem;color:#cbd5e1;">{caption}</div>
+                <img
+                    src="{stream_url}"
+                    alt="{caption}"
+                    style="width:100%;height:auto;border-radius:0.75rem;border:1px solid rgba(148,163,184,0.35);background:#0f172a;"
+                />
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 st.set_page_config(
@@ -100,6 +94,9 @@ if "examine_stream_active" not in st.session_state:
 
 if "source_mode" not in st.session_state:
     st.session_state["source_mode"] = "Local Video"
+
+if "inference_preview_enabled" not in st.session_state:
+    st.session_state["inference_preview_enabled"] = True
 
 js = f"""
 <script>
@@ -168,6 +165,14 @@ tab3 = tabs[3] if option == "Live Stream" else tabs[2]
 tab4 = tabs[4] if option == "Live Stream" else tabs[3]
 
 with tab1:
+    processing_status = {"running": False, "preview_ready": False}
+    try:
+        status_response = requests.get(f"{BACKEND_URL}/status", timeout=5)
+        status_response.raise_for_status()
+        processing_status = status_response.json()
+    except requests.exceptions.RequestException:
+        pass
+
     video_source = None
     if option == "Local Video":
         uploaded_file = st.file_uploader("Upload Video", accept_multiple_files=False, type=["mp4", "avi"])
@@ -192,8 +197,6 @@ with tab1:
             st.warning("Please enter a live stream URL before starting inference.")
 
     if start_button:
-        col1, col2, col3 = st.columns([1, 2, 1])
-
         if not video_source:
             st.error("Please provide a video path or stream URL.")
         else:
@@ -221,19 +224,10 @@ with tab1:
             try:
                 response = requests.post(f"{BACKEND_URL}/", json=payload, timeout=15)
                 response.raise_for_status()
+                st.session_state["inference_preview_enabled"] = bool(show)
                 st.success("Configuration added successfully.")
                 st.write(response.json())
-
-                if not show:
-                    st.info("Preview is disabled. Processed video will be saved under runs/detect when saving is enabled.")
-                else:
-                    stframe = st.empty()
-                    with col2:
-                        _render_mjpeg_stream(
-                            f"{BACKEND_URL}/video_feed",
-                            stframe,
-                            "Live inference stream",
-                        )
+                st.rerun()
             except requests.HTTPError as exc:
                 detail = ""
                 try:
@@ -253,7 +247,19 @@ with tab1:
             st.error(f"Failed to stop the backend server: {exc}")
         finally:
             _cleanup_uploaded_file()
+            st.session_state["inference_preview_enabled"] = True
         st.rerun()
+
+    if processing_status.get("running"):
+        if not st.session_state.get("inference_preview_enabled", True):
+            st.info("Preview is disabled for the active inference run. Enable 'Show Real-Time Inference' before starting if you want the browser preview.")
+        else:
+            if not processing_status.get("preview_ready", False):
+                st.info("Connecting to the processed stream...")
+            _render_stream_embed(
+                f"{BACKEND_URL}/video_feed",
+                "Live inference stream",
+            )
 
 if tab_examine is not None:
     with tab_examine:
@@ -322,14 +328,10 @@ if tab_examine is not None:
         if st.session_state.get("examine_stream_active"):
             if not examine_status.get("preview_ready", False):
                 st.info("Connecting to the live stream...")
-            examine_left, examine_center, examine_right = st.columns([1, 2, 1])
-            with examine_center:
-                examine_frame = st.empty()
-                _render_mjpeg_stream(
-                    f"{BACKEND_URL}/examine_stream/feed",
-                    examine_frame,
-                    "Live camera feed",
-                )
+            _render_stream_embed(
+                f"{BACKEND_URL}/examine_stream/feed",
+                "Live camera feed",
+            )
 
 with tab2:
     st.subheader("Technology Stack")

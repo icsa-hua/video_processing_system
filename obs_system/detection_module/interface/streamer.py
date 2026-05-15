@@ -16,7 +16,7 @@ import csv
 
 from pathlib import Path
 from io import StringIO
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Union, List, Any, Optional, final, Generator, Tuple, Dict
 from abc import ABC, abstractmethod
 from ultralytics.cfg import get_cfg, get_save_dir
@@ -850,6 +850,50 @@ class Streamer(ABC):
         if "_" in stem and stem.split("_")[-1].isdigit():
             return stem.split("_")[-1]
         return stem
+
+    def log_detection_snapshot(self, preds: Any) -> None:
+        if not getattr(self.args, "verbose", False):
+            return
+
+        boxes_obj = getattr(preds, "boxes", None)
+        if boxes_obj is None or boxes_obj.xyxy is None or boxes_obj.xyxy.numel() == 0:
+            return
+
+        frame_id = self._extract_frame_id(preds)
+        boxes = boxes_obj.xyxy.detach().cpu().tolist()
+        confs = (
+            boxes_obj.conf.detach().cpu().tolist()
+            if getattr(boxes_obj, "conf", None) is not None
+            else [0.0] * len(boxes)
+        )
+        cls_ids = (
+            boxes_obj.cls.detach().cpu().tolist()
+            if getattr(boxes_obj, "cls", None) is not None
+            else [-1] * len(boxes)
+        )
+
+        summary = Counter()
+        samples = []
+        for idx, box in enumerate(boxes):
+            cls_id = int(cls_ids[idx]) if idx < len(cls_ids) else -1
+            if 0 <= cls_id < len(self.converter.class_names):
+                class_name = self.converter.class_names[cls_id]
+            else:
+                class_name = f"class_{cls_id}"
+
+            summary[class_name] += 1
+            if idx < 3:
+                x1, y1, x2, y2 = box
+                conf = float(confs[idx]) if idx < len(confs) else 0.0
+                samples.append(f"{class_name}@{conf:.2f}[{x1:.0f},{y1:.0f},{x2:.0f},{y2:.0f}]")
+
+        Streamer.logger.info(
+            "[Detections] frame=%s objects=%d summary=%s samples=%s",
+            frame_id,
+            len(boxes),
+            ", ".join(f"{name}:{count}" for name, count in summary.most_common(4)),
+            " | ".join(samples),
+        )
 
     def _draw_scene_regions(self, image: np.ndarray) -> np.ndarray:
         lane = self.last_scene_masks.get("lane_mask")

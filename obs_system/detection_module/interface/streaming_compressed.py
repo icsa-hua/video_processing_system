@@ -706,6 +706,7 @@ class OptimizedStreamer(Streamer):
                     "inference": profilers[1].dt * 1e3/len(im0s),
                     "postprocess": profilers[2].dt * 1e3/len(im0s)
                 }
+                self.log_detection_snapshot(r)
                 fid = fb["frame_id"]
                 bni = fb["bni"]
                  

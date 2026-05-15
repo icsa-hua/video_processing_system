@@ -114,7 +114,14 @@ def _finalize_process(process: Process | None, *, graceful_timeout: float, force
         process.join(timeout=force_timeout)
 
     if process.is_alive():
-        logger.warning("%s is still running after terminate(); skipping close for now", process_name)
+        kill_fn = getattr(process, "kill", None)
+        if callable(kill_fn):
+            logger.warning("%s is still running after terminate(); sending kill()", process_name)
+            kill_fn()
+            process.join(timeout=2.0)
+
+    if process.is_alive():
+        logger.error("%s is still running after kill(); skipping close for now", process_name)
         return process
 
     process.close()
