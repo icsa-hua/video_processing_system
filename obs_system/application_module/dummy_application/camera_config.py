@@ -29,4 +29,9 @@ class keys:
     #Fisheye camera4 access
     FE_USER4 = "admin"
     FE_PASS4 = "edgeAI!kamera4"
-    FE_HOST4 = "edgejetcam4.edi.lv"
+    FE_HOST4 = "192.168.88.100"
+    FE_PORT4 = 554
+
+    FISHEYE_RTSP = f"rtsp://{FE_USER4}:{FE_PASS4}@{FE_HOST4}:{FE_PORT4}/ISAPI/Streaming/Channels/101"
+    RECTILINEAR_RTSP = f"rtsp://{USER}:{PASS}@vtfw.edi.lv:{PORT1}/axis-media/media.amp?resolution=1280x960"
+
