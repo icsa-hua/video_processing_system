@@ -177,8 +177,7 @@ tab4 = tabs[4] if option == "Live Stream" else tabs[3]
 with tab1:
     processing_status = {"running": False, "preview_ready": False}
     try:
-        status_response =
-        requests.get(f"{BACKEND_INTERNAL_URL}/examine_stream/status", timeout=5)
+        status_response = requests.get(f"{BACKEND_INTERNAL_URL}/examine_stream/status", timeout=5)
         status_response.raise_for_status()
         processing_status = status_response.json()
     except requests.exceptions.RequestException:
