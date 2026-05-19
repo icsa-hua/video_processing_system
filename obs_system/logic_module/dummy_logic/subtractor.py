@@ -374,7 +374,7 @@ class Subtractor(EventExtractorInterface):
 
         contours, _ = cv2.findContours(stripes, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         lane_area = float(cv2.countNonZero(lanes_mask))
-        min_area = max(50.0, 0.00015 * lane_area)
+        min_area = max(50.0, 0.0015 * lane_area)
 
         stripe_mask = np.zeros_like(lanes_mask, dtype=np.uint8)
         valid_stripes = 0
@@ -389,11 +389,11 @@ class Subtractor(EventExtractorInterface):
                 continue
 
             aspect = float(w) / float(max(h, 1))
-            if aspect < 2.2:
+            if aspect < 3.5:
                 continue
 
             extent = area / float(w * h)
-            if extent < 0.30:
+            if extent < 0.45:
                 continue
 
             valid_stripes += 1
@@ -411,7 +411,7 @@ class Subtractor(EventExtractorInterface):
         )
         crosswalk = cv2.dilate(
             crosswalk,
-            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)),
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
             iterations=1,
         )
         crosswalk = cv2.bitwise_and(crosswalk, lanes_mask)
