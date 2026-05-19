@@ -73,7 +73,8 @@ class CompressedYOLO:
         elif isinstance(im, np.ndarray): 
             self.img_height, self.img_width = im.shape[:2]
             input_tensor = self.prepare_input_image(im)
-            input_tensor = input_tensor.detach().cpu().numpy().astype(np.float32) 
+            outputs = self.inference(input_tensor, return_numpy=True, verbose=debug)
+            self.boxes, self.scores, self.class_ids = self.process_output(outputs)
 
         return self.boxes, self.scores, self.class_ids
     
@@ -104,37 +105,57 @@ class CompressedYOLO:
         """
         start = time.perf_counter()
 
-        assert input_tensor.is_cuda and input_tensor.dtype==torch.float32 and input_tensor.is_contiguous() 
+        used_iobinding = False
 
-        device, device_id = input_tensor.device.type, input_tensor.device.index
-        io = self.session.io_binding() 
-        shape = tuple(input_tensor.shape) 
-        ptr = int(input_tensor.data_ptr()) 
+        if isinstance(input_tensor, torch.Tensor):
+            if input_tensor.dtype != torch.float32:
+                input_tensor = input_tensor.float()
+            if not input_tensor.is_contiguous():
+                input_tensor = input_tensor.contiguous()
 
-        io.bind_input(name=self.input_names, 
-            device_type=device, device_id=device_id, 
-            element_type=np.float32, shape=shape, 
-            buffer_ptr=ptr
-        )
+            if input_tensor.is_cuda:
+                try:
+                    device, device_id = input_tensor.device.type, input_tensor.device.index
+                    io = self.session.io_binding()
+                    shape = tuple(input_tensor.shape)
+                    ptr = int(input_tensor.data_ptr())
 
-        for out in self.session.get_outputs(): 
-            io.bind_output(
-                    name=out.name, 
-                    device_type=device, 
-                    device_id=device_id, 
-                    element_type=np.float32
-            ) 
+                    io.bind_input(
+                        name=self.input_names,
+                        device_type=device,
+                        device_id=device_id,
+                        element_type=np.float32,
+                        shape=shape,
+                        buffer_ptr=ptr,
+                    )
 
-        self.session.run_with_iobinding(io) 
+                    for out in self.session.get_outputs():
+                        io.bind_output(
+                            name=out.name,
+                            device_type=device,
+                            device_id=device_id,
+                            element_type=np.float32,
+                        )
 
-        if return_numpy: 
-            outputs = io.get_outputs() 
-            outputs = [o.numpy() for o in outputs]
+                    self.session.run_with_iobinding(io)
+                    outputs = io.get_outputs()
+                    outputs = [o.numpy() for o in outputs]
+                    used_iobinding = True
+                except Exception as exc:
+                    logger.warning(
+                        "ONNX Runtime IO binding failed; falling back to session.run(): %s",
+                        exc,
+                    )
 
-        else: 
-            outputs = io.get_outputs() 
-            # outputs = None
-            outputs = [torch.from_numpy(o.numpy()) for o in outputs] 
+            if not used_iobinding:
+                input_array = input_tensor.detach().cpu().numpy().astype(np.float32, copy=False)
+                outputs = self.session.run(self.output_names, {self.input_names: input_array})
+        else:
+            input_array = np.asarray(input_tensor, dtype=np.float32)
+            outputs = self.session.run(self.output_names, {self.input_names: input_array})
+
+        if not return_numpy:
+            outputs = [torch.from_numpy(o) if isinstance(o, np.ndarray) else o for o in outputs]
         
         if verbose:
             logger.debug(f"Inference time: {(time.perf_counter() - start)*1000:.2f} ms")
