@@ -431,7 +431,7 @@ def read_yolo_labels(path:str, w:int, h:int):
     x1 = (x_c - bw/2) * w 
     x2 = (x_c + bw/2) * w
     y1 = (y_c - bh/2) * h 
-    y2 = (y_c - bh/2) * h
+    y2 = (y_c + bh/2) * h
     boxes = np.stack([x1,y1,x2,y2], axis=1).astype(np.float32)
     return cls, boxes 
 

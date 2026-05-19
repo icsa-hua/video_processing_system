@@ -102,6 +102,23 @@ class Streamer(ABC):
         self.stop_reason: Optional[str] = None
         self._save_worker_stopped = False
         self._session_resources_released = False
+        self._source_setup_started_at: Optional[float] = None
+        self._prev_numeric_frame_id: Optional[int] = None
+        self.run_metrics: Dict[str, Any] = {
+            "stream_open_seconds": None,
+            "first_frame_seconds": None,
+            "frames_observed": 0,
+            "frames_emitted": 0,
+            "dropped_frames": 0,
+            "mqtt_batches": 0,
+            "mqtt_no_detection_batches": 0,
+            "mqtt_hazard_messages": 0,
+            "saved_hazard_events": 0,
+            "saved_hazard_crops": 0,
+            "crop_count": 0,
+            "crop_total_bytes": 0,
+            "crop_total_pixels": 0,
+        }
 
         self._lock = threading.Lock() 
         self.converter = ConverterResults() 
@@ -110,6 +127,38 @@ class Streamer(ABC):
         self._init_hazard_store()
         
         callbacks.add_integration_callbacks(self) 
+
+    def _note_source_setup_started(self) -> None:
+        self._source_setup_started_at = time.perf_counter()
+        self.run_metrics["stream_open_seconds"] = None
+        self.run_metrics["first_frame_seconds"] = None
+
+    def _note_source_setup_finished(self) -> None:
+        if self._source_setup_started_at is None:
+            return
+        self.run_metrics["stream_open_seconds"] = time.perf_counter() - self._source_setup_started_at
+
+    def _note_first_frame_ready(self) -> None:
+        if self._source_setup_started_at is None:
+            return
+        if self.run_metrics["first_frame_seconds"] is None:
+            self.run_metrics["first_frame_seconds"] = time.perf_counter() - self._source_setup_started_at
+
+    def _note_frame_ids(self, frame_ids: List[Any]) -> None:
+        self.run_metrics["frames_observed"] += len(frame_ids)
+
+        for frame_id in frame_ids:
+            if not isinstance(frame_id, (int, np.integer)):
+                continue
+
+            current = int(frame_id)
+            previous = self._prev_numeric_frame_id
+            if previous is not None and current > previous + 1:
+                self.run_metrics["dropped_frames"] += current - previous - 1
+            self._prev_numeric_frame_id = current
+
+    def _note_emitted_result(self, count: int = 1) -> None:
+        self.run_metrics["frames_emitted"] += max(0, int(count))
         
 
     def __check_docker_env(self): 
@@ -337,6 +386,7 @@ class Streamer(ABC):
     def setup_source(self, source:str)->None: 
         """Sets up source and inference mode."""
 
+        self._note_source_setup_started()
         self.imgsz = check_imgsz(self.args.imgsz, stride=self.stride,min_dim=2) 
 
         self.dataset = load_inference_source(
@@ -347,6 +397,7 @@ class Streamer(ABC):
         )
         
         self.source_type = self.dataset.source_type
+        self._note_source_setup_finished()
         self.configure_runtime_limit()
         if not getattr(self,"stream", True ) and (
             self.source_type.stream
@@ -834,6 +885,9 @@ class Streamer(ABC):
             crop = image[y1:y2, x1:x2] 
             if return_crops: 
                 crops.append(crop)
+                self.run_metrics["crop_count"] += 1
+                self.run_metrics["crop_total_bytes"] += int(crop.nbytes)
+                self.run_metrics["crop_total_pixels"] += int(crop.shape[0] * crop.shape[1])
 
             if save: 
                 fid = getattr(results, "path", "frame") 
@@ -1006,6 +1060,8 @@ class Streamer(ABC):
             )
 
         self.save_queue.put(("save_hazard_event", frame_path, annotated.copy(), crop_specs, csv_rows))
+        self.run_metrics["saved_hazard_events"] += 1
+        self.run_metrics["saved_hazard_crops"] += len(crop_specs)
         self._publish_hazard_alert(preds=preds, hazards=hazards, frame_name=frame_name)
 
     def _publish_hazard_alert(self, preds: Any, hazards: List[Dict[str, Any]], frame_name: str) -> None:
@@ -1036,6 +1092,7 @@ class Streamer(ABC):
         topic = f"{self.mqtt_interface.topic}/hazard"
         try:
             self.mqtt_interface.publish(topic, payload)
+            self.run_metrics["mqtt_hazard_messages"] += 1
         except Exception:
             Streamer.logger.exception("Failed to publish hazard MQTT event")
 
@@ -1113,6 +1170,7 @@ class Streamer(ABC):
     def _publish_mqtt_message(self, preds, mqtt_messages, frame_ids)->None: 
         if self.mqtt_interface is not None: 
             self.__generate_mqtt_message(preds, mqtt_messages, frame_ids)
+            self.run_metrics["mqtt_batches"] += len(frame_ids)
             # self.mqtt_interface.publish(self.mqtt_interface.topic, message)
 
 
@@ -1121,6 +1179,7 @@ class Streamer(ABC):
         if self.mqtt_interface is not None: 
             message = self.__generate_mqtt_message_no_motion(preds, frame_index)
             self.mqtt_interface.publish(self.mqtt_interface.topic, message)
+            self.run_metrics["mqtt_no_detection_batches"] += 1
 
 
 def _ensure_dir(path: Path) -> None:

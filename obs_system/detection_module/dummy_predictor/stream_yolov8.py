@@ -1,177 +1,122 @@
-from obs_system.detection_module.interface.streaming_default import YOLOStreamer
+from __future__ import annotations
+
+from obs_system.detection_module.interface.streaming_compressed import OptimizedStreamer
+from obs_system.logic_module.dummy_logic.tracker_sv import TrackerHandler
+from obs_system.utils.global_config import CONF_THR, NMS_IOU
 from obs_system.utils.logger import get_logger
 
-import torch 
 import numpy as np
-import cv2 
-import warnings 
-import os
+import torch
 
+from pathlib import Path
 from typing import Any
-from pathlib import Path 
-from collections import defaultdict
-from ultralytics import YOLO 
+from ultralytics import YOLO
+from ultralytics.data.augment import LetterBox
 from ultralytics.utils import DEFAULT_CFG
-from ultralytics.engine.results import Results
-from ultralytics.utils.files import increment_path
-from ultralytics.nn.autobackend import AutoBackend
 from ultralytics.utils.torch_utils import select_device, smart_inference_mode
 
-logger = get_logger("obs_system."+__name__)
 
-class Yolov8Streamer(YOLOStreamer):
+logger = get_logger("obs_system." + __name__)
 
-    # Ultralytics YOLO 🚀, AGPL-3.0 license
 
-    def __init__(self, cfg:Any=DEFAULT_CFG, overrides=None, _callbacks=None)->None: 
-        super().__init__(cfg, overrides, _callbacks)
-        
-        
-    def warmup(self, imgsz=(1, 3, 640, 640)): 
-        """Pytorch uses graph optimizations that are triggered with the first inference."""
+class _Yolov8PtAdapter:
+    fp16 = False
 
-        if self.device != 'cpu': 
-            im = torch.empty(*imgsz, dtype=torch.float, device=self.device)
-            y = self.model(im, show=False)
-            if isinstance(y, (list,tuple)):
-                return self.from_numpy(y[0]) if len(y) == 1 else [self.from_numpy(x) for x in y]
-            else: 
-                return self.from_numpy(y)
-            
+    def __init__(self, *, model_path: str | Path, device: torch.device) -> None:
+        self._wrapper_model = YOLO(str(model_path)).to(device)
+        self._infer_model = self._wrapper_model.model
+        self._device = device
 
-    def from_numpy(self, x): 
-        return torch.tensor(x).to(self.device) if isinstance(x, np.ndarray) else x
+    def __call__(self, images: torch.Tensor, orig_imgs=None, debug: bool = False):
+        results = self._wrapper_model.predict(
+            source=images,
+            stream=False,
+            verbose=debug,
+            half=self.fp16,
+            conf=CONF_THR,
+            iou=NMS_IOU,
+        )
 
+        all_boxes = []
+        all_scores = []
+        all_classes = []
+
+        for result in results:
+            if result.boxes is None or result.boxes.xyxy.numel() == 0:
+                all_boxes.append(torch.empty((0, 4), device=self._device, dtype=torch.float32))
+                all_scores.append(torch.empty((0,), device=self._device, dtype=torch.float32))
+                all_classes.append(torch.empty((0,), device=self._device, dtype=torch.int64))
+                continue
+
+            all_boxes.append(result.boxes.xyxy.detach().to(self._device))
+            all_scores.append(result.boxes.conf.detach().to(self._device))
+            all_classes.append(result.boxes.cls.detach().to(self._device).long())
+
+        return (all_boxes, all_scores, all_classes), None
+
+    def warmup(self, *, micro: int, warmup_sessions: int) -> None:
+        if self._device.type != "cuda":
+            return
+
+        dummy = torch.zeros((1, 3, 640, 640), device=self._device, dtype=torch.float32)
+        for _ in range(max(1, warmup_sessions)):
+            _ = self._wrapper_model.predict(source=dummy, stream=False, verbose=False)
+
+
+class Yolov8Streamer(OptimizedStreamer):
+    def __init__(self, cfg: Any = DEFAULT_CFG, overrides=None, _callbacks=None) -> None:
+        super().__init__(cfg, overrides or {}, _callbacks)
+        self.force_streaming_no_tiles = True
+        self.model_tag = "pt_yolov8"
 
     def __call__(self, source=None, model=None, logic_module=None, mqtt_broker=None, producer_flag=None, preview_queue=None, *args, **kwargs):
-        
-        """Performs inference on an image, video or stream."""
-        self.mqtt_interface = mqtt_broker
-        self.args.stream_buffer = True
-        self.logic_module = logic_module
+        return super().__call__(source, model, logic_module, mqtt_broker, producer_flag, preview_queue, *args, **kwargs)
 
-        try: 
-            self.predict_cli(source=os.path.normpath(os.path.abspath(source)) if  os.path.isfile(source)  else source,
-                             model=model,
-                             producer_flag=producer_flag,
-                             preview_queue=preview_queue)
-            
-        except KeyboardInterrupt as ke: 
-            if producer_flag is not None: 
-                producer_flag.value=False
-            try: 
-                cv2.destroyAllWindows()
-            except cv2.error: 
-                pass 
-            logger.exception(f"KeyboardInterrupt: {ke}")
-            return 
+    def pre_transform(self, im):
+        self.stride = 16 if self.args.half else 32
+        same_shapes = len({x.shape for x in im}) == 1
+        letterbox = LetterBox(self.imgsz, auto=same_shapes, stride=self.stride)
+        return [letterbox(image=x) for x in im]
 
-
-    def pre_transform(self, im): 
-        return super().pre_transform(im)
-    
-
-    def preprocess(self, im):
-        """
-        Prepares input image before inference.
-
-        Args:
-            im (torch.Tensor | List(np.ndarray)): BCHW for tensor, [(HWC) x B] for list.
-        """
-        
+    def preprocess(self, im: Any):
         not_tensor = not isinstance(im, torch.Tensor)
 
-        
         if not_tensor:
+            if isinstance(im, np.ndarray):
+                im = list(im)
             im = np.stack(self.pre_transform(im))
-            im = im[..., ::-1].transpose((0, 3, 1, 2))  # BGR to RGB, BHWC to BCHW, (n, 3, h, w)
-            im = np.ascontiguousarray(im)  # contiguous
+            im = im[..., ::-1].transpose((0, 3, 1, 2))
+            im = np.ascontiguousarray(im)
             im = torch.from_numpy(im)
 
         im = im.to(self.device)
-        
-        if not isinstance(self.model, YOLO): 
-            im = im.half() if self.model.fp16 else im.float()  # uint8 to fp16/32
-        else: 
-            im = im.float()  # uint8 to fp32
+        im = im.half() if getattr(self.model, "fp16", False) else im.float()
 
         if not_tensor:
-            im = im.div(255.0)  # 0 - 255 to 0.0 - 1.0
+            im = im.div(255.0)
+
         return im
 
+    def setup_model(self, model_name: str, path_to_load: str | Path, opt: str = "tracking") -> None:
+        model_path = Path(path_to_load)
+        if model_path.is_dir():
+            model_path = model_path / model_name
 
-    def inference(self, im, *args, **kwargs):
-        """Runs inference on a given image using the specified model and arguments."""
-        visualize = (
-            increment_path(self.save_dir / Path(self.batch[0][0]).stem, mkdir=True)
-            if self.args.visualize and (not self.source_type.tensor)
-            else False
-        )
+        if not model_path.exists():
+            raise FileNotFoundError(model_path)
 
-        if isinstance(self.model, YOLO): 
-            return self.model.track(im, augment=self.args.augment, visualize=visualize,embed=self.args.embed, conf=0.4, iou=0.5, verbose=False, show=False, persist=True, tracker="bytetrack.yaml", stream_buffer=self.args.stream_buffer)
-        
-        else: 
-            return self.model(im, augment=self.args.augment, visualize=visualize, embed=self.args.embed, *args, **kwargs)
-    
+        self.device = select_device(self.args.device, verbose=self.args.verbose)
+        self.model = _Yolov8PtAdapter(model_path=model_path, device=self.device)
+        self.tracker_model = TrackerHandler(tracker_choice="byte_tracker") if opt == "tracking" else None
+        self.stride = 16 if self.args.half else 32
+        self.model_tag = f"pt_{model_path.stem}"
 
-    def postprocess(self, preds, img, orig_img): 
-        return super().postprocess(preds, img, orig_img)
-    
-  
-    
-    def predict_cli(self, source, model, producer_flag=None, preview_queue=None): 
-        return super().predict_cli(source, model, producer_flag, preview_queue) #sourcery skip: remove-empty-nested-block noqa
-
-
-    def setup_source(self, source=""): 
-        super().setup_source(source)
-
-
-    def setup_model(self, model, opt='autobackbone'):
-        
-        """Initialize YOLO model with given parameters and set it to evaluation mode if needed."""
-        if self.model: 
-            return self.model
-
-        device = select_device(self.args.device, verbose=self.args.verbose)
-
-        if opt == "autobackbone": 
-            self.model = AutoBackend(
-                weights=model or self.args.model,
-                device=device,
-                dnn=self.args.dnn,
-                data=self.args.data,
-                fp16=self.args.half,
-                batch=self.args.batch,
-                fuse=True,
-                verbose=self.args.verbose,
-            )
-
-            self.device = self.model.device  # update device
-            self.args.half = self.model.fp16  # update half
-            self.model.eval()
-
-        elif opt=="tracking": 
-            self.track_history = defaultdict(list)
-            self.model = YOLO(model)
-            self.model = self.model.to(device)
-            self.device = self.model.device
-            self.stride = 32 if not self.args.half else 16 
-
-
-    def non_max_suppression(self, detections,scores, iou):
-        return super().non_max_suppression(detections,scores, iou)
-        
+        if self.args.verbose:
+            logger.info("[checked] Model %s successfully set up", model_path.name)
 
     @smart_inference_mode()
     def stream_inference(self, source, model, producer_flag, preview_queue, *args, **kwargs):
         return super().stream_inference(source, model, producer_flag, preview_queue, *args, **kwargs)
-        # ""Streams real-time inference on camera feed and saves results to file."""
-    
-      
-    def write_results(self, i, p, im, original_images, s)->str:
-        return super().write_results(i, p, im, original_images, s)
-        
 
-
+    def _stream_inference_impl_tiles(self, **kwargs):
+        return self._stream_inference_impl(**kwargs)

@@ -146,6 +146,10 @@ with st.sidebar:
     only_fps = st.checkbox("Measure FPS Only", value=True)
     half = st.checkbox("Use Half Precision", value=False)
     fep = st.checkbox("Enable FishEye Projection", value=False)
+    labels_available = st.checkbox("Labels available for this source", value=False)
+    bench_labels = DEFAULT_BENCH_LABELS
+    if labels_available:
+        bench_labels = st.text_input("Labels directory", value=DEFAULT_BENCH_LABELS)
 
     start_button = st.button("Start", type="primary")
     stop_button = st.button("Stop/Close")
@@ -177,7 +181,7 @@ tab4 = tabs[4] if option == "Live Stream" else tabs[3]
 with tab1:
     processing_status = {"running": False, "preview_ready": False}
     try:
-        status_response = requests.get(f"{BACKEND_INTERNAL_URL}/examine_stream/status", timeout=5)
+        status_response = requests.get(f"{BACKEND_INTERNAL_URL}/status", timeout=5)
         status_response.raise_for_status()
         processing_status = status_response.json()
     except requests.exceptions.RequestException:
@@ -223,8 +227,8 @@ with tab1:
                 "roi": roi,
                 "half": half,
                 "fep": fep,
-                "bench": False,
-                "bench_labels": DEFAULT_BENCH_LABELS,
+                "bench": labels_available,
+                "bench_labels": bench_labels,
                 "use_TRT": use_trt,
                 "plot_perf": False,
                 "only_FPS": only_fps,
@@ -232,8 +236,7 @@ with tab1:
             logger.debug("UI payload: %s", payload)
 
             try:
-                response =
-                requests.post(f"{BACKEND_PUBLIC_URL}/examine_stream", json=payload, timeout=15)
+                response = requests.post(f"{BACKEND_PUBLIC_URL}/", json=payload, timeout=15)
                 response.raise_for_status()
                 st.session_state["inference_preview_enabled"] = bool(show)
                 st.success("Configuration added successfully.")

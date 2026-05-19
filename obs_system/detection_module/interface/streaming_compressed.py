@@ -38,6 +38,9 @@ class OptimizedStreamer(Streamer):
 
     def __init__(self, cfg: str, overrides:dict, _callbacks:Any)->None: 
         super().__init__(cfg=cfg, overrides=overrides, _callbacks=_callbacks)
+        self._benchmark_label_files: List[Path] = []
+        self._benchmark_gt_by_stem: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        self._benchmark_labels_loaded = False
         
 
     def __call__(self, source:str, model:str, logic_module=None, mqtt_broker=None, producer_flag=None, preview_queue=None, *args, **kwargs)->None:
@@ -146,6 +149,39 @@ class OptimizedStreamer(Streamer):
         self.done_warmup = bool(subtractor.is_ready_for_inference())
         return self.done_warmup
 
+    def _ensure_benchmark_labels_loaded(self) -> None:
+        if self._benchmark_labels_loaded or not self.args.bench:
+            return
+
+        label_dir = str(getattr(self.args, "bench_labels", "") or "")
+        label_files = [Path(filename) for filename in sorted(glob.glob(f"{label_dir}/*.txt"), key=key_func)]
+        self._benchmark_label_files = label_files
+        self._benchmark_gt_by_stem = build_gt_index(
+            [str(path) for path in label_files],
+            fixed_size=(FIXED_WIDTH, FIXED_HEIGHT),
+        )
+        self._benchmark_labels_loaded = True
+
+    def _resolve_benchmark_gt(self, frame_id: Any) -> tuple[np.ndarray, np.ndarray]:
+        if not self.args.bench:
+            return (np.zeros((0,), np.float32), np.zeros((0, 4), np.float32))
+
+        self._ensure_benchmark_labels_loaded()
+
+        frame_key = str(frame_id)
+        gt = _get_gt(frame_key, self._benchmark_gt_by_stem)
+        if gt[1].size:
+            return gt
+
+        if isinstance(frame_id, (int, np.integer)):
+            index = int(frame_id)
+            for candidate in (index, index - 1):
+                if 0 <= candidate < len(self._benchmark_label_files):
+                    stem = self._benchmark_label_files[candidate].stem
+                    return _get_gt(stem, self._benchmark_gt_by_stem)
+
+        return (np.zeros((0,), np.float32), np.zeros((0, 4), np.float32))
+
 
     def setup_model(self, model_name:str, path_to_load:Optional[str|Path], opt:str)->None:
         pass 
@@ -186,6 +222,7 @@ class OptimizedStreamer(Streamer):
 
             first_batch = next(iter(self.dataset)) #Keeps the original pointer without moving it "peeking" to the first frame 
             _, im0s, _ = first_batch
+            self._note_first_frame_ready()
 
             self.original_imgsz = im0s[0].shape[:2] 
             self.orig_height, self.orig_width = self.original_imgsz
@@ -335,6 +372,7 @@ class OptimizedStreamer(Streamer):
 
             paths, im0s, s = self.batch
             frame_ids = self._get_batch_frame_ids(labels=s, frame_count=len(im0s))
+            self._note_frame_ids(frame_ids)
             original_images = [cv2.cvtColor(im, cv2.COLOR_BGR2RGB) for im in im0s.copy()]
             
             _t0, _t0_rel = 0.0,0.0
@@ -401,6 +439,18 @@ class OptimizedStreamer(Streamer):
                     im0s=im0s,
                     batch_size=len(im0s),
                 )
+                if self.mp is not None and self.args.bench:
+                    for fid in frame_ids:
+                        gt_cls, gt_bbs = self._resolve_benchmark_gt(fid)
+                        empty_boxes, empty_scores, empty_cls = _empty_dets_numpy()
+                        self.mp.update(
+                            boxes_xyxy=empty_boxes,
+                            scores=empty_scores,
+                            classes=empty_cls,
+                            gt_boxes_xyxy=gt_bbs.astype(np.float32),
+                            gt_classes=gt_cls.astype(np.int64),
+                        )
+                self._note_emitted_result(len(empty_preds))
                 yield empty_preds 
                 if self.args.plot_performance:
 
@@ -709,10 +759,27 @@ class OptimizedStreamer(Streamer):
                 self.log_detection_snapshot(r)
                 fid = fb["frame_id"]
                 bni = fb["bni"]
+
+                if self.mp is not None and self.args.bench:
+                    gt_cls, gt_bbs = self._resolve_benchmark_gt(fid)
+                    if r.boxes is None or r.boxes.xyxy.numel() == 0:
+                        det_boxes, det_scores, det_classes = _empty_dets_numpy()
+                    else:
+                        det_boxes = r.boxes.xyxy.detach().cpu().numpy().astype(np.float32)
+                        det_scores = r.boxes.conf.detach().cpu().numpy().astype(np.float32)
+                        det_classes = r.boxes.cls.detach().cpu().numpy().astype(np.int64)
+                    self.mp.update(
+                        boxes_xyxy=det_boxes,
+                        scores=det_scores,
+                        classes=det_classes,
+                        gt_boxes_xyxy=gt_bbs.astype(np.float32),
+                        gt_classes=gt_cls.astype(np.int64),
+                    )
                  
                 # if fid != last_frame_id:
                 #     continue
 
+                self._note_emitted_result()
                 yield r 
 
                 if self.args.plot_performance:
@@ -897,6 +964,7 @@ class OptimizedStreamer(Streamer):
 
             _, im0s, s = self.batch 
             frame_ids = self._get_batch_frame_ids(labels=s, frame_count=len(im0s))
+            self._note_frame_ids(frame_ids)
             original_images = im0s.copy() 
             if self.use_roi:
                 with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
@@ -940,20 +1008,12 @@ class OptimizedStreamer(Streamer):
                     original_images[i] = empty_image(original_images[i])
 
             if self.args.bench and self.mp is not None: 
- 
-                labels = [] 
-                for filename in sorted(glob.glob(f'{self.args.bench_labels}/*.txt'), key=key_func):
-                    labels.append(filename)
+                self._ensure_benchmark_labels_loaded()
 
-                self.__gt_labels = build_gt_index(labels, fixed_size=(FIXED_WIDTH, FIXED_HEIGHT))
-
-                for passed, f_id, img, gt_file in zip(mfgs, frame_ids, im0s, labels): 
-                    
-                    stem = Path(gt_file).stem
-                    gt_cls, gt_bbs = _get_gt(stem, self.__gt_labels)
+                for passed, f_id, img in zip(mfgs, frame_ids, im0s): 
+                    gt_cls, gt_bbs = self._resolve_benchmark_gt(f_id)
 
                     if passed : 
-                        self.__gt_labels[int(f_id)] = (gt_cls, gt_bbs)
                         yield (int(f_id), img)
 
                     else: 
