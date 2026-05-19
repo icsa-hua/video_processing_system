@@ -25,8 +25,8 @@ from ultralytics.utils import DEFAULT_CFG
 logger = get_logger("obs_system." + __name__)
 
 DEFAULT_PT_MODEL = "assets/compressed_models/yolov8s.pt"
-DEFAULT_ONNX_MODEL = "assets/compressed_models/mixed_dataset_trained_yolov8s.onnx"
-DEFAULT_ENGINE_MODEL = "assets/compressed_models/mixed_dataset_trained_yolov8s_mixed_batch_trt_fp16_noint8.engine"
+DEFAULT_ONNX_MODEL = "assets/compressed_models/yolov8s.onnx"
+DEFAULT_ENGINE_MODEL = "assets/compressed_models/yolov8s.engine"
 MQTT_ARCHIVE_PATH = Path("assets/mqtt/saved_publishes.cbor")
 HAZARD_CSV_PATH = Path("assets/hazard_events/hazard_events.csv")
 
