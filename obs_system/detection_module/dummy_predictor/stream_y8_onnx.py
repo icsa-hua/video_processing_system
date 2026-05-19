@@ -8,6 +8,7 @@ from obs_system.utils.logger import get_logger
 import numpy as np
 import torch
 
+from memory_profiler import profile as mem_profile
 from pathlib import Path
 from typing import Any
 from ultralytics.data.augment import LetterBox
@@ -74,6 +75,10 @@ class OnnxY8Streamer(OptimizedStreamer):
     @smart_inference_mode()
     def stream_inference(self, source, model, producer_flag, preview_queue, *args, **kwargs):
         return super().stream_inference(source, model, producer_flag, preview_queue, *args, **kwargs)
+
+    @mem_profile
+    def _stream_inference_impl(self, **kwargs):
+        return super()._stream_inference_impl(**kwargs)
 
     def _stream_inference_impl_tiles(self, **kwargs):
         return self._stream_inference_impl(**kwargs)
