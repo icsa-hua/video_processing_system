@@ -108,7 +108,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     curl \
-    ca-certificates \ 
+    ca-certificates \
     openssl \
     wget \
     git \
@@ -117,9 +117,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxext6 \
     libxrender1 \
     python3-venv \
-    python3-wheel \ 
-    python3-setuptools \ 
-    && update-ca-certificates \ 
+    python3-wheel \
+    python3-setuptools \
+    && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 
