@@ -14,9 +14,7 @@ from typing import Any
 
 from obs_system.application_module.dummy_application.dummy_app import Application
 from obs_system.application_module.dummy_application.pipeline_config import DEFAULT_BENCH_LABELS, PipelineConfig
-from obs_system.detection_module.dummy_predictor.stream_trt import TensorRTRTXStreamer
-from obs_system.detection_module.dummy_predictor.stream_y8_onnx import OnnxY8Streamer
-from obs_system.detection_module.dummy_predictor.stream_yolov8 import Yolov8Streamer
+from obs_system.detection_module.interface.factory import StreamerFactory
 from obs_system.utils.appraisal import frame_list, perf
 from obs_system.utils.logger import get_logger
 from ultralytics.utils import DEFAULT_CFG
@@ -206,15 +204,15 @@ def _summarize_jetson(samples: list[dict[str, float]]) -> dict[str, float]:
     return out
 
 
-def _build_streamer(model_path: str):
-    suffix = Path(model_path).suffix.lower()
-    if suffix == ".pt":
-        return Yolov8Streamer(DEFAULT_CFG, {}, None)
-    if suffix == ".onnx":
-        return OnnxY8Streamer(DEFAULT_CFG, {}, None)
-    if suffix == ".engine":
-        return TensorRTRTXStreamer(DEFAULT_CFG, {}, None)
-    raise ValueError(f"Unsupported model path: {model_path}")
+def _build_streamer(model_name: str, model_path: Path, use_tensorrt: bool):
+    factory = StreamerFactory(cfg=DEFAULT_CFG, overrides={}, callbacks=None)
+    streamer, _ = factory.create(
+        model_name=model_name,
+        path_to_load=model_path,
+        use_tensorrt=use_tensorrt,
+        opt="tracking",
+    )
+    return streamer
 
 
 def _configure_streamer_args(streamer: Any, config: PipelineConfig, run_dir: Path) -> None:
@@ -306,12 +304,14 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
     app.setup_logic_module(config)
     app.setup_mqtt() if config.mqtt else None
 
-    streamer = _build_streamer(model_path)
-    _configure_streamer_args(streamer, config, run_dir)
-
     model_spec = config.resolve_model()
     model_name = f"{model_spec.name}.{model_spec.kind}"
-    streamer.setup_model(model_name=model_name, path_to_load=model_spec.path, opt=config.type)
+    streamer = _build_streamer(
+        model_name=model_name,
+        model_path=model_spec.path,
+        use_tensorrt=bool(config.use_TRT),
+    )
+    _configure_streamer_args(streamer, config, run_dir)
 
     app.streamer = streamer
     app.model = streamer.model

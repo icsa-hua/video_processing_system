@@ -108,7 +108,7 @@ class _PtAdapter(_BaseModelAdapter):
 
         dummy = torch.zeros((1, 3, 640, 640), device=self._device, dtype=torch.float32)
         for _ in range(max(1, warmup_sessions)):
-            _ = self._infer_model.predict(dummy)
+            _ = self._wrapper_model.predict(source=dummy, stream=False, verbose=False)
 
 
 class UnifiedModelStreamer(OptimizedStreamer):
