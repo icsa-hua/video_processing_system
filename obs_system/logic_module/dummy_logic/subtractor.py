@@ -376,8 +376,7 @@ class Subtractor(EventExtractorInterface):
         lane_area = float(cv2.countNonZero(lanes_mask))
         min_area = max(50.0, 0.0015 * lane_area)
 
-        stripe_mask = np.zeros_like(lanes_mask, dtype=np.uint8)
-        valid_stripes = 0
+        stripe_candidates = []
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
@@ -396,11 +395,82 @@ class Subtractor(EventExtractorInterface):
             if extent < 0.45:
                 continue
 
-            valid_stripes += 1
-            cv2.drawContours(stripe_mask, [cnt], -1, 255, thickness=-1)
+            stripe_candidates.append(
+                {
+                    "contour": cnt,
+                    "x": int(x),
+                    "y": int(y),
+                    "w": int(w),
+                    "h": int(h),
+                    "cx": float(x + (w * 0.5)),
+                    "cy": float(y + (h * 0.5)),
+                }
+            )
 
-        # At least a few repeated bars to avoid random lane highlights.
-        if valid_stripes < 3:
+        if len(stripe_candidates) < 4:
+            return np.zeros_like(lanes_mask, dtype=np.uint8)
+
+        stripe_candidates.sort(key=lambda item: item["cy"])
+
+        def _x_overlap_ratio(a: dict, b: dict) -> float:
+            left = max(a["x"], b["x"])
+            right = min(a["x"] + a["w"], b["x"] + b["w"])
+            overlap = max(0.0, float(right - left))
+            denom = max(float(max(a["w"], b["w"])), 1.0)
+            return overlap / denom
+
+        def _is_sequential(prev: dict, curr: dict) -> bool:
+            gap_y = curr["cy"] - prev["cy"]
+            mean_h = 0.5 * float(prev["h"] + curr["h"])
+            width_ratio = float(curr["w"]) / float(max(prev["w"], 1))
+            height_ratio = float(curr["h"]) / float(max(prev["h"], 1))
+            x_overlap = _x_overlap_ratio(prev, curr)
+
+            return (
+                gap_y >= (0.35 * mean_h)
+                and gap_y <= (4.0 * max(prev["h"], curr["h"]))
+                and 0.55 <= width_ratio <= 1.8
+                and 0.5 <= height_ratio <= 2.0
+                and x_overlap >= 0.45
+            )
+
+        stripe_runs = []
+        current_run = [stripe_candidates[0]]
+        for cand in stripe_candidates[1:]:
+            if _is_sequential(current_run[-1], cand):
+                current_run.append(cand)
+            else:
+                stripe_runs.append(current_run)
+                current_run = [cand]
+        stripe_runs.append(current_run)
+
+        stripe_mask = np.zeros_like(lanes_mask, dtype=np.uint8)
+        selected_runs = 0
+
+        for run in stripe_runs:
+            if len(run) < 4:
+                continue
+
+            gaps = np.diff([item["cy"] for item in run]).astype(np.float32)
+            if gaps.size > 0:
+                gap_mean = float(gaps.mean())
+                if gap_mean <= 0:
+                    continue
+                gap_cv = float(gaps.std() / gap_mean)
+                if gap_cv > 0.55:
+                    continue
+
+            run_heights = np.array([item["h"] for item in run], dtype=np.float32)
+            run_span = float(run[-1]["cy"] - run[0]["cy"])
+            if run_span < (2.5 * float(np.median(run_heights))):
+                continue
+
+            selected_runs += 1
+            for item in run:
+                cv2.drawContours(stripe_mask, [item["contour"]], -1, 255, thickness=-1)
+
+        # Require at least one long ordered stripe run instead of isolated bright bars.
+        if selected_runs == 0:
             return np.zeros_like(lanes_mask, dtype=np.uint8)
 
         crosswalk = cv2.morphologyEx(
