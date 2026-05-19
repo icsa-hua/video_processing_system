@@ -15,13 +15,13 @@ def _iou_xyxy(a: np.ndarray, b:np.ndarray) -> np.ndarray:
     b = b.astype(np.float32, copy=False) 
      
     ax1, ay1, ax2, ay2 = a[:,0:1], a[:, 1:2], a[:, 2:3], a[:,3:4] 
-    bx1, by1, bx2, by2 = b[:,0:1], b[:, 1], b[:, 2], b[:,3] 
+    bx1, by1, bx2, by2 = b[:,0], b[:, 1], b[:, 2], b[:,3] 
      
 
     inter_x1 = np.maximum(ax1, bx1)
-    inter_y1 = np.maximum(ax1, bx1)
-    inter_x2 = np.maximum(ax2, bx2)
-    inter_y2 = np.maximum(ay2, by2)
+    inter_y1 = np.maximum(ay1, by1)
+    inter_x2 = np.minimum(ax2, bx2)
+    inter_y2 = np.minimum(ay2, by2)
 
     inter_w = np.clip(inter_x2 - inter_x1, 0.0, None) 
     inter_h = np.clip(inter_y2 - inter_y1, 0.0, None) 
@@ -33,6 +33,5 @@ def _iou_xyxy(a: np.ndarray, b:np.ndarray) -> np.ndarray:
     union = area_a + area_b - inter 
     union = np.clip(union, 1e-9, None) 
     return (inter / union).astype(np.float32) 
-
 
 
