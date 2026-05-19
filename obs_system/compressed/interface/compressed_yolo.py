@@ -21,7 +21,7 @@ class CompressedYOLO:
         self.initialize_model(path)
 
 
-    def __call__(self, image, debug=False):
+    def __call__(self, image, orig_imgs=None, debug=False):
         return self.detect_objects(image, debug=debug)
 
 
