@@ -27,7 +27,7 @@ class Subtractor(EventExtractorInterface):
                  detect_shadows=True,
                  empty_background_image="",
                  downscale=(320,320),
-                 accum_time:int=500,
+                 accum_time:int=100,
                  save_path:str="lanes_final.png"
     ):
         self.downscale = downscale
