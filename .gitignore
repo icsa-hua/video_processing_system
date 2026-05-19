@@ -52,3 +52,8 @@ obs_system/compressed/compressed_models/*
 train_freeze_unified_dataset_512
 AGENTS.md 
 PLAN.md 
+DETRAC-Images/
+DETRAC-MOT-toolkit/
+DETRAC-Test-Annotations-XML
+DETRAC-Train-Annotations-XML 
+archive.zip
