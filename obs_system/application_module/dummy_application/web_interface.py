@@ -146,6 +146,13 @@ with st.sidebar:
     only_fps = st.checkbox("Measure FPS Only", value=True)
     half = st.checkbox("Use Half Precision", value=False)
     fep = st.checkbox("Enable FishEye Projection", value=False)
+    lane_recalibration_interval_frames = st.number_input(
+        "Lane recalibration interval (frames)",
+        min_value=0,
+        value=0,
+        step=50,
+        help="For live streams, rerun lane calibration after this many frames. Set to 0 to disable.",
+    )
     labels_available = st.checkbox("Labels available for this source", value=False)
     bench_labels = DEFAULT_BENCH_LABELS
     if labels_available:
@@ -232,6 +239,7 @@ with tab1:
                 "use_TRT": use_trt,
                 "plot_perf": False,
                 "only_FPS": only_fps,
+                "lane_recalibration_interval_frames": int(lane_recalibration_interval_frames),
             }
             logger.debug("UI payload: %s", payload)
 

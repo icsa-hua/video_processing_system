@@ -105,6 +105,7 @@ class Application:
         DEFAULT_CFG.preview_jpeg_quality = int(config.preview_jpeg_quality)
         DEFAULT_CFG.preview_fps = float(config.preview_fps)
         DEFAULT_CFG.stream_limit_hours = float(config.stream_limit_hours)
+        DEFAULT_CFG.lane_recalibration_interval_frames = int(config.lane_recalibration_interval_frames)
 
         tracemalloc.start()
 
@@ -144,7 +145,9 @@ class Application:
 
     def setup_logic_module(self, config: PipelineConfig):
         # Change this based on your video. Get the first frame.
-        self.logic_module["SUBTRACTOR"] = Subtractor()
+        self.logic_module["SUBTRACTOR"] = Subtractor(
+            recalibration_interval_frames=int(config.lane_recalibration_interval_frames),
+        )
         self.logic_module["ROI"] = RegionSetter()
 
         if config.fep:

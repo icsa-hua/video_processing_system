@@ -245,6 +245,12 @@ class OptimizedStreamer(Streamer):
             else:
                 self.done_warmup = True
 
+            if subtractor is not None and hasattr(subtractor, "configure_runtime_recalibration"):
+                subtractor.configure_runtime_recalibration(
+                    enabled=bool(getattr(self.source_type, "stream", False)),
+                    interval_frames=getattr(self.args, "lane_recalibration_interval_frames", None),
+                )
+
             if not getattr(self.source_type, "stream", False):
                 empty_image = f"{EMPTY_IMAGE_PATH}"
                 if not os.path.exists(empty_image):

@@ -28,13 +28,20 @@ class Subtractor(EventExtractorInterface):
                  empty_background_image="",
                  downscale=(320,320),
                  accum_time:int=100,
-                 save_path:str="lanes_final.png"
+                 save_path:str="lanes_final.png",
+                 recalibration_interval_frames:int=0,
+                 recalibration_accum_time:Optional[int]=None,
     ):
         self.downscale = downscale
         self.threshold_ratio = float(threshold_ratio)
         self.initial_accum_time = max(int(accum_time), 0)
         self.accum_time = self.initial_accum_time
         self.save_path = save_path
+        self.recalibration_interval_frames = max(int(recalibration_interval_frames), 0)
+        self.recalibration_accum_time = max(
+            int(recalibration_accum_time if recalibration_accum_time is not None else self.initial_accum_time),
+            0,
+        )
         
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
                     history=history, 
@@ -73,6 +80,9 @@ class Subtractor(EventExtractorInterface):
         self._startup_warmup_active = False
         self._startup_frames_seen = 0
         self._ready_for_inference = True
+        self._recalibration_enabled = False
+        self._recalibration_active = False
+        self._frames_since_last_calibration = 0
 
 
     def configure_source_warmup(self, source_is_stream: bool) -> None:
@@ -91,6 +101,50 @@ class Subtractor(EventExtractorInterface):
                 "Subtractor startup warmup enabled for live stream: %d frames before inference",
                 self.initial_accum_time,
             )
+
+
+    def configure_runtime_recalibration(
+        self,
+        *,
+        enabled: bool,
+        interval_frames: Optional[int] = None,
+        accum_time: Optional[int] = None,
+    ) -> None:
+        if interval_frames is not None:
+            self.recalibration_interval_frames = max(int(interval_frames), 0)
+        if accum_time is not None:
+            self.recalibration_accum_time = max(int(accum_time), 0)
+
+        self._recalibration_enabled = bool(enabled and self.recalibration_interval_frames > 0)
+        self._frames_since_last_calibration = 0
+
+        if not self._recalibration_enabled:
+            self._recalibration_active = False
+
+
+    def _reset_calibration_buffers(self) -> None:
+        self.acc_mask = None
+        self.prev_mask = None
+        self.__calibration_started = False
+        self.__calibration_ended = False
+
+
+    def _has_nonempty_mask(self, mask: Optional[np.ndarray]) -> bool:
+        return bool(mask is not None and mask.size > 0 and cv2.countNonZero(mask) > 0)
+
+
+    def _begin_runtime_recalibration(self) -> None:
+        if not self._recalibration_enabled or self.recalibration_accum_time <= 0:
+            return
+
+        self.accum_time = self.recalibration_accum_time
+        self._recalibration_active = True
+        self._frames_since_last_calibration = 0
+        self._reset_calibration_buffers()
+        logger.info(
+            "Starting runtime lane recalibration for %d frames",
+            self.recalibration_accum_time,
+        )
 
 
     def is_ready_for_inference(self) -> bool:
@@ -145,6 +199,15 @@ class Subtractor(EventExtractorInterface):
         h, w = batch[0].shape[:2]
         self._last_frame_shape = (h, w)
 
+        if (
+            self._recalibration_enabled
+            and not self._recalibration_active
+            and self.__calibration_ended
+            and self.recalibration_interval_frames > 0
+            and self._frames_since_last_calibration >= self.recalibration_interval_frames
+        ):
+            self._begin_runtime_recalibration()
+
         if not self.__calibration_started: 
             self.acc_mask = np.zeros((h, w), np.float32) 
             self.prev_mask = np.zeros((h,w), np.float32)
@@ -169,19 +232,31 @@ class Subtractor(EventExtractorInterface):
             if save_img and save_idx is not None: 
                 save_idx += 1 
 
-            if startup_skip_batch and self.accum_time > 0:
+            should_accumulate_calibration = False
+            if self.accum_time > 0:
+                should_accumulate_calibration = startup_skip_batch or self._recalibration_active or motion_flag
+
+            if should_accumulate_calibration:
                 self.__cal_calibrator(frame, size=(h,w))
-                self._startup_frames_seen = min(self.initial_accum_time, self._startup_frames_seen + 1)
-            elif motion_flag and self.accum_time > 0:
-                self.__cal_calibrator(frame, size=(h,w))
+                if startup_skip_batch:
+                    self._startup_frames_seen = min(self.initial_accum_time, self._startup_frames_seen + 1)
 
         if self.accum_time == 0 and self.__calibration_ended :
             lanes_final = self.__apply_calibration(last_frame, save_img=save_img)
             self.accum_time = -1
             self._startup_warmup_active = False
             self._ready_for_inference = True
+            self._recalibration_active = False
+            self._frames_since_last_calibration = 0
             self._recent.clear()
             self._hold = 0
+        elif (
+            self._recalibration_enabled
+            and self.__calibration_ended
+            and not self._recalibration_active
+            and not startup_skip_batch
+        ):
+            self._frames_since_last_calibration += len(batch)
 
         if startup_skip_batch:
             motion_flags = [False] * len(motion_flags)
@@ -294,11 +369,23 @@ class Subtractor(EventExtractorInterface):
                 lanes_clean[labels == i] = 255
 
         lanes_smooth = cv2.GaussianBlur(lanes_clean, (11,11), 0) 
-        _, lanes_final = cv2.threshold(lanes_smooth, 50, 255, cv2.THRESH_BINARY)
-        self.lanes_mask = lanes_final
-        self.crosswalk_mask = self.__detect_crosswalks(last_frame=frame, lanes_mask=lanes_final)
+        _, candidate_lanes = cv2.threshold(lanes_smooth, 50, 255, cv2.THRESH_BINARY)
+        candidate_crosswalk = self.__detect_crosswalks(last_frame=frame, lanes_mask=candidate_lanes)
+
+        previous_lanes = None if self.lanes_mask is None else self.lanes_mask.copy()
+        previous_crosswalk = None if self.crosswalk_mask is None else self.crosswalk_mask.copy()
+
+        keep_candidate = self._has_nonempty_mask(candidate_lanes) or not self._has_nonempty_mask(previous_lanes)
+        if keep_candidate:
+            self.lanes_mask = candidate_lanes
+            self.crosswalk_mask = candidate_crosswalk
+            lanes_final = candidate_lanes
+        else:
+            lanes_final = previous_lanes
+            self.crosswalk_mask = previous_crosswalk
+            logger.info("Runtime lane recalibration produced an empty mask; keeping previous lane mask")
         
-        if save_img and self.save_path: 
+        if save_img and self.save_path and lanes_final is not None: 
             self.__save_calibration(frame, lanes_final)
         
         return lanes_final
