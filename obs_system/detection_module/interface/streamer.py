@@ -163,6 +163,13 @@ class Streamer(ABC):
 
     def __check_docker_env(self): 
         if self.args.show:
+            if getattr(self.args, "gui", False):
+                # Browser preview does not require a local display backend.
+                self.args.show = True
+                if os.path.exists("/.dockerenv") or os.getenv("container") == "docker":
+                    self.docker_flag = True
+                return
+
             if os.path.exists("/.dockerenv") or os.getenv("container") == "docker":
                 self.docker_flag = True 
                 log_stream = StringIO() 
