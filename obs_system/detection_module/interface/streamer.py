@@ -29,6 +29,7 @@ from ultralytics.utils.torch_utils import smart_inference_mode
 from datetime import datetime, timezone
 
 
+
 class Streamer(ABC): 
     
     logger = get_logger("obs_system"+__name__)
