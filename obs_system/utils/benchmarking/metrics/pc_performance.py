@@ -59,8 +59,10 @@ class PerfLogger:
             'infer_calls_per_sec',
             'gpu_util', 'gpu_mem_used_mb', 'gpu_mem_total_mb',
             'cpu_util',
-            'roi_ms_per_frame', 'mog2_ms_per_frame',
+            'frame_read_ms_per_frame', 'roi_ms_per_frame', 'mog2_ms_per_frame', 'defish_ms_per_frame',
             'preprocess_ms_per_frame', 'inference_ms_per_frame', 'postprocess_ms_per_frame',
+            'nms_ms_per_frame', 'tracking_ms_per_frame', 'hazard_logic_ms_per_frame',
+            'preview_encode_ms_per_frame', 'mqtt_ms_per_frame', 'event_saving_ms_per_frame',
             'total_ms_per_frame', 'fps_sliding'
 
         ])
@@ -112,7 +114,10 @@ class FramePerfLogger:
             'res_w', 'res_h',
             'motion_passed', 'motion_score',
             'gpu_util', 'gpu_mem_used_mb', 'cpu_util',
-            'roi_ms', 'mog2_ms', 'preprocess_ms', 'inference_ms', 'postprocess_ms',
+            'frame_read_ms', 'roi_ms', 'mog2_ms', 'defish_ms',
+            'preprocess_ms', 'inference_ms', 'postprocess_ms',
+            'nms_ms', 'tracking_ms', 'hazard_logic_ms',
+            'preview_encode_ms', 'mqtt_ms', 'event_saving_ms',
             'total_ms',
         ])
         self._writer.writeheader()
@@ -232,4 +237,3 @@ class TimelineLogger:
             pass
 
 # ===============================================================
-

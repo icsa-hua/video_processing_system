@@ -21,6 +21,7 @@ from obs_system.utils.benchmarking.backend_benchmark import (
     latency_summary,
     read_cbor_lines,
     read_csv_rows,
+    summarize_stage_latency,
 )
 from obs_system.utils.appraisal import frame_list, perf
 from obs_system.utils.logger import get_logger
@@ -34,6 +35,22 @@ DEFAULT_ONNX_MODEL = "assets/compressed_models/yolov8s.onnx"
 DEFAULT_ENGINE_MODEL = "assets/compressed_models/yolov8s.engine"
 MQTT_ARCHIVE_PATH = Path("assets/mqtt/saved_publishes.cbor")
 HAZARD_CSV_PATH = Path("assets/hazard_events/hazard_events.csv")
+STAGE_LATENCY_KEYS = [
+    "frame_read_ms",
+    "roi_ms",
+    "mog2_ms",
+    "defish_ms",
+    "preprocess_ms",
+    "inference_ms",
+    "postprocess_ms",
+    "nms_ms",
+    "tracking_ms",
+    "hazard_logic_ms",
+    "preview_encode_ms",
+    "mqtt_ms",
+    "event_saving_ms",
+    "total_ms",
+]
 
 
 def _build_streamer(model_name: str, model_path: Path, use_tensorrt: bool):
@@ -223,6 +240,7 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
             else 0.0
         ),
         "setup_metrics": setup_metrics,
+        "stage_latency": summarize_stage_latency(frame_rows, STAGE_LATENCY_KEYS),
         "hardware": hardware,
         "detection_metrics": detection_metrics,
         "output_load": output_load,

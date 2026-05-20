@@ -265,6 +265,36 @@ def mean_metric(rows: list[dict[str, str]], key: str) -> float | None:
     return float(np.mean(vals))
 
 
+def metric_distribution(rows: list[dict[str, str]], key: str) -> dict[str, float] | None:
+    vals = []
+    for row in rows:
+        value = row.get(key)
+        if value in (None, "", "nan"):
+            continue
+        try:
+            vals.append(float(value))
+        except ValueError:
+            continue
+    if not vals:
+        return None
+
+    xs = np.asarray(vals, dtype=np.float32)
+    return {
+        "mean_ms": float(xs.mean()),
+        "p50_ms": float(np.percentile(xs, 50)),
+        "p95_ms": float(np.percentile(xs, 95)),
+    }
+
+
+def summarize_stage_latency(rows: list[dict[str, str]], stage_keys: list[str]) -> dict[str, dict[str, float]]:
+    summary: dict[str, dict[str, float]] = {}
+    for key in stage_keys:
+        dist = metric_distribution(rows, key)
+        if dist is not None:
+            summary[key] = dist
+    return summary
+
+
 def summarize_jetson(samples: list[dict[str, float]], static_context: dict[str, Any] | None = None) -> dict[str, Any]:
     if not samples and not static_context:
         return {}

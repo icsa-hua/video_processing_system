@@ -339,8 +339,15 @@ class OptimizedStreamer(Streamer):
 
         def producer():
             try:
-                for batch in self.dataset:
-                    batch_queue.put(batch)
+                dataset_iter = iter(self.dataset)
+                while True:
+                    t_read0 = time.perf_counter()
+                    try:
+                        batch = next(dataset_iter)
+                    except StopIteration:
+                        break
+                    read_ms = (time.perf_counter() - t_read0) * 1e3
+                    batch_queue.put((batch, read_ms))
             except Exception as e:
                 Streamer.logger.error(f"Error in batch producer: {e}")
             finally:
@@ -357,11 +364,15 @@ class OptimizedStreamer(Streamer):
             # sample resource utilization at batch start (best-effort)
             gpu_stats = gpu_mon.sample()
             cpu_stats = cpu_mon.sample()
+            frame_read_ms = 0.0
             roi_ms = 0.0
             mog2_ms = 0.0
+            defish_ms = 0.0
             preprocess_ms = 0.0
             inference_ms = 0.0
             postprocess_ms = 0.0
+            nms_ms = 0.0
+            tracking_ms = 0.0
 
             if self.runtime_limit_reached():
                 break
@@ -376,8 +387,12 @@ class OptimizedStreamer(Streamer):
 
             self.run_callbacks("on_predict_batch_start")
 
-            paths, im0s, s = self.batch
+            batch_payload, frame_read_ms = self.batch
+            self.batch = batch_payload
+            paths, im0s, s = batch_payload
             frame_ids = self._get_batch_frame_ids(labels=s, frame_count=len(im0s))
+            self._reset_stage_metrics(frame_ids)
+            self._record_stage_time("frame_read_ms", frame_read_ms, frame_ids=frame_ids)
             self._note_frame_ids(frame_ids)
             original_images = [cv2.cvtColor(im, cv2.COLOR_BGR2RGB) for im in im0s.copy()]
             
@@ -396,6 +411,7 @@ class OptimizedStreamer(Streamer):
                     
                     if self.args.plot_performance:
                         roi_ms = (time.perf_counter() - _t0) * 1e3
+                        self._record_stage_time("roi_ms", roi_ms, frame_ids=frame_ids)
                         _t1_rel = time.perf_counter() - stream_start
                         timeline_logger.log_span(batch_idx, 'roi', _t0_rel, _t1_rel)
                         res_h, res_w = im0s[0].shape[:2] if len(im0s) else (0, 0)
@@ -415,6 +431,7 @@ class OptimizedStreamer(Streamer):
                 
                 if self.args.plot_performance:
                     mog2_ms = (time.perf_counter() - _t0) * 1e3
+                    self._record_stage_time("mog2_ms", mog2_ms, frame_ids=frame_ids)
                     _t1_rel = time.perf_counter() - stream_start
                     timeline_logger.log_span(batch_idx, 'mog2', _t0_rel, _t1_rel)
                 if lanes_final is not None: 
@@ -434,7 +451,10 @@ class OptimizedStreamer(Streamer):
                 # Defish FishEye camera frames to increase accuracy
                 if self.logic_module["FEP"] is not None: 
                     Streamer.logger.debug("FEP enabled")
+                    t_defish0 = time.perf_counter()
                     im0s = self.logic_module["FEP"]._defish(im0s)  
+                    defish_ms = (time.perf_counter() - t_defish0) * 1e3
+                    self._record_stage_time("defish_ms", defish_ms, frame_ids=frame_ids)
 
                     
             # For rectilinear images, motion gating seems to only work with ROI.  
@@ -458,6 +478,10 @@ class OptimizedStreamer(Streamer):
                         )
                 self._note_emitted_result(len(empty_preds))
                 yield empty_preds 
+                self._set_perf_active_frame(frame_ids[-1] if frame_ids else None)
+                self._publish_mqtt_message_no_detection(preds=empty_preds, frame_index=frame_ids)
+                self._publish_no_motion_preview(original_images, preview_queue, producer_flag)
+                self._set_perf_active_frame(None)
                 if self.args.plot_performance:
 
                     # ---- perf log (batch skipped) ----
@@ -468,6 +492,7 @@ class OptimizedStreamer(Streamer):
                     fps_sliding = fps
                     total_ms = (t_now - t_batch_start) * 1e3
                     infer_calls_per_sec = infer_counter.rate(t_now)
+                    batch_stage_metrics = self._get_batch_stage_metrics()
                     perf_logger.log({
                         't_wall': t_now,
                         'batch_idx': batch_idx,
@@ -483,11 +508,19 @@ class OptimizedStreamer(Streamer):
                         'gpu_mem_used_mb': gpu_stats.get('mem_used_mb', float('nan')),
                         'gpu_mem_total_mb': gpu_stats.get('mem_total_mb', float('nan')),
                         'cpu_util': cpu_stats.get('cpu_util', float('nan')),
+                        'frame_read_ms_per_frame': frame_read_ms / max(len(im0s), 1),
                         'roi_ms_per_frame': roi_ms / max(len(im0s), 1),
                         'mog2_ms_per_frame': mog2_ms / max(len(im0s), 1),
+                        'defish_ms_per_frame': defish_ms / max(len(im0s), 1),
                         'preprocess_ms_per_frame': 0.0,
                         'inference_ms_per_frame': 0.0,
                         'postprocess_ms_per_frame': 0.0,
+                        'nms_ms_per_frame': 0.0,
+                        'tracking_ms_per_frame': 0.0,
+                        'hazard_logic_ms_per_frame': 0.0,
+                        'preview_encode_ms_per_frame': batch_stage_metrics.get('preview_encode_ms', 0.0) / max(len(im0s), 1),
+                        'mqtt_ms_per_frame': batch_stage_metrics.get('mqtt_ms', 0.0) / max(len(im0s), 1),
+                        'event_saving_ms_per_frame': 0.0,
                         'total_ms_per_frame': total_ms / max(len(im0s), 1),
                         'fps_sliding': fps_sliding,
                     })
@@ -496,8 +529,10 @@ class OptimizedStreamer(Streamer):
                     scores_list = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None) or [0.0]*len(im0s)
                     per_roi = roi_ms / max(len(im0s), 1)
                     per_mog2 = mog2_ms / max(len(im0s), 1)
-                    per_total = total_ms / max(len(im0s), 1)
+                    per_read = frame_read_ms / max(len(im0s), 1)
+                    per_defish = defish_ms / max(len(im0s), 1)
                     for i, fid in enumerate(frame_ids):
+                        frame_stage_metrics = self._get_frame_stage_metrics(fid)
                         frame_logger.log({
                             't_wall': t_now,
                             'batch_idx': batch_idx,
@@ -509,12 +544,27 @@ class OptimizedStreamer(Streamer):
                             'gpu_util': gpu_stats.get('gpu_util', float('nan')),
                             'gpu_mem_used_mb': gpu_stats.get('mem_used_mb', float('nan')),
                             'cpu_util': cpu_stats.get('cpu_util', float('nan')),
+                            'frame_read_ms': per_read,
                             'roi_ms': per_roi,
                             'mog2_ms': per_mog2,
+                            'defish_ms': per_defish,
                             'preprocess_ms': 0.0,
                             'inference_ms': 0.0,
                             'postprocess_ms': 0.0,
-                            'total_ms': per_total,
+                            'nms_ms': 0.0,
+                            'tracking_ms': 0.0,
+                            'hazard_logic_ms': 0.0,
+                            'preview_encode_ms': frame_stage_metrics.get('preview_encode_ms', 0.0),
+                            'mqtt_ms': frame_stage_metrics.get('mqtt_ms', 0.0),
+                            'event_saving_ms': 0.0,
+                            'total_ms': (
+                                per_read
+                                + per_roi
+                                + per_mog2
+                                + per_defish
+                                + frame_stage_metrics.get('preview_encode_ms', 0.0)
+                                + frame_stage_metrics.get('mqtt_ms', 0.0)
+                            ),
                         })
 
                     # timeline span for skipped batch
@@ -523,9 +573,6 @@ class OptimizedStreamer(Streamer):
                         'frames_in_batch': int(len(im0s)),
                     })
                     batch_idx += 1
-
-                self._publish_mqtt_message_no_detection(preds=empty_preds, frame_index=frame_ids)
-                self._publish_no_motion_preview(original_images, preview_queue, producer_flag)
                 self.step_attention_state()
                 continue # to the next batch 
                 
@@ -545,6 +592,7 @@ class OptimizedStreamer(Streamer):
                             
             if self.args.plot_performance:
                 preprocess_ms = (time.perf_counter() - _t0) * 1e3 
+                self._record_stage_time("preprocess_ms", preprocess_ms, frame_ids=frame_ids)
                 timeline_logger.log_span(batch_idx, 'preprocess', _t0_rel, time.perf_counter() - stream_start)
 
             if self.args.plot_performance:
@@ -583,12 +631,14 @@ class OptimizedStreamer(Streamer):
             
             if self.args.plot_performance:
                 inference_ms = (time.perf_counter() - _t0) * 1e3
+                self._record_stage_time("inference_ms", inference_ms, frame_ids=frame_ids)
                 timeline_logger.log_span(batch_idx, 'inference', _t0_rel, time.perf_counter() - stream_start)
 
             if event is not None and torch.cuda.is_available():
                 # Synchronize only when the backend provides a CUDA completion event.
                 torch.cuda.current_stream().wait_event(event)
 
+            postprocess_total_t0 = time.perf_counter()
             if self.args.plot_performance:
                 _tpost = time.perf_counter()
                 _tpost_rel = _tpost - stream_start
@@ -638,6 +688,7 @@ class OptimizedStreamer(Streamer):
                 scores_t = torch.as_tensor(scores) 
                 classes_t = torch.as_tensor(cls_).long()
 
+                t_nms0 = time.perf_counter()
                 keep = batched_nms(
                         boxes_t, 
                         scores_t, 
@@ -647,6 +698,9 @@ class OptimizedStreamer(Streamer):
                     
                 # keep = keep_pc if keep_pc.numel()==0 else keep_pc[nms(boxes_t[keep_pc],scores_t[keep_pc], iou_threshold=(1-NMS_IOU))]
                 boxes_t, scores_t, classes_t = boxes_t[keep], scores_t[keep], classes_t[keep] 
+                nms_elapsed_ms = (time.perf_counter() - t_nms0) * 1e3
+                nms_ms += nms_elapsed_ms
+                self._record_stage_time("nms_ms", nms_elapsed_ms, frame_id=fid)
                
                 # inference_shape = (
                 #     cropped_original_images[bni].shape[:2]
@@ -730,6 +784,7 @@ class OptimizedStreamer(Streamer):
                     if fb["empty"] : continue 
                     
                     fid = fb["frame_id"] 
+                    t_track0 = time.perf_counter()
                     results_map[fid] = self.tracker_model.detect(
                         predictions=results_map[fid], 
                         save=False, 
@@ -737,6 +792,9 @@ class OptimizedStreamer(Streamer):
                         f_id=fid, 
                         class_names=self.converter.class_names
                     )
+                    tracking_elapsed_ms = (time.perf_counter() - t_track0) * 1e3
+                    tracking_ms += tracking_elapsed_ms
+                    self._record_stage_time("tracking_ms", tracking_elapsed_ms, frame_id=fid)
                         
                     # with StepContext(name="Tracking Frame", catch=(RuntimeError, ), verbose=self.args.verbose):
                     #     preds = self.tracker_model.detect(predictions=preds,save=False,orig_frame=orig_img,f_id=frame_ids[self.seen],class_names=self.converter.class_names)
@@ -756,6 +814,7 @@ class OptimizedStreamer(Streamer):
 
             preds = [] 
             mqtt_messages = [] 
+            frame_log_rows = []
             for fb, (r,mqtt_mess) in zip(frame_bundles,out):
                 r.speed = {
                     "preprocess": profilers[0].dt * 1e3/len(im0s),
@@ -788,40 +847,9 @@ class OptimizedStreamer(Streamer):
                 self._note_emitted_result()
                 yield r 
 
-                if self.args.plot_performance:
-
-                    # --- per-frame logging (approximate stage attribution) ---
-                    t_now_f = time.perf_counter()
-                    scores_list = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None) or []
-                    motion_score = float(scores_list[bni]) if bni < len(scores_list) else float('nan')
-                    per_roi = roi_ms / max(len(im0s), 1)
-                    per_mog2 = mog2_ms / max(len(im0s), 1)
-                    per_pre = preprocess_ms / max(len(im0s), 1)
-                    per_inf = inference_ms / max(len(im0s), 1)
-                    # postprocess_ms is measured per-frame
-                    total_est = per_roi + per_mog2 + per_pre + per_inf + postprocess_ms
-                    frame_logger.log({
-                        't_wall': t_now_f,
-                        'batch_idx': batch_idx,
-                        'frame_id': int(fid) if str(fid).isdigit() else fid,
-                        'res_w': res_w,
-                        'res_h': res_h,
-                        'motion_passed': int(bool(mfgs[bni])) if bni < len(mfgs) else 1,
-                        'motion_score': motion_score,
-                        'gpu_util': gpu_stats.get('gpu_util', float('nan')),
-                        'gpu_mem_used_mb': gpu_stats.get('mem_used_mb', float('nan')),
-                        'cpu_util': cpu_stats.get('cpu_util', float('nan')),
-                        'roi_ms': per_roi,
-                        'mog2_ms': per_mog2,
-                        'preprocess_ms': per_pre,
-                        'inference_ms': per_inf,
-                        'postprocess_ms': postprocess_ms,
-                        'total_ms': total_est,
-                    })
-                    # --------------------------------------------------------
-
                 if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
                     filename=Path(paths[bni])
+                    self._set_perf_active_frame(fid)
 
                     if self.args.save or self.args.show:
                         self.optional_save_or_show(r, filename)
@@ -835,20 +863,24 @@ class OptimizedStreamer(Streamer):
                                 i = bni,
                                 im= original_images,
                         )
+                    self._set_perf_active_frame(None)
 
+                self._set_perf_active_frame(fid)
                 self.publish_preview(preview_queue, producer_flag)
+                self._set_perf_active_frame(None)
 
                 preds.append(r)
                 mqtt_messages.append(mqtt_mess)
+                frame_log_rows.append({
+                    "frame_id": fid,
+                    "bni": bni,
+                    "motion_passed": int(bool(mfgs[bni])) if bni < len(mfgs) else 1,
+                })
                     # if self.seen == len(im0s)-1 and self.args.verbose: 
                     #     elapsed_time=time.perf_counter() - start_time 
                     #     Streamer.logger.info(f"Time from capturing batch to meaningful information: {elapsed_time:.2f}")
             self._publish_mqtt_message(preds=preds, mqtt_messages=mqtt_messages, frame_ids=frame_ids) 
             last_frame_id = bni 
-        
-            if self.args.plot_performance:
-                postprocess_ms = (time.perf_counter() - _tpost) *1e3
-                timeline_logger.log_span(batch_idx, 'postprocess', _tpost_rel, time.perf_counter() - stream_start, {'frame_in_batch': int(bni)})
 
             self.run_callbacks("on_predict_postprocess_end")
             
@@ -866,6 +898,20 @@ class OptimizedStreamer(Streamer):
                     infer_counter.add(t_now, 1.0)  # one model call per batch
                 infer_calls_per_sec = infer_counter.rate(t_now)
                 total_ms = (t_now - t_batch_start) * 1e3
+                batch_stage_metrics = self._get_batch_stage_metrics()
+                postprocess_ms = max(
+                    0.0,
+                    ((t_now - postprocess_total_t0) * 1e3)
+                    - batch_stage_metrics.get('preview_encode_ms', 0.0)
+                    - batch_stage_metrics.get('mqtt_ms', 0.0),
+                )
+                timeline_logger.log_span(batch_idx, 'postprocess', _tpost_rel, t_now - stream_start, {'frame_in_batch': int(bni)})
+                per_read = frame_read_ms / max(frames_in_batch, 1)
+                per_roi = roi_ms / max(frames_in_batch, 1)
+                per_mog2 = mog2_ms / max(frames_in_batch, 1)
+                per_defish = defish_ms / max(frames_in_batch, 1)
+                per_pre = preprocess_ms / max(frames_in_batch, 1)
+                per_inf = inference_ms / max(frames_in_batch, 1)
                 perf_logger.log({
                     't_wall': t_now,
                     'batch_idx': batch_idx,
@@ -881,14 +927,64 @@ class OptimizedStreamer(Streamer):
                     'gpu_mem_used_mb': gpu_stats.get('mem_used_mb', float('nan')),
                     'gpu_mem_total_mb': gpu_stats.get('mem_total_mb', float('nan')),
                     'cpu_util': cpu_stats.get('cpu_util', float('nan')),
-                    'roi_ms_per_frame': roi_ms / max(frames_in_batch, 1),
-                    'mog2_ms_per_frame': mog2_ms / max(frames_in_batch, 1),
-                    'preprocess_ms_per_frame': preprocess_ms / max(frames_in_batch, 1),
-                    'inference_ms_per_frame': inference_ms / max(frames_in_batch, 1),
+                    'frame_read_ms_per_frame': per_read,
+                    'roi_ms_per_frame': per_roi,
+                    'mog2_ms_per_frame': per_mog2,
+                    'defish_ms_per_frame': per_defish,
+                    'preprocess_ms_per_frame': per_pre,
+                    'inference_ms_per_frame': per_inf,
                     'postprocess_ms_per_frame': postprocess_ms / max(frames_in_batch, 1),
+                    'nms_ms_per_frame': batch_stage_metrics.get('nms_ms', 0.0) / max(frames_in_batch, 1),
+                    'tracking_ms_per_frame': batch_stage_metrics.get('tracking_ms', 0.0) / max(frames_in_batch, 1),
+                    'hazard_logic_ms_per_frame': batch_stage_metrics.get('hazard_logic_ms', 0.0) / max(frames_in_batch, 1),
+                    'preview_encode_ms_per_frame': batch_stage_metrics.get('preview_encode_ms', 0.0) / max(frames_in_batch, 1),
+                    'mqtt_ms_per_frame': batch_stage_metrics.get('mqtt_ms', 0.0) / max(frames_in_batch, 1),
+                    'event_saving_ms_per_frame': batch_stage_metrics.get('event_saving_ms', 0.0) / max(frames_in_batch, 1),
                     'total_ms_per_frame': total_ms / max(frames_in_batch, 1),
                     'fps_sliding': fps,
                 })
+                scores_list = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None) or []
+                for row in frame_log_rows:
+                    fid = row["frame_id"]
+                    bni = row["bni"]
+                    frame_stage_metrics = self._get_frame_stage_metrics(fid)
+                    motion_score = float(scores_list[bni]) if bni < len(scores_list) else float('nan')
+                    frame_logger.log({
+                        't_wall': t_now,
+                        'batch_idx': batch_idx,
+                        'frame_id': int(fid) if str(fid).isdigit() else fid,
+                        'res_w': res_w,
+                        'res_h': res_h,
+                        'motion_passed': row["motion_passed"],
+                        'motion_score': motion_score,
+                        'gpu_util': gpu_stats.get('gpu_util', float('nan')),
+                        'gpu_mem_used_mb': gpu_stats.get('mem_used_mb', float('nan')),
+                        'cpu_util': cpu_stats.get('cpu_util', float('nan')),
+                        'frame_read_ms': per_read,
+                        'roi_ms': per_roi,
+                        'mog2_ms': per_mog2,
+                        'defish_ms': per_defish,
+                        'preprocess_ms': per_pre,
+                        'inference_ms': per_inf,
+                        'postprocess_ms': postprocess_ms / max(frames_in_batch, 1),
+                        'nms_ms': frame_stage_metrics.get('nms_ms', 0.0),
+                        'tracking_ms': frame_stage_metrics.get('tracking_ms', 0.0),
+                        'hazard_logic_ms': frame_stage_metrics.get('hazard_logic_ms', 0.0),
+                        'preview_encode_ms': frame_stage_metrics.get('preview_encode_ms', 0.0),
+                        'mqtt_ms': frame_stage_metrics.get('mqtt_ms', 0.0),
+                        'event_saving_ms': frame_stage_metrics.get('event_saving_ms', 0.0),
+                        'total_ms': (
+                            per_read
+                            + per_roi
+                            + per_mog2
+                            + per_defish
+                            + per_pre
+                            + per_inf
+                            + (postprocess_ms / max(frames_in_batch, 1))
+                            + frame_stage_metrics.get('preview_encode_ms', 0.0)
+                            + frame_stage_metrics.get('mqtt_ms', 0.0)
+                        ),
+                    })
                 timeline_logger.log_span(batch_idx, 'batch_total', t_batch_start - stream_start, t_now - stream_start, {
                     'inference_ran': int(inference_ran),
                     'frames_in_batch': int(frames_in_batch),
