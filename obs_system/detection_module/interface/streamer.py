@@ -95,6 +95,9 @@ class Streamer(ABC):
         self.high_attention_lane_expand_px = 14
         self.normal_tracker_history = 30
         self.high_attention_tracker_history = 60
+        self._perf_batch_stage_ms: Dict[str, float] = {}
+        self._perf_frame_stage_ms: Dict[str, Dict[str, float]] = {}
+        self._perf_active_frame_id: Optional[str] = None
         self.stream_limit_hours = 0.0
         self.stream_limit_seconds = 0.0
         self.stream_limit_deadline: Optional[float] = None
@@ -127,6 +130,47 @@ class Streamer(ABC):
         self._init_hazard_store()
         
         callbacks.add_integration_callbacks(self) 
+
+    def _reset_stage_metrics(self, frame_ids: Optional[List[Any]] = None) -> None:
+        self._perf_batch_stage_ms = {}
+        self._perf_frame_stage_ms = {}
+        self._perf_active_frame_id = None
+        for frame_id in frame_ids or []:
+            self._perf_frame_stage_ms[str(frame_id)] = {}
+
+    def _record_stage_time(
+        self,
+        stage: str,
+        elapsed_ms: float,
+        *,
+        frame_id: Any = None,
+        frame_ids: Optional[List[Any]] = None,
+    ) -> None:
+        ms = max(0.0, float(elapsed_ms))
+        self._perf_batch_stage_ms[stage] = self._perf_batch_stage_ms.get(stage, 0.0) + ms
+
+        targets: List[str] = []
+        if frame_id is not None:
+            targets = [str(frame_id)]
+        elif frame_ids:
+            targets = [str(fid) for fid in frame_ids]
+
+        if not targets:
+            return
+
+        share = ms / max(len(targets), 1)
+        for target in targets:
+            frame_metrics = self._perf_frame_stage_ms.setdefault(target, {})
+            frame_metrics[stage] = frame_metrics.get(stage, 0.0) + share
+
+    def _get_batch_stage_metrics(self) -> Dict[str, float]:
+        return dict(self._perf_batch_stage_ms)
+
+    def _get_frame_stage_metrics(self, frame_id: Any) -> Dict[str, float]:
+        return dict(self._perf_frame_stage_ms.get(str(frame_id), {}))
+
+    def _set_perf_active_frame(self, frame_id: Any = None) -> None:
+        self._perf_active_frame_id = None if frame_id is None else str(frame_id)
 
     def _note_source_setup_started(self) -> None:
         self._source_setup_started_at = time.perf_counter()
@@ -316,6 +360,7 @@ class Streamer(ABC):
             raise ValueError("Not using ultralytics.Results class in postprocess of Streamer.") 
 
         preds.save_dir = self.save_dir.__str__() 
+        frame_id = self._extract_frame_id(preds)
 
         hazards: List[Dict[str, Any]] = []
         target_hw = None if orig_image is None else orig_image.shape[:2]
@@ -323,15 +368,21 @@ class Streamer(ABC):
         lane_mask = scene_masks.get("lane_mask")
         crosswalk_mask = scene_masks.get("crosswalk_mask")
 
-        if preds.boxes is not None and preds.boxes.xyxy.numel() > 0:
-            hazards = analyze_lane_hazards(
-                boxes=preds.boxes.xyxy,
-                classes=preds.boxes.cls,
-                class_names=self.converter.class_names,
-                lane_mask=lane_mask,
-                crosswalk_mask=crosswalk_mask,
-            )
-            self._activate_high_attention(hazards)
+        with StepContext(
+            name="Hazard Logic",
+            catch=(RuntimeError, Exception),
+            verbose=self.args.verbose,
+            on_complete=lambda _name, ms: self._record_stage_time("hazard_logic_ms", ms, frame_id=frame_id),
+        ):
+            if preds.boxes is not None and preds.boxes.xyxy.numel() > 0:
+                hazards = analyze_lane_hazards(
+                    boxes=preds.boxes.xyxy,
+                    classes=preds.boxes.cls,
+                    class_names=self.converter.class_names,
+                    lane_mask=lane_mask,
+                    crosswalk_mask=crosswalk_mask,
+                )
+                self._activate_high_attention(hazards)
 
         try:  
             self.points.clear()
@@ -339,27 +390,33 @@ class Streamer(ABC):
             pass
         
         if getattr(self, "tracker_model", None) is not None: 
-            self.points = self.tracker_model.update_tracker_history(preds, logic_module=self.logic_module)
+            with StepContext(
+                name="Tracking History",
+                catch=(RuntimeError, Exception),
+                verbose=self.args.verbose,
+                on_complete=lambda _name, ms: self._record_stage_time("tracking_ms", ms, frame_id=frame_id),
+            ):
+                self.points = self.tracker_model.update_tracker_history(preds, logic_module=self.logic_module)
 
 
         mqtt_batch_messages = {"crops": [], "boxes_xyxy": np.zeros((0, 4), dtype=np.int32), "paths": []}
-        try: 
-            # TODO: Don't have only the option to save the image but instead also be able to transmit them through mqtt. 
-            mqtt_batch_messages = self.capture_object_boxes(
-                    image=orig_image,
-                    results=preds,
-                    save=self.args.save, 
-                    return_crops=True
-            )
-        except IndexError as ie: 
-            Streamer.logger.exception(ie)
+        if self.mqtt_interface is not None:
+            try: 
+                mqtt_batch_messages = self.capture_object_boxes(
+                        image=orig_image,
+                        results=preds,
+                        save=False,
+                        return_crops=True
+                )
+            except IndexError as ie: 
+                Streamer.logger.exception(ie)
 
         self.current_hazards = hazards
         preds.hazard_events = hazards
         preds.hazard_mode = "high_attention" if self.high_attention_countdown > 0 else "normal"
 
         if hazards:
-            self._record_hazard_evidence(preds=preds, image=orig_image, hazards=hazards)
+            self._record_hazard_evidence(preds=preds, image=orig_image, hazards=hazards, frame_id=frame_id)
 
         return preds, mqtt_batch_messages
 
@@ -760,6 +817,7 @@ class Streamer(ABC):
 
 
     def _encode_preview_frame(self, frame: np.ndarray) -> Optional[bytes]:
+        t0 = time.perf_counter()
         if frame is None:
             return None
 
@@ -785,6 +843,11 @@ class Streamer(ABC):
         ok, encoded_image = cv2.imencode(".jpg", preview, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
         if not ok:
             return None
+        self._record_stage_time(
+            "preview_encode_ms",
+            (time.perf_counter() - t0) * 1e3,
+            frame_id=self._perf_active_frame_id,
+        )
         return encoded_image.tobytes()
 
 
@@ -853,7 +916,6 @@ class Streamer(ABC):
         if isinstance(image, torch.Tensor): 
             image = image.detach().cpu().numpy() 
 
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR) 
         orig_h, orig_w = image.shape[:2]
         infer_h, infer_w = self.cropped_imgsz if self.use_roi else results.orig_shape
         image = np.asarray(image) 
@@ -1015,7 +1077,7 @@ class Streamer(ABC):
             writer = csv.writer(f)
             writer.writerows(rows)
 
-    def _record_hazard_evidence(self, preds: Any, image: np.ndarray, hazards: List[Dict[str, Any]]) -> None:
+    def _record_hazard_evidence(self, preds: Any, image: np.ndarray, hazards: List[Dict[str, Any]], frame_id: Any = None) -> None:
         if image is None or not hazards:
             return
 
@@ -1066,12 +1128,14 @@ class Streamer(ABC):
                 ]
             )
 
+        t_save0 = time.perf_counter()
         self.save_queue.put(("save_hazard_event", frame_path, annotated.copy(), crop_specs, csv_rows))
+        self._record_stage_time("event_saving_ms", (time.perf_counter() - t_save0) * 1e3, frame_id=frame_id)
         self.run_metrics["saved_hazard_events"] += 1
         self.run_metrics["saved_hazard_crops"] += len(crop_specs)
-        self._publish_hazard_alert(preds=preds, hazards=hazards, frame_name=frame_name)
+        self._publish_hazard_alert(preds=preds, hazards=hazards, frame_name=frame_name, frame_id=frame_id)
 
-    def _publish_hazard_alert(self, preds: Any, hazards: List[Dict[str, Any]], frame_name: str) -> None:
+    def _publish_hazard_alert(self, preds: Any, hazards: List[Dict[str, Any]], frame_name: str, frame_id: Any = None) -> None:
         if self.mqtt_interface is None or not hazards:
             return
 
@@ -1098,7 +1162,9 @@ class Streamer(ABC):
         }
         topic = f"{self.mqtt_interface.topic}/hazard"
         try:
+            t_pub0 = time.perf_counter()
             self.mqtt_interface.publish(topic, payload)
+            self._record_stage_time("mqtt_ms", (time.perf_counter() - t_pub0) * 1e3, frame_id=frame_id)
             self.run_metrics["mqtt_hazard_messages"] += 1
         except Exception:
             Streamer.logger.exception("Failed to publish hazard MQTT event")
@@ -1176,7 +1242,9 @@ class Streamer(ABC):
     @abstractmethod
     def _publish_mqtt_message(self, preds, mqtt_messages, frame_ids)->None: 
         if self.mqtt_interface is not None: 
+            t0 = time.perf_counter()
             self.__generate_mqtt_message(preds, mqtt_messages, frame_ids)
+            self._record_stage_time("mqtt_ms", (time.perf_counter() - t0) * 1e3, frame_ids=frame_ids)
             self.run_metrics["mqtt_batches"] += len(frame_ids)
             # self.mqtt_interface.publish(self.mqtt_interface.topic, message)
 
@@ -1185,7 +1253,9 @@ class Streamer(ABC):
     def _publish_mqtt_message_no_detection(self, preds, frame_index)->None: 
         if self.mqtt_interface is not None: 
             message = self.__generate_mqtt_message_no_motion(preds, frame_index)
+            t0 = time.perf_counter()
             self.mqtt_interface.publish(self.mqtt_interface.topic, message)
+            self._record_stage_time("mqtt_ms", (time.perf_counter() - t0) * 1e3, frame_ids=frame_index)
             self.run_metrics["mqtt_no_detection_batches"] += 1
 
 

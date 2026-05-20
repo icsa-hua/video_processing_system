@@ -72,8 +72,9 @@ class TrackerHandler(EventExtractorInterface):
         ids_t = torch.from_numpy(detections.tracker_id).to(torch.int64) 
         
         results = torch.stack((xyxy[:,0],xyxy[:,1],xyxy[:,2],xyxy[:,3],ids_t.view(-1),scores_t.view(-1), class_t.view(-1)))
-
-        return Results(orig_img=orig_frame, path=f"image_{f_id}.jpg", names=class_names, boxes=results.T, speed=speed)
+        tracked = Results(orig_img=orig_frame, path=f"image_{f_id}.jpg", names=class_names, boxes=results.T, speed=speed)
+        tracked.sv_detections = detections
+        return tracked
 
     
     def update_tracker_history(self,results, logic_module:Any): 
@@ -84,9 +85,15 @@ class TrackerHandler(EventExtractorInterface):
         if results.boxes.id is None or self.__history is None: 
             return {}
 
-        boxes = results.boxes.xyxy.cpu().numpy() 
-        tr_ids = results.boxes.id.int().cpu().numpy() 
-        classes = results.boxes.cls.cpu().numpy()
+        detections = getattr(results, "sv_detections", None)
+        if isinstance(detections, sv.Detections):
+            boxes = detections.xyxy
+            tr_ids = detections.tracker_id
+            classes = detections.class_id
+        else:
+            boxes = results.boxes.xyxy.cpu().numpy() 
+            tr_ids = results.boxes.id.int().cpu().numpy() 
+            classes = results.boxes.cls.cpu().numpy()
 
         if boxes.size == 0: 
             return {}
@@ -141,6 +148,5 @@ class TrackerHandler(EventExtractorInterface):
 
          
     
-
 
 

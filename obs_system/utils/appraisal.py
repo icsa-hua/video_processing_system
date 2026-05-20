@@ -17,12 +17,13 @@ frame_list = []
 
 class StepContext(): 
 
-    def __init__(self, name, *, catch=(Exception,), verbose=False,supress=False,on_error=None):
+    def __init__(self, name, *, catch=(Exception,), verbose=False,supress=False,on_error=None, on_complete=None):
         self.name = name 
         self.catch = catch
         self.verbose = verbose
         self.supress = supress
         self.on_error = on_error 
+        self.on_complete = on_complete
 
         self.t0:float = 0.0 
         self.elapsed_time:float = 0.0 
@@ -43,8 +44,10 @@ class StepContext():
 
         if exc_value is None: 
             self.no_exception_found =True 
-            ms = (self.elapsed_time)*1000 
+            ms = self.elapsed_time
             perf.tick(self.name, ms)
+            if self.on_complete is not None:
+                self.on_complete(self.name, ms)
             if self.verbose: 
                 logger.info(f"[{self.name}] took {self.elapsed_time:.2f}ms")
             else: 
@@ -67,6 +70,5 @@ class StepContext():
         
         else: 
             raise SetupError(self.name, exc_value)
-
 
 
