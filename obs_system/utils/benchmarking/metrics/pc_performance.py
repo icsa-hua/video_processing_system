@@ -47,10 +47,12 @@ class ComputationalPerf(BenchMark):
 # ================= Performance logging helpers =================
 class PerfLogger:
     """Lightweight CSV logger for pipeline performance analysis."""
-    def __init__(self, csv_path: str):
+    def __init__(self, csv_path: str, flush_every: int = 64):
         self.csv_path = Path(csv_path)
         self.csv_path.parent.mkdir(parents=True, exist_ok=True)
         self._fp = open(self.csv_path, 'w', newline='')
+        self._flush_every = max(1, int(flush_every))
+        self._pending_rows = 0
         self._writer = csv.DictWriter(self._fp, fieldnames=[
             't_wall', 'batch_idx', 'frames_in_batch',
             'res_w', 'res_h',
@@ -70,10 +72,15 @@ class PerfLogger:
 
     def log(self, row: dict):
         self._writer.writerow(row)
-        self._fp.flush()
+        self._pending_rows += 1
+        if self._pending_rows >= self._flush_every:
+            self._fp.flush()
+            self._pending_rows = 0
 
     def close(self):
         try:
+            if self._pending_rows:
+                self._fp.flush()
             self._fp.close()
         except Exception:
             pass
@@ -105,10 +112,12 @@ class SlidingCounter:
 
 class FramePerfLogger:
     """Per-frame CSV logger for latency distribution plots."""
-    def __init__(self, csv_path: str):
+    def __init__(self, csv_path: str, flush_every: int = 128):
         self.csv_path = Path(csv_path)
         self.csv_path.parent.mkdir(parents=True, exist_ok=True)
         self._fp = open(self.csv_path, 'w', newline='')
+        self._flush_every = max(1, int(flush_every))
+        self._pending_rows = 0
         self._writer = csv.DictWriter(self._fp, fieldnames=[
             't_wall', 'batch_idx', 'frame_id',
             'res_w', 'res_h',
@@ -124,10 +133,15 @@ class FramePerfLogger:
 
     def log(self, row: dict):
         self._writer.writerow(row)
-        self._fp.flush()
+        self._pending_rows += 1
+        if self._pending_rows >= self._flush_every:
+            self._fp.flush()
+            self._pending_rows = 0
 
     def close(self):
         try:
+            if self._pending_rows:
+                self._fp.flush()
             self._fp.close()
         except Exception:
             pass
@@ -213,10 +227,12 @@ class CPUMonitor:
 
 class TimelineLogger:
     """JSONL logger for CPU/GPU pipeline occupancy (Gantt)."""
-    def __init__(self, jsonl_path: str):
+    def __init__(self, jsonl_path: str, flush_every: int = 128):
         self.jsonl_path = Path(jsonl_path)
         self.jsonl_path.parent.mkdir(parents=True, exist_ok=True)
         self._fp = open(self.jsonl_path, 'w', encoding='utf-8')
+        self._flush_every = max(1, int(flush_every))
+        self._pending_rows = 0
 
     def log_span(self, batch_idx: int, stage: str, t0: float, t1: float, extra: Optional[dict] = None):
         row = {
@@ -228,10 +244,15 @@ class TimelineLogger:
         if extra:
             row.update(extra)
         self._fp.write(json.dumps(row) + "\n")
-        self._fp.flush()
+        self._pending_rows += 1
+        if self._pending_rows >= self._flush_every:
+            self._fp.flush()
+            self._pending_rows = 0
 
     def close(self):
         try:
+            if self._pending_rows:
+                self._fp.flush()
             self._fp.close()
         except Exception:
             pass

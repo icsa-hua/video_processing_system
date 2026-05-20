@@ -151,9 +151,9 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
         verbose=bool(args.verbose),
     )
 
-    perf_logger = PerfLogger(str(run_dir / "perf_log.csv"))
-    frame_logger = FramePerfLogger(str(run_dir / "perf_frames.csv"))
-    timeline_logger = TimelineLogger(str(run_dir / "perf_timeline.jsonl"))
+    perf_logger = PerfLogger(str(run_dir / "perf_log.csv"), flush_every=64)
+    frame_logger = FramePerfLogger(str(run_dir / "perf_frames.csv"), flush_every=128)
+    timeline_logger = TimelineLogger(str(run_dir / "perf_timeline.jsonl"), flush_every=128)
     gpu_mon = GPUMonitor(gpu_index=args.gpu_index)
     cpu_mon = CPUMonitor()
     jetson_sampler = JetsonSampler(interval_s=args.jetson_interval)

@@ -297,12 +297,15 @@ class OptimizedStreamer(Streamer):
 
         # Performance logging (for plots: FPS vs motion density, inference calls/sec, latency breakdown)
         perf_log_path = getattr(self.args, 'perf_log', None) or 'assets/perf_logs/perf_log.csv'
-        perf_logger = PerfLogger(perf_log_path)
+        perf_flush_every = int(getattr(self.args, 'perf_log_flush_every', 64) or 64)
+        frame_flush_every = int(getattr(self.args, 'perf_frame_log_flush_every', 128) or 128)
+        timeline_flush_every = int(getattr(self.args, 'perf_timeline_flush_every', 128) or 128)
+        perf_logger = PerfLogger(perf_log_path, flush_every=perf_flush_every)
         frame_log_path = getattr(self.args, 'perf_log_frames', None) or 'assets/perf_logs/perf_frames.csv'
-        frame_logger = FramePerfLogger(frame_log_path)
+        frame_logger = FramePerfLogger(frame_log_path, flush_every=frame_flush_every)
 
         timeline_path = getattr(self.args, 'perf_timeline', None) or 'assets/perf_logs/perf_timeline.jsonl'
-        timeline_logger = TimelineLogger(timeline_path)
+        timeline_logger = TimelineLogger(timeline_path, flush_every=timeline_flush_every)
 
         gpu_index = int(getattr(self.args, 'gpu_index', 0))
         gpu_mon = GPUMonitor(gpu_index=gpu_index)
@@ -394,7 +397,8 @@ class OptimizedStreamer(Streamer):
             self._reset_stage_metrics(frame_ids)
             self._record_stage_time("frame_read_ms", frame_read_ms, frame_ids=frame_ids)
             self._note_frame_ids(frame_ids)
-            original_images = [cv2.cvtColor(im, cv2.COLOR_BGR2RGB) for im in im0s.copy()]
+            original_images_bgr = [im.copy() for im in im0s]
+            original_images = [cv2.cvtColor(im, cv2.COLOR_BGR2RGB) for im in original_images_bgr]
             
             _t0, _t0_rel = 0.0,0.0
 
@@ -418,7 +422,7 @@ class OptimizedStreamer(Streamer):
                 
             # Required here to capture the cropped frames, if cropping happens
             if self.use_roi:
-                cropped_original_images = [cv2.cvtColor(im, cv2.COLOR_BGR2RGB) for im in im0s.copy()]
+                cropped_original_images = self.logic_module['ROI'].crop_image(original_images)
                    
             with StepContext(name="BackGround Subtractor  (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
                 # Motion gate (vectorized over the mini batch) 
@@ -580,6 +584,7 @@ class OptimizedStreamer(Streamer):
                 if not keep_frame:
                     im0s[i] = empty_image(im0s[i])
                     original_images[i] = empty_image(original_images[i])
+                    original_images_bgr[i] = empty_image(original_images_bgr[i])
 
             if self.args.plot_performance:
                 _t0 = time.perf_counter()
@@ -800,7 +805,7 @@ class OptimizedStreamer(Streamer):
                     #     preds = self.tracker_model.detect(predictions=preds,save=False,orig_frame=orig_img,f_id=frame_ids[self.seen],class_names=self.converter.class_names)
 
             with profilers[2]:
-                out = self.postprocess_batch(results_list, orig_images=original_images)
+                out = self.postprocess_batch(results_list, orig_images=original_images_bgr)
 
                 # if self.mp is not None and self.args.bench: 
                 #     gt_cls, gt_bbs = self.__gt_labels.pop(self.seen, (np.zeros((0,), np.int64),np.zeros((0,4), np.float32)))

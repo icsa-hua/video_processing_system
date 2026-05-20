@@ -81,6 +81,9 @@ def _configure_streamer_args(streamer: Any, config: PipelineConfig, run_dir: Pat
     streamer.args.perf_log = str(run_dir / "perf_log.csv")
     streamer.args.perf_log_frames = str(run_dir / "perf_frames.csv")
     streamer.args.perf_timeline = str(run_dir / "perf_timeline.jsonl")
+    streamer.args.perf_log_flush_every = 64
+    streamer.args.perf_frame_log_flush_every = 128
+    streamer.args.perf_timeline_flush_every = 128
 
 
 def _summarize_output_load(

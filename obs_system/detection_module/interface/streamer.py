@@ -400,16 +400,16 @@ class Streamer(ABC):
 
 
         mqtt_batch_messages = {"crops": [], "boxes_xyxy": np.zeros((0, 4), dtype=np.int32), "paths": []}
-        try: 
-            # TODO: Don't have only the option to save the image but instead also be able to transmit them through mqtt. 
-            mqtt_batch_messages = self.capture_object_boxes(
-                    image=orig_image,
-                    results=preds,
-                    save=self.args.save, 
-                    return_crops=True
-            )
-        except IndexError as ie: 
-            Streamer.logger.exception(ie)
+        if self.mqtt_interface is not None:
+            try: 
+                mqtt_batch_messages = self.capture_object_boxes(
+                        image=orig_image,
+                        results=preds,
+                        save=False,
+                        return_crops=True
+                )
+            except IndexError as ie: 
+                Streamer.logger.exception(ie)
 
         self.current_hazards = hazards
         preds.hazard_events = hazards
@@ -916,7 +916,6 @@ class Streamer(ABC):
         if isinstance(image, torch.Tensor): 
             image = image.detach().cpu().numpy() 
 
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR) 
         orig_h, orig_w = image.shape[:2]
         infer_h, infer_w = self.cropped_imgsz if self.use_roi else results.orig_shape
         image = np.asarray(image) 
