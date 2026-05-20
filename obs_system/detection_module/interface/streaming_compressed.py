@@ -2,6 +2,7 @@ from obs_system.communication_module.interface import mqtt_interface
 from obs_system.utils.common import _get_gt, _empty_dets_numpy, _empty_results
 from obs_system.compressed.interface.compressed_yolo import CompressedYOLO
 from obs_system.compressed.interface.tensor_yolo import TensorRTYOLO
+from obs_system.detection_module.interface.detection_batch import DetectionBatch, FrameDetections
 from obs_system.detection_module.interface.streamer import Streamer
 from obs_system.utils.benchmarking.metrics.model_performance import ModelPerf
 from obs_system.utils.benchmarking.metrics.pc_performance import PerfLogger, SlidingCounter, CPUMonitor, GPUMonitor, FramePerfLogger, TimelineLogger
@@ -290,8 +291,7 @@ class OptimizedStreamer(Streamer):
         if event is not None and torch.cuda.is_available():
             torch.cuda.current_stream().wait_event(event)
 
-        frame_bundles = []
-        results_list = []
+        frames: List[FrameDetections] = []
         nms_ms = 0.0
         for bni, fid in enumerate(frame_ids):
             orig_img = original_images[bni]
@@ -300,13 +300,15 @@ class OptimizedStreamer(Streamer):
             cls_ = i_classes[bni]
 
             if not mfgs[bni] or boxes is None or len(boxes) == 0:
-                frame_bundles.append({"frame_id": fid, "orig_img": orig_img, "bni": bni, "empty": True})
-                results_list.append(_empty_results(orig_image=orig_img, class_names=self.converter.class_names, frame_id=fid))
+                frames.append(FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img))
                 continue
 
-            boxes_t = torch.as_tensor(boxes)
-            scores_t = torch.as_tensor(scores)
-            classes_t = torch.as_tensor(cls_).long()
+            boxes_t = boxes if torch.is_tensor(boxes) else torch.as_tensor(boxes)
+            scores_t = scores if torch.is_tensor(scores) else torch.as_tensor(scores)
+            classes_t = cls_ if torch.is_tensor(cls_) else torch.as_tensor(cls_)
+            scores_t = scores_t.to(dtype=torch.float32)
+            classes_t = classes_t.to(dtype=torch.int64)
+            boxes_t = boxes_t.to(dtype=torch.float32)
 
             t_nms0 = time.perf_counter()
             keep = batched_nms(boxes_t, scores_t, classes_t.long(), iou_threshold=NMS_IOU)
@@ -322,49 +324,52 @@ class OptimizedStreamer(Streamer):
                 )
 
             if boxes_t.numel() == 0:
-                frame_bundles.append({"frame_id": fid, "orig_img": orig_img, "bni": bni, "empty": True})
-                results_list.append(_empty_results(orig_image=orig_img, class_names=self.converter.class_names, frame_id=fid))
+                frames.append(FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img))
                 continue
 
-            inf_results = torch.cat([boxes_t, scores_t[:, None], classes_t[:, None].float()], dim=1)
-            results_list.append(
-                Results(
+            frames.append(
+                FrameDetections(
+                    frame_id=fid,
+                    batch_index=bni,
                     orig_img=orig_img,
-                    path=f"image_{fid}.jpg",
-                    names=self.converter.class_names,
-                    boxes=inf_results,
-                    speed={},
+                    boxes=boxes_t,
+                    scores=scores_t,
+                    classes=classes_t,
                 )
             )
-            frame_bundles.append({"frame_id": fid, "orig_img": orig_img, "bni": bni, "empty": False})
 
         stage_a["im0s"] = im0s
         return {
-            "frame_bundles": frame_bundles,
-            "results_list": results_list,
+            "detections": DetectionBatch(frames=frames),
             "preprocess_ms": preprocess_ms,
             "inference_ms": inference_ms,
             "nms_ms": nms_ms,
         }
 
-    def _stage_c_tracking_and_hazard_logic(self, results_list, frame_bundles, orig_images_bgr, profilers):
+    def _stage_c_tracking_and_hazard_logic(self, detection_batch: DetectionBatch, orig_images_bgr, profilers):
         tracked_results = []
-        for fb, result in zip(frame_bundles, results_list):
-            if self.tracker_model is not None and result.boxes is not None and result.boxes.xyxy.numel() > 0:
-                fid = fb["frame_id"]
-                tracked = self.tracker_model.detect(
-                    predictions=result,
-                    save=False,
-                    orig_frame=fb["orig_img"],
-                    f_id=fid,
+        frame_bundles = []
+        for frame in detection_batch:
+            frame_bundles.append(
+                {
+                    "frame_id": frame.frame_id,
+                    "orig_img": frame.orig_img,
+                    "bni": frame.batch_index,
+                    "empty": frame.is_empty,
+                }
+            )
+            if self.tracker_model is not None and not frame.is_empty:
+                tracked = self.tracker_model.detect_compact(
+                    frame=frame,
                     class_names=self.converter.class_names,
                 )
                 tracked_results.append(tracked)
             else:
-                tracked_results.append(result)
+                tracked_results.append(frame.to_results(self.converter.class_names))
 
         with profilers[2]:
-            return self.postprocess_batch(tracked_results, orig_images=orig_images_bgr)
+            postprocessed = self.postprocess_batch(tracked_results, orig_images=orig_images_bgr)
+        return frame_bundles, postprocessed
 
     def _stage_d_dispatch_optional_sinks(
         self,
@@ -796,12 +801,12 @@ class OptimizedStreamer(Streamer):
             preprocess_ms = stage_b["preprocess_ms"]
             inference_ms = stage_b["inference_ms"]
             nms_ms = stage_b["nms_ms"]
-            frame_bundles = stage_b["frame_bundles"]
+            detection_batch = stage_b["detections"]
             postprocess_total_t0 = time.perf_counter()
             if self.args.plot_performance:
                 _tpost = time.perf_counter()
                 _tpost_rel = _tpost - stream_start
-            preds = self._stage_c_tracking_and_hazard_logic(stage_b["results_list"], frame_bundles, original_images_bgr, profilers)
+            frame_bundles, preds = self._stage_c_tracking_and_hazard_logic(detection_batch, original_images_bgr, profilers)
             frame_log_rows = self._stage_d_dispatch_optional_sinks(
                 preds,
                 frame_bundles,
