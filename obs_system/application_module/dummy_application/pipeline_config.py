@@ -45,6 +45,7 @@ class PipelineConfig:
     preview_jpeg_quality: int = 70
     preview_fps: float = 8.0
     stream_limit_hours: float = DEFAULT_STREAM_LIMIT_HOURS
+    lane_recalibration_interval_frames: int = 0
 
     @classmethod
     def from_namespace(cls, args: argparse.Namespace) -> "PipelineConfig":
@@ -82,6 +83,9 @@ class PipelineConfig:
 
         if float(self.stream_limit_hours) < 0:
             raise ValueError("Set stream_limit_hours to a value greater than or equal to 0")
+
+        if int(self.lane_recalibration_interval_frames) < 0:
+            raise ValueError("Set lane_recalibration_interval_frames to a value greater than or equal to 0")
 
         return self
 
@@ -124,4 +128,5 @@ def build_arg_parser() -> argparse.ArgumentParser:
     argparser.add_argument("--plot_perf", metavar="TRT", action=argparse.BooleanOptionalAction, help="Plot performance diagrams")
     argparser.add_argument("--only_FPS", metavar="TRT", action=argparse.BooleanOptionalAction, help="Measure average FPS regardless of plotting.")
     argparser.add_argument( "--stream_limit_hours", metavar="SL", type=float, default=DEFAULT_STREAM_LIMIT_HOURS, help="Maximum runtime in hours for live streams only. Set to 0 to disable the limit.")
+    argparser.add_argument("--lane_recalibration_interval_frames", metavar="LR", type=int, default=0, help="For live streams, rerun lane calibration after this many frames. Set to 0 to disable.")
     return argparser

@@ -34,7 +34,13 @@ class _TensorRTAdapter(_BaseModelAdapter):
     fp16 = True
 
     def __init__(self, *, model_name: str, engine_path: str | Path) -> None:
-        self._model = TensorRTYOLO(model_name=model_name, engine_path=engine_path, fp16=True)
+        self._model = TensorRTYOLO(
+            model_name=model_name,
+            engine_path=engine_path,
+            conf_thres=CONF_THR,
+            iou_thres=NMS_IOU,
+            fp16=True,
+        )
 
 
     def __call__(self, images: torch.Tensor, orig_imgs=None, debug: bool = False):
@@ -49,7 +55,11 @@ class _OnnxAdapter(_BaseModelAdapter):
     fp16 = False
 
     def __init__(self, *, model_path: str | Path, device: torch.device) -> None:
-        self._model = CompressedYOLO(str(model_path))
+        self._model = CompressedYOLO(
+            str(model_path),
+            conf_thres=CONF_THR,
+            iou_thres=NMS_IOU,
+        )
         self._device = device
 
 

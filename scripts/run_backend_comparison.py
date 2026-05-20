@@ -1,12 +1,8 @@
 from __future__ import annotations
 
 import argparse
-import csv
-import json
-import threading
 import time
 
-import cbor2
 import numpy as np
 
 from pathlib import Path
@@ -15,6 +11,17 @@ from typing import Any
 from obs_system.application_module.dummy_application.dummy_app import Application
 from obs_system.application_module.dummy_application.pipeline_config import DEFAULT_BENCH_LABELS, PipelineConfig
 from obs_system.detection_module.interface.factory import StreamerFactory
+from obs_system.utils.global_config import CONF_THR, NMS_IOU
+from obs_system.utils.benchmarking.backend_benchmark import (
+    JetsonSampler,
+    build_hardware_summary,
+    count_data_rows,
+    dump_json,
+    fmt_opt,
+    latency_summary,
+    read_cbor_lines,
+    read_csv_rows,
+)
 from obs_system.utils.appraisal import frame_list, perf
 from obs_system.utils.logger import get_logger
 from ultralytics.utils import DEFAULT_CFG
@@ -27,181 +34,6 @@ DEFAULT_ONNX_MODEL = "assets/compressed_models/yolov8s.onnx"
 DEFAULT_ENGINE_MODEL = "assets/compressed_models/yolov8s.engine"
 MQTT_ARCHIVE_PATH = Path("assets/mqtt/saved_publishes.cbor")
 HAZARD_CSV_PATH = Path("assets/hazard_events/hazard_events.csv")
-
-
-class JetsonSampler:
-    def __init__(self, interval_s: float = 1.0) -> None:
-        self.interval_s = max(0.2, float(interval_s))
-        self.samples: list[dict[str, float]] = []
-        self.available = False
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-
-    def start(self) -> None:
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=5.0)
-
-    def _run(self) -> None:
-        try:
-            from jtop import jtop
-        except Exception:
-            return
-
-        try:
-            with jtop() as jetson:
-                self.available = True
-                while jetson.ok() and not self._stop.is_set():
-                    stats = dict(getattr(jetson, "stats", {}) or {})
-                    sample = _extract_jetson_sample(stats)
-                    if sample:
-                        self.samples.append(sample)
-                    time.sleep(self.interval_s)
-        except Exception:
-            logger.debug("Jetson sampling unavailable", exc_info=True)
-
-
-def _to_float(value: Any) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    text = str(value).strip()
-    if not text:
-        return None
-
-    cleaned = []
-    for ch in text:
-        if ch.isdigit() or ch in ".-":
-            cleaned.append(ch)
-        elif cleaned:
-            break
-    if not cleaned:
-        return None
-    try:
-        return float("".join(cleaned))
-    except ValueError:
-        return None
-
-
-def _pick_value(stats: dict[str, Any], *needles: str) -> float | None:
-    lowered = [needle.lower() for needle in needles]
-    matches: list[float] = []
-    for key, value in stats.items():
-        key_lower = str(key).lower()
-        if any(needle in key_lower for needle in lowered):
-            parsed = _to_float(value)
-            if parsed is not None:
-                matches.append(parsed)
-    if matches:
-        return float(np.mean(matches))
-    return None
-
-
-def _extract_jetson_sample(stats: dict[str, Any]) -> dict[str, float]:
-    sample: dict[str, float] = {}
-
-    cpu_util = _pick_value(stats, "cpu")
-    gpu_util = _pick_value(stats, "gpu")
-    ram_used = _pick_value(stats, "ram")
-    temp_cpu = _pick_value(stats, "temp cpu", "cpu temp")
-    temp_gpu = _pick_value(stats, "temp gpu", "gpu temp")
-    power_w = _pick_value(stats, "power tot", "power", "vdd")
-
-    if cpu_util is not None:
-        sample["jetson_cpu_util"] = cpu_util
-    if gpu_util is not None:
-        sample["jetson_gpu_util"] = gpu_util
-    if ram_used is not None:
-        sample["jetson_ram_metric"] = ram_used
-    if temp_cpu is not None:
-        sample["jetson_cpu_temp_c"] = temp_cpu
-    if temp_gpu is not None:
-        sample["jetson_gpu_temp_c"] = temp_gpu
-    if power_w is not None:
-        sample["jetson_power_metric"] = power_w
-
-    return sample
-
-
-def _count_data_rows(path: Path) -> int:
-    if not path.exists():
-        return 0
-    with path.open("r", newline="") as f:
-        reader = csv.DictReader(f)
-        return sum(1 for _ in reader)
-
-
-def _read_csv_rows(path: Path) -> list[dict[str, str]]:
-    if not path.exists():
-        return []
-    with path.open("r", newline="") as f:
-        return list(csv.DictReader(f))
-
-
-def _read_cbor_lines(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-
-    messages: list[dict[str, Any]] = []
-    for raw in path.read_bytes().splitlines():
-        if not raw.strip():
-            continue
-        try:
-            payload = cbor2.loads(raw)
-        except Exception:
-            continue
-        if isinstance(payload, dict):
-            messages.append(payload)
-    return messages
-
-
-def _latency_summary(frame_rows: list[dict[str, str]]) -> dict[str, float]:
-    latencies = [float(row["total_ms"]) for row in frame_rows if row.get("total_ms")]
-    if not latencies:
-        return {
-            "avg_latency_ms": 0.0,
-            "p50_latency_ms": 0.0,
-            "p95_latency_ms": 0.0,
-        }
-    xs = np.asarray(latencies, dtype=np.float32)
-    return {
-        "avg_latency_ms": float(xs.mean()),
-        "p50_latency_ms": float(np.percentile(xs, 50)),
-        "p95_latency_ms": float(np.percentile(xs, 95)),
-    }
-
-
-def _mean_metric(rows: list[dict[str, str]], key: str) -> float | None:
-    vals = []
-    for row in rows:
-        value = row.get(key)
-        if value in (None, "", "nan"):
-            continue
-        try:
-            vals.append(float(value))
-        except ValueError:
-            continue
-    if not vals:
-        return None
-    return float(np.mean(vals))
-
-
-def _summarize_jetson(samples: list[dict[str, float]]) -> dict[str, float]:
-    if not samples:
-        return {}
-
-    keys = sorted({key for sample in samples for key in sample})
-    out: dict[str, float] = {}
-    for key in keys:
-        vals = [sample[key] for sample in samples if key in sample]
-        if vals:
-            out[f"{key}_mean"] = float(np.mean(vals))
-    return out
 
 
 def _build_streamer(model_name: str, model_path: Path, use_tensorrt: bool):
@@ -239,8 +71,8 @@ def _summarize_output_load(
     mqtt_rows_before: int,
     streamer_metrics: dict[str, Any],
 ) -> dict[str, Any]:
-    hazard_rows = _read_csv_rows(HAZARD_CSV_PATH)
-    mqtt_messages = _read_cbor_lines(MQTT_ARCHIVE_PATH)
+    hazard_rows = read_csv_rows(HAZARD_CSV_PATH)
+    mqtt_messages = read_cbor_lines(MQTT_ARCHIVE_PATH)
 
     new_hazards = hazard_rows[hazard_rows_before:]
     new_mqtt = mqtt_messages[mqtt_rows_before:]
@@ -316,8 +148,8 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
     app.streamer = streamer
     app.model = streamer.model
 
-    hazard_rows_before = _count_data_rows(HAZARD_CSV_PATH)
-    mqtt_rows_before = len(_read_cbor_lines(MQTT_ARCHIVE_PATH))
+    hazard_rows_before = count_data_rows(HAZARD_CSV_PATH)
+    mqtt_rows_before = len(read_cbor_lines(MQTT_ARCHIVE_PATH))
 
     jetson_sampler = JetsonSampler(interval_s=args.jetson_interval)
     elapsed_s = 0.0
@@ -345,16 +177,15 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
     perf.finalize()
     setup_metrics = perf.results()
 
-    frame_rows = _read_csv_rows(run_dir / "perf_frames.csv")
-    batch_rows = _read_csv_rows(run_dir / "perf_log.csv")
-    latency = _latency_summary(frame_rows)
+    frame_rows = read_csv_rows(run_dir / "perf_frames.csv")
+    batch_rows = read_csv_rows(run_dir / "perf_log.csv")
+    latency = latency_summary(frame_rows)
     streamer_metrics = dict(streamer.run_metrics)
-    hardware = {
-        "cpu_util_mean": _mean_metric(batch_rows, "cpu_util"),
-        "gpu_util_mean": _mean_metric(batch_rows, "gpu_util"),
-        "gpu_mem_used_mb_mean": _mean_metric(batch_rows, "gpu_mem_used_mb"),
-    }
-    hardware.update(_summarize_jetson(jetson_sampler.samples))
+    hardware = build_hardware_summary(
+        batch_rows=batch_rows,
+        jetson_samples=jetson_sampler.samples,
+        jetson_context=jetson_sampler.static_context,
+    )
 
     detection_metrics = streamer.mp.results() if config.bench and streamer.mp is not None else {}
     output_load = _summarize_output_load(
@@ -370,6 +201,8 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
         "model_path": model_path,
         "model_kind": model_suffix.lstrip("."),
         "run_dir": str(run_dir),
+        "confidence_threshold": CONF_THR,
+        "nms_iou": NMS_IOU,
         "runtime_seconds": elapsed_s,
         "fps": fps,
         **latency,
@@ -395,8 +228,7 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
         "output_load": output_load,
     }
 
-    with (run_dir / "summary.json").open("w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=2, sort_keys=True)
+    dump_json(run_dir / "summary.json", summary)
 
     return summary
 
@@ -405,8 +237,8 @@ def _write_markdown_summary(path: Path, summaries: list[dict[str, Any]]) -> None
     lines = [
         "# Backend Comparison",
         "",
-        "| Model | FPS | Avg Latency ms | P50 ms | P95 ms | CPU % | GPU % | GPU Mem MB | Dropped | Stream Open s | First Frame s | mAP | Precision | Recall | F1 | Saved Events | MQTT Batches | Avg Crop JPEG B |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Model | FPS | Avg Latency ms | P50 ms | P95 ms | CPU % | GPU % | GPU Mem MB | Temp C | Power W | Power Mode | EMC MHz | Dropped | Stream Open s | First Frame s | mAP | Precision | Recall | F1 | Saved Events | MQTT Batches | Avg Crop JPEG B |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
 
     for summary in summaries:
@@ -414,22 +246,26 @@ def _write_markdown_summary(path: Path, summaries: list[dict[str, Any]]) -> None
         hardware = summary.get("hardware", {})
         output_load = summary.get("output_load", {})
         lines.append(
-            "| {model} | {fps:.2f} | {avg:.2f} | {p50:.2f} | {p95:.2f} | {cpu} | {gpu} | {mem} | {dropped} | {open_s} | {first_s} | {map_} | {prec} | {rec} | {f1} | {events} | {mqtt} | {crop_b:.2f} |".format(
+            "| {model} | {fps:.2f} | {avg:.2f} | {p50:.2f} | {p95:.2f} | {cpu} | {gpu} | {mem} | {temp} | {power_w} | {power_mode} | {emc} | {dropped} | {open_s} | {first_s} | {map_} | {prec} | {rec} | {f1} | {events} | {mqtt} | {crop_b:.2f} |".format(
                 model=Path(summary["model_path"]).name,
                 fps=summary.get("fps", 0.0),
                 avg=summary.get("avg_latency_ms", 0.0),
                 p50=summary.get("p50_latency_ms", 0.0),
                 p95=summary.get("p95_latency_ms", 0.0),
-                cpu=_fmt_opt(hardware.get("cpu_util_mean")),
-                gpu=_fmt_opt(hardware.get("gpu_util_mean")),
-                mem=_fmt_opt(hardware.get("gpu_mem_used_mb_mean")),
+                cpu=fmt_opt(hardware.get("cpu_util_mean")),
+                gpu=fmt_opt(hardware.get("gpu_util_mean")),
+                mem=fmt_opt(hardware.get("gpu_mem_used_mb_mean")),
+                temp=fmt_opt(hardware.get("temperature_c_mean")),
+                power_w=fmt_opt(hardware.get("power_w_mean")),
+                power_mode=fmt_opt(hardware.get("power_mode")),
+                emc=fmt_opt(hardware.get("emc_frequency_mhz_mean")),
                 dropped=summary.get("dropped_frames", 0),
-                open_s=_fmt_opt(summary.get("stream_open_seconds")),
-                first_s=_fmt_opt(summary.get("first_frame_seconds")),
-                map_=_fmt_opt(detection.get("mAP")),
-                prec=_fmt_opt(detection.get("Precision")),
-                rec=_fmt_opt(detection.get("Recall")),
-                f1=_fmt_opt(detection.get("F1")),
+                open_s=fmt_opt(summary.get("stream_open_seconds")),
+                first_s=fmt_opt(summary.get("first_frame_seconds")),
+                map_=fmt_opt(detection.get("mAP")),
+                prec=fmt_opt(detection.get("Precision")),
+                rec=fmt_opt(detection.get("Recall")),
+                f1=fmt_opt(detection.get("F1")),
                 events=output_load.get("saved_event_count", 0),
                 mqtt=output_load.get("mqtt_crop_batch_count", 0),
                 crop_b=output_load.get("avg_crop_jpeg_bytes", 0.0),
@@ -437,16 +273,6 @@ def _write_markdown_summary(path: Path, summaries: list[dict[str, Any]]) -> None
         )
 
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def _fmt_opt(value: Any) -> str:
-    if value is None:
-        return "-"
-    try:
-        return f"{float(value):.2f}"
-    except Exception:
-        return str(value)
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run PT/ONNX/ENGINE backend comparison on the same video source.")
@@ -472,8 +298,7 @@ def main() -> None:
     summaries = [_run_single_benchmark(model_path=path, args=args, output_dir=output_dir) for path in model_paths]
 
     summary_json = output_dir / "comparison_summary.json"
-    with summary_json.open("w", encoding="utf-8") as f:
-        json.dump(summaries, f, indent=2, sort_keys=True)
+    dump_json(summary_json, summaries)
 
     _write_markdown_summary(output_dir / "comparison_summary.md", summaries)
 

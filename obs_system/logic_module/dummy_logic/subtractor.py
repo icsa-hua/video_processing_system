@@ -27,14 +27,21 @@ class Subtractor(EventExtractorInterface):
                  detect_shadows=True,
                  empty_background_image="",
                  downscale=(320,320),
-                 accum_time:int=500,
-                 save_path:str="lanes_final.png"
+                 accum_time:int=100,
+                 save_path:str="lanes_final.png",
+                 recalibration_interval_frames:int=0,
+                 recalibration_accum_time:Optional[int]=None,
     ):
         self.downscale = downscale
         self.threshold_ratio = float(threshold_ratio)
         self.initial_accum_time = max(int(accum_time), 0)
         self.accum_time = self.initial_accum_time
         self.save_path = save_path
+        self.recalibration_interval_frames = max(int(recalibration_interval_frames), 0)
+        self.recalibration_accum_time = max(
+            int(recalibration_accum_time if recalibration_accum_time is not None else self.initial_accum_time),
+            0,
+        )
         
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
                     history=history, 
@@ -73,6 +80,9 @@ class Subtractor(EventExtractorInterface):
         self._startup_warmup_active = False
         self._startup_frames_seen = 0
         self._ready_for_inference = True
+        self._recalibration_enabled = False
+        self._recalibration_active = False
+        self._frames_since_last_calibration = 0
 
 
     def configure_source_warmup(self, source_is_stream: bool) -> None:
@@ -91,6 +101,50 @@ class Subtractor(EventExtractorInterface):
                 "Subtractor startup warmup enabled for live stream: %d frames before inference",
                 self.initial_accum_time,
             )
+
+
+    def configure_runtime_recalibration(
+        self,
+        *,
+        enabled: bool,
+        interval_frames: Optional[int] = None,
+        accum_time: Optional[int] = None,
+    ) -> None:
+        if interval_frames is not None:
+            self.recalibration_interval_frames = max(int(interval_frames), 0)
+        if accum_time is not None:
+            self.recalibration_accum_time = max(int(accum_time), 0)
+
+        self._recalibration_enabled = bool(enabled and self.recalibration_interval_frames > 0)
+        self._frames_since_last_calibration = 0
+
+        if not self._recalibration_enabled:
+            self._recalibration_active = False
+
+
+    def _reset_calibration_buffers(self) -> None:
+        self.acc_mask = None
+        self.prev_mask = None
+        self.__calibration_started = False
+        self.__calibration_ended = False
+
+
+    def _has_nonempty_mask(self, mask: Optional[np.ndarray]) -> bool:
+        return bool(mask is not None and mask.size > 0 and cv2.countNonZero(mask) > 0)
+
+
+    def _begin_runtime_recalibration(self) -> None:
+        if not self._recalibration_enabled or self.recalibration_accum_time <= 0:
+            return
+
+        self.accum_time = self.recalibration_accum_time
+        self._recalibration_active = True
+        self._frames_since_last_calibration = 0
+        self._reset_calibration_buffers()
+        logger.info(
+            "Starting runtime lane recalibration for %d frames",
+            self.recalibration_accum_time,
+        )
 
 
     def is_ready_for_inference(self) -> bool:
@@ -145,6 +199,15 @@ class Subtractor(EventExtractorInterface):
         h, w = batch[0].shape[:2]
         self._last_frame_shape = (h, w)
 
+        if (
+            self._recalibration_enabled
+            and not self._recalibration_active
+            and self.__calibration_ended
+            and self.recalibration_interval_frames > 0
+            and self._frames_since_last_calibration >= self.recalibration_interval_frames
+        ):
+            self._begin_runtime_recalibration()
+
         if not self.__calibration_started: 
             self.acc_mask = np.zeros((h, w), np.float32) 
             self.prev_mask = np.zeros((h,w), np.float32)
@@ -169,19 +232,31 @@ class Subtractor(EventExtractorInterface):
             if save_img and save_idx is not None: 
                 save_idx += 1 
 
-            if startup_skip_batch and self.accum_time > 0:
+            should_accumulate_calibration = False
+            if self.accum_time > 0:
+                should_accumulate_calibration = startup_skip_batch or self._recalibration_active or motion_flag
+
+            if should_accumulate_calibration:
                 self.__cal_calibrator(frame, size=(h,w))
-                self._startup_frames_seen = min(self.initial_accum_time, self._startup_frames_seen + 1)
-            elif motion_flag and self.accum_time > 0:
-                self.__cal_calibrator(frame, size=(h,w))
+                if startup_skip_batch:
+                    self._startup_frames_seen = min(self.initial_accum_time, self._startup_frames_seen + 1)
 
         if self.accum_time == 0 and self.__calibration_ended :
             lanes_final = self.__apply_calibration(last_frame, save_img=save_img)
             self.accum_time = -1
             self._startup_warmup_active = False
             self._ready_for_inference = True
+            self._recalibration_active = False
+            self._frames_since_last_calibration = 0
             self._recent.clear()
             self._hold = 0
+        elif (
+            self._recalibration_enabled
+            and self.__calibration_ended
+            and not self._recalibration_active
+            and not startup_skip_batch
+        ):
+            self._frames_since_last_calibration += len(batch)
 
         if startup_skip_batch:
             motion_flags = [False] * len(motion_flags)
@@ -294,11 +369,23 @@ class Subtractor(EventExtractorInterface):
                 lanes_clean[labels == i] = 255
 
         lanes_smooth = cv2.GaussianBlur(lanes_clean, (11,11), 0) 
-        _, lanes_final = cv2.threshold(lanes_smooth, 50, 255, cv2.THRESH_BINARY)
-        self.lanes_mask = lanes_final
-        self.crosswalk_mask = self.__detect_crosswalks(last_frame=frame, lanes_mask=lanes_final)
+        _, candidate_lanes = cv2.threshold(lanes_smooth, 50, 255, cv2.THRESH_BINARY)
+        candidate_crosswalk = self.__detect_crosswalks(last_frame=frame, lanes_mask=candidate_lanes)
+
+        previous_lanes = None if self.lanes_mask is None else self.lanes_mask.copy()
+        previous_crosswalk = None if self.crosswalk_mask is None else self.crosswalk_mask.copy()
+
+        keep_candidate = self._has_nonempty_mask(candidate_lanes) or not self._has_nonempty_mask(previous_lanes)
+        if keep_candidate:
+            self.lanes_mask = candidate_lanes
+            self.crosswalk_mask = candidate_crosswalk
+            lanes_final = candidate_lanes
+        else:
+            lanes_final = previous_lanes
+            self.crosswalk_mask = previous_crosswalk
+            logger.info("Runtime lane recalibration produced an empty mask; keeping previous lane mask")
         
-        if save_img and self.save_path: 
+        if save_img and self.save_path and lanes_final is not None: 
             self.__save_calibration(frame, lanes_final)
         
         return lanes_final
@@ -374,10 +461,9 @@ class Subtractor(EventExtractorInterface):
 
         contours, _ = cv2.findContours(stripes, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         lane_area = float(cv2.countNonZero(lanes_mask))
-        min_area = max(50.0, 0.00015 * lane_area)
+        min_area = max(50.0, 0.0015 * lane_area)
 
-        stripe_mask = np.zeros_like(lanes_mask, dtype=np.uint8)
-        valid_stripes = 0
+        stripe_candidates = []
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
@@ -389,18 +475,89 @@ class Subtractor(EventExtractorInterface):
                 continue
 
             aspect = float(w) / float(max(h, 1))
-            if aspect < 2.2:
+            if aspect < 3.5:
                 continue
 
             extent = area / float(w * h)
-            if extent < 0.30:
+            if extent < 0.45:
                 continue
 
-            valid_stripes += 1
-            cv2.drawContours(stripe_mask, [cnt], -1, 255, thickness=-1)
+            stripe_candidates.append(
+                {
+                    "contour": cnt,
+                    "x": int(x),
+                    "y": int(y),
+                    "w": int(w),
+                    "h": int(h),
+                    "cx": float(x + (w * 0.5)),
+                    "cy": float(y + (h * 0.5)),
+                }
+            )
 
-        # At least a few repeated bars to avoid random lane highlights.
-        if valid_stripes < 3:
+        if len(stripe_candidates) < 4:
+            return np.zeros_like(lanes_mask, dtype=np.uint8)
+
+        stripe_candidates.sort(key=lambda item: item["cy"])
+
+        def _x_overlap_ratio(a: dict, b: dict) -> float:
+            left = max(a["x"], b["x"])
+            right = min(a["x"] + a["w"], b["x"] + b["w"])
+            overlap = max(0.0, float(right - left))
+            denom = max(float(max(a["w"], b["w"])), 1.0)
+            return overlap / denom
+
+        def _is_sequential(prev: dict, curr: dict) -> bool:
+            gap_y = curr["cy"] - prev["cy"]
+            mean_h = 0.5 * float(prev["h"] + curr["h"])
+            width_ratio = float(curr["w"]) / float(max(prev["w"], 1))
+            height_ratio = float(curr["h"]) / float(max(prev["h"], 1))
+            x_overlap = _x_overlap_ratio(prev, curr)
+
+            return (
+                gap_y >= (0.35 * mean_h)
+                and gap_y <= (4.0 * max(prev["h"], curr["h"]))
+                and 0.55 <= width_ratio <= 1.8
+                and 0.5 <= height_ratio <= 2.0
+                and x_overlap >= 0.45
+            )
+
+        stripe_runs = []
+        current_run = [stripe_candidates[0]]
+        for cand in stripe_candidates[1:]:
+            if _is_sequential(current_run[-1], cand):
+                current_run.append(cand)
+            else:
+                stripe_runs.append(current_run)
+                current_run = [cand]
+        stripe_runs.append(current_run)
+
+        stripe_mask = np.zeros_like(lanes_mask, dtype=np.uint8)
+        selected_runs = 0
+
+        for run in stripe_runs:
+            if len(run) < 4:
+                continue
+
+            gaps = np.diff([item["cy"] for item in run]).astype(np.float32)
+            if gaps.size > 0:
+                gap_mean = float(gaps.mean())
+                if gap_mean <= 0:
+                    continue
+                gap_cv = float(gaps.std() / gap_mean)
+                if gap_cv > 0.55:
+                    continue
+
+            run_heights = np.array([item["h"] for item in run], dtype=np.float32)
+            run_span = float(run[-1]["cy"] - run[0]["cy"])
+            if run_span < (2.5 * float(np.median(run_heights))):
+                continue
+
+            selected_runs += 1
+            for item in run:
+                cv2.drawContours(stripe_mask, [item["contour"]], -1, 255, thickness=-1)
+
+        # Require at least one long ordered stripe run instead of isolated bright bars.
+        if selected_runs == 0:
             return np.zeros_like(lanes_mask, dtype=np.uint8)
 
         crosswalk = cv2.morphologyEx(
@@ -411,7 +568,7 @@ class Subtractor(EventExtractorInterface):
         )
         crosswalk = cv2.dilate(
             crosswalk,
-            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)),
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
             iterations=1,
         )
         crosswalk = cv2.bitwise_and(crosswalk, lanes_mask)

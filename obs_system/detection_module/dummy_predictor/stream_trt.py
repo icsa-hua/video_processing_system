@@ -263,10 +263,10 @@ class TensorRTRTXStreamer(OptimizedStreamer):
                         boxes_t, 
                         scores_t, 
                         classes_t.long(), 
-                        iou_threshold=(1.0-NMS_IOU)
+                        iou_threshold=NMS_IOU
                     )
                     
-                    keep = keep_pc if keep_pc.numel()==0 else keep_pc[nms(boxes_t[keep_pc],scores_t[keep_pc], iou_threshold=(1-NMS_IOU))]
+                    keep = keep_pc if keep_pc.numel()==0 else keep_pc[nms(boxes_t[keep_pc],scores_t[keep_pc], iou_threshold=NMS_IOU)]
                     boxes_t, scores_t, classes_t = boxes_t[keep], scores_t[keep], classes_t[keep] 
 
                     inf_results = torch.stack(
@@ -389,7 +389,6 @@ class TensorRTRTXStreamer(OptimizedStreamer):
 
     def _publish_mqtt_message_no_detection(self, preds, frame_index)->None: 
         super()._publish_mqtt_message_no_detection(preds, frame_index)
-
 
 
 
