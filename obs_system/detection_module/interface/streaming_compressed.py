@@ -131,13 +131,11 @@ class OptimizedStreamer(Streamer):
     def _publish_no_motion_preview(self, original_images, preview_queue, producer_flag) -> None:
         if not self.args.show or not original_images:
             return
-
-        preview = original_images[-1].copy()
-        if self.use_roi and self.logic_module is not None and self.logic_module.get("ROI") is not None:
-            self.logic_module["ROI"]._show_regions(preview)
-
-        self.proc_image = self._encode_preview_frame(cv2.cvtColor(preview, cv2.COLOR_RGB2BGR))
-        self.publish_preview(preview_queue, producer_flag)
+        self._enqueue_async_sink(
+            ("preview_frame", original_images[-1].copy(), preview_queue, producer_flag),
+            stage="preview_encode_ms",
+            drop_if_full=True,
+        )
 
 
     def _sync_subtractor_warmup_state(self) -> bool:
@@ -148,6 +146,282 @@ class OptimizedStreamer(Streamer):
 
         self.done_warmup = bool(subtractor.is_ready_for_inference())
         return self.done_warmup
+
+    def _stage_a_acquire_and_gate(self, batch_payload, frame_read_ms, stream_start, timeline_logger, batch_idx):
+        paths, im0s, s = batch_payload
+        frame_ids = self._get_batch_frame_ids(labels=s, frame_count=len(im0s))
+        self._reset_stage_metrics(frame_ids)
+        self._record_stage_time("frame_read_ms", frame_read_ms, frame_ids=frame_ids)
+        self._note_frame_ids(frame_ids)
+        original_images_bgr = [im.copy() for im in im0s]
+        original_images = [cv2.cvtColor(im, cv2.COLOR_BGR2RGB) for im in original_images_bgr]
+        cropped_original_images = original_images
+
+        roi_ms = 0.0
+        mog2_ms = 0.0
+        defish_ms = 0.0
+        _t0 = 0.0
+        _t0_rel = 0.0
+        res_h, res_w = im0s[0].shape[:2] if len(im0s) else (0, 0)
+
+        if self.use_roi:
+            with StepContext(name="ROI Cropping", catch=(RuntimeError,), verbose=self.args.verbose):
+                if self.args.plot_performance:
+                    _t0 = time.perf_counter()
+                    _t0_rel = _t0 - stream_start
+                im0s = self.logic_module["ROI"].crop_image(im0s)
+                cropped_original_images = self.logic_module["ROI"].crop_image(original_images)
+                if self.args.plot_performance:
+                    roi_ms = (time.perf_counter() - _t0) * 1e3
+                    self._record_stage_time("roi_ms", roi_ms, frame_ids=frame_ids)
+                    _t1_rel = time.perf_counter() - stream_start
+                    timeline_logger.log_span(batch_idx, "roi", _t0_rel, _t1_rel)
+                    res_h, res_w = im0s[0].shape[:2] if len(im0s) else (0, 0)
+
+        with StepContext(name="BackGround Subtractor  (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
+            if self.args.plot_performance:
+                _t0 = time.perf_counter()
+                _t0_rel = _t0 - stream_start
+            mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=True)
+            if self.args.plot_performance:
+                mog2_ms = (time.perf_counter() - _t0) * 1e3
+                self._record_stage_time("mog2_ms", mog2_ms, frame_ids=frame_ids)
+                _t1_rel = time.perf_counter() - stream_start
+                timeline_logger.log_span(batch_idx, "mog2", _t0_rel, _t1_rel)
+            if lanes_final is not None:
+                self.lanes_final = lanes_final
+
+        warmup_pending = not self.done_warmup
+        if warmup_pending:
+            if self._sync_subtractor_warmup_state():
+                Streamer.logger.info("Background subtractor warmup completed. Detection pipeline enabled for the next batch.")
+            self.step_attention_state()
+            return {"skip_reason": "warmup"}
+
+        if self.should_force_inference_all_frames():
+            mfgs = [True] * len(mfgs)
+
+        with StepContext(name="FishEyE Processing (Defish)", catch=(RuntimeError,), verbose=self.args.verbose):
+            if self.logic_module["FEP"] is not None:
+                Streamer.logger.debug("FEP enabled")
+                t_defish0 = time.perf_counter()
+                im0s = self.logic_module["FEP"]._defish(im0s)
+                defish_ms = (time.perf_counter() - t_defish0) * 1e3
+                self._record_stage_time("defish_ms", defish_ms, frame_ids=frame_ids)
+
+        return {
+            "paths": paths,
+            "im0s": im0s,
+            "frame_ids": frame_ids,
+            "frame_read_ms": frame_read_ms,
+            "original_images": original_images,
+            "original_images_bgr": original_images_bgr,
+            "cropped_original_images": cropped_original_images,
+            "mfgs": mfgs,
+            "roi_ms": roi_ms,
+            "mog2_ms": mog2_ms,
+            "defish_ms": defish_ms,
+            "res_h": res_h,
+            "res_w": res_w,
+            "skip_reason": "no_motion" if not any(mfgs) else None,
+        }
+
+    def _stage_b_inference_and_nms(self, stage_a, model, profilers, activities, stream_start, timeline_logger, batch_idx):
+        im0s = stage_a["im0s"]
+        original_images = stage_a["original_images"]
+        original_images_bgr = stage_a["original_images_bgr"]
+        cropped_original_images = stage_a["cropped_original_images"]
+        mfgs = stage_a["mfgs"]
+        frame_ids = stage_a["frame_ids"]
+
+        for i, keep_frame in enumerate(mfgs):
+            if not keep_frame:
+                im0s[i] = empty_image(im0s[i])
+                original_images[i] = empty_image(original_images[i])
+                original_images_bgr[i] = empty_image(original_images_bgr[i])
+
+        if self.args.plot_performance:
+            _t0 = time.perf_counter()
+            _t0_rel = _t0 - stream_start
+
+        with profilers[0]:
+            images = self.preprocess(im0s)
+
+        preprocess_ms = 0.0
+        if self.args.plot_performance:
+            preprocess_ms = (time.perf_counter() - _t0) * 1e3
+            self._record_stage_time("preprocess_ms", preprocess_ms, frame_ids=frame_ids)
+            timeline_logger.log_span(batch_idx, "preprocess", _t0_rel, time.perf_counter() - stream_start)
+
+        if self.args.plot_performance:
+            _t0 = time.perf_counter()
+            _t0_rel = _t0 - stream_start
+
+        with profilers[1]:
+            event = None
+            if self.seen == 0 and self.args.verbose:
+                with profile(activities=activities) as prof:
+                    infer_outputs = self.model(
+                        images,
+                        orig_imgs=original_images if not self.use_roi else cropped_original_images,
+                        debug=self.args.verbose,
+                    )
+                if not os.path.exists("assets/trace_jsons"):
+                    os.mkdir("assets/trace_jsons")
+                model_tag = getattr(self, "model_tag", type(self.model).__name__)
+                prof.export_chrome_trace(f"assets/trace_jsons/trace_{model_tag}.json")
+            else:
+                infer_outputs = self.model(
+                    images,
+                    orig_imgs=original_images if not self.use_roi else cropped_original_images,
+                    debug=self.args.verbose,
+                )
+            if isinstance(infer_outputs, tuple) and len(infer_outputs) == 2 and isinstance(infer_outputs[0], tuple):
+                (i_boxes, i_scores, i_classes), event = infer_outputs
+            else:
+                i_boxes, i_scores, i_classes = infer_outputs
+
+        inference_ms = 0.0
+        if self.args.plot_performance:
+            inference_ms = (time.perf_counter() - _t0) * 1e3
+            self._record_stage_time("inference_ms", inference_ms, frame_ids=frame_ids)
+            timeline_logger.log_span(batch_idx, "inference", _t0_rel, time.perf_counter() - stream_start)
+
+        if event is not None and torch.cuda.is_available():
+            torch.cuda.current_stream().wait_event(event)
+
+        frame_bundles = []
+        results_list = []
+        nms_ms = 0.0
+        for bni, fid in enumerate(frame_ids):
+            orig_img = original_images[bni]
+            boxes = i_boxes[bni]
+            scores = i_scores[bni]
+            cls_ = i_classes[bni]
+
+            if not mfgs[bni] or boxes is None or len(boxes) == 0:
+                frame_bundles.append({"frame_id": fid, "orig_img": orig_img, "bni": bni, "empty": True})
+                results_list.append(_empty_results(orig_image=orig_img, class_names=self.converter.class_names, frame_id=fid))
+                continue
+
+            boxes_t = torch.as_tensor(boxes)
+            scores_t = torch.as_tensor(scores)
+            classes_t = torch.as_tensor(cls_).long()
+
+            t_nms0 = time.perf_counter()
+            keep = batched_nms(boxes_t, scores_t, classes_t.long(), iou_threshold=NMS_IOU)
+            boxes_t, scores_t, classes_t = boxes_t[keep], scores_t[keep], classes_t[keep]
+            nms_elapsed_ms = (time.perf_counter() - t_nms0) * 1e3
+            nms_ms += nms_elapsed_ms
+            self._record_stage_time("nms_ms", nms_elapsed_ms, frame_id=fid)
+
+            if self.use_roi:
+                boxes_t = self.logic_module["ROI"].translate_bounding_boxes(
+                    results=boxes_t,
+                    orig_img_shape=self.original_imgsz,
+                )
+
+            if boxes_t.numel() == 0:
+                frame_bundles.append({"frame_id": fid, "orig_img": orig_img, "bni": bni, "empty": True})
+                results_list.append(_empty_results(orig_image=orig_img, class_names=self.converter.class_names, frame_id=fid))
+                continue
+
+            inf_results = torch.cat([boxes_t, scores_t[:, None], classes_t[:, None].float()], dim=1)
+            results_list.append(
+                Results(
+                    orig_img=orig_img,
+                    path=f"image_{fid}.jpg",
+                    names=self.converter.class_names,
+                    boxes=inf_results,
+                    speed={},
+                )
+            )
+            frame_bundles.append({"frame_id": fid, "orig_img": orig_img, "bni": bni, "empty": False})
+
+        stage_a["im0s"] = im0s
+        return {
+            "frame_bundles": frame_bundles,
+            "results_list": results_list,
+            "preprocess_ms": preprocess_ms,
+            "inference_ms": inference_ms,
+            "nms_ms": nms_ms,
+        }
+
+    def _stage_c_tracking_and_hazard_logic(self, results_list, frame_bundles, orig_images_bgr, profilers):
+        tracked_results = []
+        for fb, result in zip(frame_bundles, results_list):
+            if self.tracker_model is not None and result.boxes is not None and result.boxes.xyxy.numel() > 0:
+                fid = fb["frame_id"]
+                tracked = self.tracker_model.detect(
+                    predictions=result,
+                    save=False,
+                    orig_frame=fb["orig_img"],
+                    f_id=fid,
+                    class_names=self.converter.class_names,
+                )
+                tracked_results.append(tracked)
+            else:
+                tracked_results.append(result)
+
+        with profilers[2]:
+            return self.postprocess_batch(tracked_results, orig_images=orig_images_bgr)
+
+    def _stage_d_dispatch_optional_sinks(
+        self,
+        preds,
+        frame_bundles,
+        paths,
+        original_images_bgr,
+        preview_queue,
+        producer_flag,
+    ):
+        frame_log_rows = []
+        mqtt_preds = []
+        mqtt_images = []
+        mqtt_frame_ids = []
+
+        for fb, result in zip(frame_bundles, preds):
+            fid = fb["frame_id"]
+            bni = fb["bni"]
+            filename = Path(paths[bni])
+
+            if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
+                self._enqueue_async_sink(
+                    ("result_outputs", result, filename, int(getattr(self.dataset, "count", fid)), preview_queue, producer_flag, getattr(result, "track_points", None)),
+                    stage="preview_encode_ms" if self.args.show else None,
+                    frame_id=fid,
+                    drop_if_full=bool(self.args.show and not (self.args.save or self.args.save_txt or self.args.save_crop)),
+                )
+
+            hazards = getattr(result, "hazard_events", None) or []
+            if hazards:
+                self._enqueue_async_sink(
+                    ("hazard_event", result, original_images_bgr[bni], list(hazards), fid),
+                    stage="event_saving_ms",
+                    frame_id=fid,
+                )
+
+            if self.mqtt_interface is not None and result.boxes is not None and result.boxes.xyxy.numel() > 0:
+                mqtt_preds.append(result)
+                mqtt_images.append(original_images_bgr[bni])
+                mqtt_frame_ids.append(fid)
+
+            frame_log_rows.append(
+                {
+                    "frame_id": fid,
+                    "bni": bni,
+                    "motion_passed": int(not fb["empty"]),
+                }
+            )
+
+        if mqtt_preds:
+            self._enqueue_async_sink(
+                ("mqtt_results", mqtt_preds, mqtt_images, mqtt_frame_ids),
+                stage="mqtt_ms",
+                frame_ids=mqtt_frame_ids,
+            )
+
+        return frame_log_rows
 
     def _ensure_benchmark_labels_loaded(self) -> None:
         if self._benchmark_labels_loaded or not self.args.bench:
@@ -392,78 +666,22 @@ class OptimizedStreamer(Streamer):
 
             batch_payload, frame_read_ms = self.batch
             self.batch = batch_payload
-            paths, im0s, s = batch_payload
-            frame_ids = self._get_batch_frame_ids(labels=s, frame_count=len(im0s))
-            self._reset_stage_metrics(frame_ids)
-            self._record_stage_time("frame_read_ms", frame_read_ms, frame_ids=frame_ids)
-            self._note_frame_ids(frame_ids)
-            original_images_bgr = [im.copy() for im in im0s]
-            original_images = [cv2.cvtColor(im, cv2.COLOR_BGR2RGB) for im in original_images_bgr]
-            
-            _t0, _t0_rel = 0.0,0.0
-
-            res_h, res_w = im0s[0].shape[:2] if len(im0s) else (0, 0)
-
-            #use_roi = True if self.args.roi and self.logic_module["ROI"] is not None else False 
-            if self.use_roi :
-                with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
-                    if self.args.plot_performance:
-                        _t0 = time.perf_counter()
-                        _t0_rel = _t0 - stream_start
-                    
-                    im0s = self.logic_module['ROI'].crop_image(im0s)
-                    
-                    if self.args.plot_performance:
-                        roi_ms = (time.perf_counter() - _t0) * 1e3
-                        self._record_stage_time("roi_ms", roi_ms, frame_ids=frame_ids)
-                        _t1_rel = time.perf_counter() - stream_start
-                        timeline_logger.log_span(batch_idx, 'roi', _t0_rel, _t1_rel)
-                        res_h, res_w = im0s[0].shape[:2] if len(im0s) else (0, 0)
-                
-            # Required here to capture the cropped frames, if cropping happens
-            if self.use_roi:
-                cropped_original_images = self.logic_module['ROI'].crop_image(original_images)
-                   
-            with StepContext(name="BackGround Subtractor  (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
-                # Motion gate (vectorized over the mini batch) 
-                if self.args.plot_performance:
-
-                    _t0 = time.perf_counter()
-                    _t0_rel = _t0 - stream_start
-               
-                mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=True)
-                
-                if self.args.plot_performance:
-                    mog2_ms = (time.perf_counter() - _t0) * 1e3
-                    self._record_stage_time("mog2_ms", mog2_ms, frame_ids=frame_ids)
-                    _t1_rel = time.perf_counter() - stream_start
-                    timeline_logger.log_span(batch_idx, 'mog2', _t0_rel, _t1_rel)
-                if lanes_final is not None: 
-                    self.lanes_final = lanes_final
-
-            warmup_pending = not self.done_warmup
-            if warmup_pending:
-                if self._sync_subtractor_warmup_state():
-                    Streamer.logger.info("Background subtractor warmup completed. Detection pipeline enabled for the next batch.")
-                self.step_attention_state()
+            stage_a = self._stage_a_acquire_and_gate(batch_payload, frame_read_ms, stream_start, timeline_logger, batch_idx)
+            if stage_a.get("skip_reason") == "warmup":
                 continue
 
-            if self.should_force_inference_all_frames():
-                mfgs = [True] * len(mfgs)
+            paths = stage_a["paths"]
+            im0s = stage_a["im0s"]
+            frame_ids = stage_a["frame_ids"]
+            original_images_bgr = stage_a["original_images_bgr"]
+            roi_ms = stage_a["roi_ms"]
+            mog2_ms = stage_a["mog2_ms"]
+            defish_ms = stage_a["defish_ms"]
+            res_h = stage_a["res_h"]
+            res_w = stage_a["res_w"]
+            mfgs = stage_a["mfgs"]
 
-            with StepContext(name="FishEyE Processing (Defish)", catch=(RuntimeError, ), verbose=self.args.verbose):    
-                # Defish FishEye camera frames to increase accuracy
-                if self.logic_module["FEP"] is not None: 
-                    Streamer.logger.debug("FEP enabled")
-                    t_defish0 = time.perf_counter()
-                    im0s = self.logic_module["FEP"]._defish(im0s)  
-                    defish_ms = (time.perf_counter() - t_defish0) * 1e3
-                    self._record_stage_time("defish_ms", defish_ms, frame_ids=frame_ids)
-
-                    
-            # For rectilinear images, motion gating seems to only work with ROI.  
-            # Speeds up the process when no motion is detected in the incoming batch. 
-            if not any(mfgs):
+            if stage_a.get("skip_reason") == "no_motion":
                 Streamer.logger.debug("No motion detected in the batch - skipping inference")
                 empty_preds = return_no_motion_frames(
                     im0s=im0s,
@@ -481,14 +699,10 @@ class OptimizedStreamer(Streamer):
                             gt_classes=gt_cls.astype(np.int64),
                         )
                 self._note_emitted_result(len(empty_preds))
-                yield empty_preds 
-                self._set_perf_active_frame(frame_ids[-1] if frame_ids else None)
-                self._publish_mqtt_message_no_detection(preds=empty_preds, frame_index=frame_ids)
-                self._publish_no_motion_preview(original_images, preview_queue, producer_flag)
-                self._set_perf_active_frame(None)
+                yield empty_preds
+                self._enqueue_async_sink(("mqtt_no_detection", empty_preds, frame_ids), stage="mqtt_ms", frame_ids=frame_ids)
+                self._publish_no_motion_preview(original_images_bgr, preview_queue, producer_flag)
                 if self.args.plot_performance:
-
-                    # ---- perf log (batch skipped) ----
                     t_now = time.perf_counter()
                     scores = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None)
                     avg_motion_score = float(np.mean(scores)) if scores else 0.0
@@ -528,9 +742,8 @@ class OptimizedStreamer(Streamer):
                         'total_ms_per_frame': total_ms / max(len(im0s), 1),
                         'fps_sliding': fps_sliding,
                     })
-                
-                    # per-frame latency log (skipped inference)
-                    scores_list = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None) or [0.0]*len(im0s)
+
+                    scores_list = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None) or [0.0] * len(im0s)
                     per_roi = roi_ms / max(len(im0s), 1)
                     per_mog2 = mog2_ms / max(len(im0s), 1)
                     per_read = frame_read_ms / max(len(im0s), 1)
@@ -571,256 +784,34 @@ class OptimizedStreamer(Streamer):
                             ),
                         })
 
-                    # timeline span for skipped batch
                     timeline_logger.log_span(batch_idx, 'batch_total', t_batch_start - stream_start, t_now - stream_start, {
                         'inference_ran': 0,
                         'frames_in_batch': int(len(im0s)),
                     })
                     batch_idx += 1
                 self.step_attention_state()
-                continue # to the next batch 
-                
-            for i, keep_frame in enumerate(mfgs):
-                if not keep_frame:
-                    im0s[i] = empty_image(im0s[i])
-                    original_images[i] = empty_image(original_images[i])
-                    original_images_bgr[i] = empty_image(original_images_bgr[i])
+                continue
 
-            if self.args.plot_performance:
-                _t0 = time.perf_counter()
-                _t0_rel = _t0 - stream_start
-
-            with profilers[0]: 
-                # if cropped the im0s here have a (572, 1290, 3) shape. Otherwise same shape with original images
-                images = self.preprocess(im0s) 
-                model_input_shape = tuple(int(v) for v in images.shape[-2:])
-                            
-            if self.args.plot_performance:
-                preprocess_ms = (time.perf_counter() - _t0) * 1e3 
-                self._record_stage_time("preprocess_ms", preprocess_ms, frame_ids=frame_ids)
-                timeline_logger.log_span(batch_idx, 'preprocess', _t0_rel, time.perf_counter() - stream_start)
-
-            if self.args.plot_performance:
-                _t0 = time.perf_counter()
-                _t0_rel = _t0 - stream_start
-
-            
-            with profilers[1]:
-                event = None
-                if self.seen == 0 and self.args.verbose:
-                    with profile(activities=activities) as prof:
-                        infer_outputs = self.model(
-                            images,
-                            orig_imgs=original_images if not self.use_roi else cropped_original_images,
-                            debug=self.args.verbose,
-                        )
-
-                    if not os.path.exists("assets/trace_jsons"):
-                        os.mkdir("assets/trace_jsons")
-
-                    model_tag = getattr(self, "model_tag", type(self.model).__name__)
-                    prof.export_chrome_trace(f"assets/trace_jsons/trace_{model_tag}.json")
-                else:
-                    # The shape of image is (3, 640, 640) | original_images shape is (1080, 1920, 3)
-                    # If ROI is enabled then original_images shape should be the cropped size.
-                    infer_outputs = self.model(
-                        images,
-                        orig_imgs=original_images if not self.use_roi else cropped_original_images,
-                        debug=self.args.verbose,
-                    )
-
-                if isinstance(infer_outputs, tuple) and len(infer_outputs) == 2 and isinstance(infer_outputs[0], tuple):
-                    (i_boxes, i_scores, i_classes), event = infer_outputs
-                else:
-                    i_boxes, i_scores, i_classes = infer_outputs
-            
-            if self.args.plot_performance:
-                inference_ms = (time.perf_counter() - _t0) * 1e3
-                self._record_stage_time("inference_ms", inference_ms, frame_ids=frame_ids)
-                timeline_logger.log_span(batch_idx, 'inference', _t0_rel, time.perf_counter() - stream_start)
-
-            if event is not None and torch.cuda.is_available():
-                # Synchronize only when the backend provides a CUDA completion event.
-                torch.cuda.current_stream().wait_event(event)
-
+            stage_b = self._stage_b_inference_and_nms(stage_a, model, profilers, activities, stream_start, timeline_logger, batch_idx)
+            preprocess_ms = stage_b["preprocess_ms"]
+            inference_ms = stage_b["inference_ms"]
+            nms_ms = stage_b["nms_ms"]
+            frame_bundles = stage_b["frame_bundles"]
             postprocess_total_t0 = time.perf_counter()
             if self.args.plot_performance:
                 _tpost = time.perf_counter()
                 _tpost_rel = _tpost - stream_start
+            preds = self._stage_c_tracking_and_hazard_logic(stage_b["results_list"], frame_bundles, original_images_bgr, profilers)
+            frame_log_rows = self._stage_d_dispatch_optional_sinks(
+                preds,
+                frame_bundles,
+                paths,
+                original_images_bgr,
+                preview_queue,
+                producer_flag,
+            )
 
-            frame_bundles = [] # one entry per frame in batch 
-            for bni in range(len(original_images)): 
-
-                fid = frame_ids[bni]
-                orig_img = original_images[bni]
-
-                # If self.use_roi then boxes here have the coordinates of the cropped images. 
-                boxes = i_boxes[bni] 
-                scores = i_scores[bni]
-                cls_ = i_classes[bni]
-
-                if not mfgs[bni]: 
-                    frame_bundles.append({
-                        "frame_id": fid, 
-                        "orig_img": orig_img, 
-                        "empty": True, 
-                        "boxes": None, 
-                        "scores": None, 
-                        "classes": None,
-                        "bni":bni
-                    })
-                    continue
-
-
-                # preds = None 
-                # self.seen = bni
-                # current_frame_id = frame_ids[self.seen]
-                # No result returned from the object detection model
-
-                if boxes is None or len(boxes) == 0: 
-                    frame_bundles.append({
-                        "frame_id": fid, 
-                        "orig_img": orig_img, 
-                        "empty": True, 
-                        "boxes": None, 
-                        "scores": None, 
-                        "classes": None,
-                        "bni": bni
-                    })
-                    continue
-
-                boxes_t = torch.as_tensor(boxes) 
-                scores_t = torch.as_tensor(scores) 
-                classes_t = torch.as_tensor(cls_).long()
-
-                t_nms0 = time.perf_counter()
-                keep = batched_nms(
-                        boxes_t, 
-                        scores_t, 
-                        classes_t.long(), 
-                        iou_threshold=NMS_IOU
-                    )
-                    
-                # keep = keep_pc if keep_pc.numel()==0 else keep_pc[nms(boxes_t[keep_pc],scores_t[keep_pc], iou_threshold=(1-NMS_IOU))]
-                boxes_t, scores_t, classes_t = boxes_t[keep], scores_t[keep], classes_t[keep] 
-                nms_elapsed_ms = (time.perf_counter() - t_nms0) * 1e3
-                nms_ms += nms_elapsed_ms
-                self._record_stage_time("nms_ms", nms_elapsed_ms, frame_id=fid)
-               
-                # inference_shape = (
-                #     cropped_original_images[bni].shape[:2]
-                #     if self.use_roi
-                #     else orig_img.shape[:2]
-                # )
-                # boxes_t = self._map_boxes_to_original_frame(
-                #     boxes=boxes_t,
-                #     model_input_shape=model_input_shape,
-                #     original_shape=orig_img.shape[:2],
-                #     inference_shape=inference_shape,
-                # )
-
-                if self.use_roi: 
-                    boxes_t = self.logic_module['ROI'].translate_bounding_boxes(
-                        results=boxes_t,
-                        orig_img_shape=self.original_imgsz
-                    )
-
-                frame_bundles.append({
-                    "frame_id": fid, 
-                    "orig_img": orig_img, 
-                    "empty": False, 
-                    "boxes": boxes_t, 
-                    "scores": scores_t, 
-                    "classes": classes_t,
-                    "bni": bni
-                })
-
-            results_list = []  # Results only for non-empty frames
-            results_map = {} # frame_id -> Results 
-
-            for fb in frame_bundles: 
-
-                if fb["empty"]: 
-                    r = _empty_results(orig_image=fb["orig_img"]) 
-                else: 
-
-                    inf_results = torch.cat(
-                            [fb["boxes"],
-                             fb["scores"][:,None],
-                             fb["classes"][:,None].float()],
-                            dim=1
-                    )
-                    
-                    # len(r) = number of detections. r.boxes.xyxy.shape is (4,4) e.g. 
-                    # len(frame_bundles) = Number of frames. 
-                    r = Results(
-                        orig_img=fb["orig_img"],
-                        path=f"image_{fb['frame_id']}.jpg",
-                        names=self.converter.class_names,
-                        boxes=inf_results, 
-                        speed={}
-                    )
-
-                results_list.append(r) 
-                results_map[fb["frame_id"]] = r
-
-                # ================= FPS MEASUREMENT =================
-                if (self.args.only_FPS and not self.args.plot_performance) or (self.args.plot_performance): 
-                    now = time.perf_counter()
-                    fps_times.append(now)
-                    total_frames += 1
-                
-                    # Sliding-window FPS (end-to-end)
-                    if len(fps_times) > 1:
-                        fps = (len(fps_times) - 1) / (fps_times[-1] - fps_times[0])
-
-                    # Log FPS once per second
-                    if now - last_fps_log >= 1.0:
-                        elapsed = now - stream_start
-                        avg_fps = total_frames / elapsed
-                        Streamer.logger.info(
-                            f"[FPS] End-to-end FPS: {fps:.2f} | "
-                            f"Average FPS since start: {avg_fps:.2f}"
-                        )
-                        last_fps_log = now
-                    # ===================================================
-
-                if self.tracker_model is not None:
-                    if fb["empty"] : continue 
-                    
-                    fid = fb["frame_id"] 
-                    t_track0 = time.perf_counter()
-                    results_map[fid] = self.tracker_model.detect(
-                        predictions=results_map[fid], 
-                        save=False, 
-                        orig_frame=fb["orig_img"], 
-                        f_id=fid, 
-                        class_names=self.converter.class_names
-                    )
-                    tracking_elapsed_ms = (time.perf_counter() - t_track0) * 1e3
-                    tracking_ms += tracking_elapsed_ms
-                    self._record_stage_time("tracking_ms", tracking_elapsed_ms, frame_id=fid)
-                        
-                    # with StepContext(name="Tracking Frame", catch=(RuntimeError, ), verbose=self.args.verbose):
-                    #     preds = self.tracker_model.detect(predictions=preds,save=False,orig_frame=orig_img,f_id=frame_ids[self.seen],class_names=self.converter.class_names)
-
-            with profilers[2]:
-                out = self.postprocess_batch(results_list, orig_images=original_images_bgr)
-
-                # if self.mp is not None and self.args.bench: 
-                #     gt_cls, gt_bbs = self.__gt_labels.pop(self.seen, (np.zeros((0,), np.int64),np.zeros((0,4), np.float32)))
-                #     self.mp.update(
-                #         boxes_xyxy = boxes_t.cpu().numpy().astype(np.float32), 
-                #         scores = scores_t.cpu().numpy().astype(np.float32), 
-                #         classes = classes_t.cpu().numpy().astype(np.int32), 
-                #         gt_boxes_xyxy=gt_bbs.astype(np.float32), 
-                #         gt_classes = gt_cls.astype(np.int64)
-                #     ) 
-
-            preds = [] 
-            mqtt_messages = [] 
-            frame_log_rows = []
-            for fb, (r,mqtt_mess) in zip(frame_bundles,out):
+            for fb, r in zip(frame_bundles, preds):
                 r.speed = {
                     "preprocess": profilers[0].dt * 1e3/len(im0s),
                     "inference": profilers[1].dt * 1e3/len(im0s),
@@ -850,42 +841,22 @@ class OptimizedStreamer(Streamer):
                 #     continue
 
                 self._note_emitted_result()
-                yield r 
+                yield r
 
-                if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
-                    filename=Path(paths[bni])
-                    self._set_perf_active_frame(fid)
-
-                    if self.args.save or self.args.show:
-                        self.optional_save_or_show(r, filename)
-
-                    self.save_queue.put(("save_results", r, filename, fid))
-
-                    if self.args.save_txt or self.args.save_crop:
-                        with StepContext(name="Save Results", catch=(Exception, RuntimeError), verbose=self.args.verbose):
-                            self.batch[2][bni] += self.write_results(
-                                preds=r, 
-                                i = bni,
-                                im= original_images,
+                if (self.args.only_FPS and not self.args.plot_performance) or self.args.plot_performance:
+                    now = time.perf_counter()
+                    fps_times.append(now)
+                    total_frames += 1
+                    if len(fps_times) > 1:
+                        fps = (len(fps_times) - 1) / (fps_times[-1] - fps_times[0])
+                    if now - last_fps_log >= 1.0:
+                        elapsed = now - stream_start
+                        avg_fps = total_frames / elapsed
+                        Streamer.logger.info(
+                            f"[FPS] End-to-end FPS: {fps:.2f} | "
+                            f"Average FPS since start: {avg_fps:.2f}"
                         )
-                    self._set_perf_active_frame(None)
-
-                self._set_perf_active_frame(fid)
-                self.publish_preview(preview_queue, producer_flag)
-                self._set_perf_active_frame(None)
-
-                preds.append(r)
-                mqtt_messages.append(mqtt_mess)
-                frame_log_rows.append({
-                    "frame_id": fid,
-                    "bni": bni,
-                    "motion_passed": int(bool(mfgs[bni])) if bni < len(mfgs) else 1,
-                })
-                    # if self.seen == len(im0s)-1 and self.args.verbose: 
-                    #     elapsed_time=time.perf_counter() - start_time 
-                    #     Streamer.logger.info(f"Time from capturing batch to meaningful information: {elapsed_time:.2f}")
-            self._publish_mqtt_message(preds=preds, mqtt_messages=mqtt_messages, frame_ids=frame_ids) 
-            last_frame_id = bni 
+                        last_fps_log = now
 
             self.run_callbacks("on_predict_postprocess_end")
             
@@ -1105,7 +1076,7 @@ class OptimizedStreamer(Streamer):
                     im0s=im0s,
                     batch_size=len(im0s),
                 )
-                self._publish_mqtt_message_no_detection(preds=empty_preds, frame_index=frame_ids)
+                self._enqueue_async_sink(("mqtt_no_detection", empty_preds, frame_ids), stage="mqtt_ms", frame_ids=frame_ids)
                 self.step_attention_state()
                 continue 
 

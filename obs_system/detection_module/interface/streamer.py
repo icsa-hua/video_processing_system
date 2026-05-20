@@ -59,6 +59,9 @@ class Streamer(ABC):
         self.save_queue = queue.Queue(maxsize=10)
         self.save_thread = threading.Thread(target=self._save_worker, daemon=True)
         self.save_thread.start()
+        self.async_sink_queue = queue.Queue(maxsize=32)
+        self.async_sink_thread = threading.Thread(target=self._async_sink_worker, daemon=True)
+        self.async_sink_thread.start()
         
         self.seen = 0 
         self.speed = {} 
@@ -106,6 +109,7 @@ class Streamer(ABC):
         self.stream_limit_active = False
         self.stop_reason: Optional[str] = None
         self._save_worker_stopped = False
+        self._async_sink_worker_stopped = False
         self._session_resources_released = False
         self._source_setup_started_at: Optional[float] = None
         self._prev_numeric_frame_id: Optional[int] = None
@@ -400,34 +404,18 @@ class Streamer(ABC):
             ):
                 self.points = self.tracker_model.update_tracker_history(preds, logic_module=self.logic_module)
 
-
-        mqtt_batch_messages = {"crops": [], "boxes_xyxy": np.zeros((0, 4), dtype=np.int32), "paths": []}
-        if self.mqtt_interface is not None:
-            try: 
-                mqtt_batch_messages = self.capture_object_boxes(
-                        image=orig_image,
-                        results=preds,
-                        save=False,
-                        return_crops=True
-                )
-            except IndexError as ie: 
-                Streamer.logger.exception(ie)
-
+        preds.track_points = self._snapshot_points()
         self.current_hazards = hazards
         preds.hazard_events = hazards
         preds.hazard_mode = "high_attention" if self.high_attention_countdown > 0 else "normal"
 
-        if hazards:
-            self._record_hazard_evidence(preds=preds, image=orig_image, hazards=hazards, frame_id=frame_id)
-
-        return preds, mqtt_batch_messages
+        return preds
 
     
     def postprocess_batch(self, preds_list: List[Results], orig_images: List[Any])-> List[Results]: 
         out = [] 
         for preds, im in zip(preds_list, orig_images): 
-            results, mqtts = self.postprocess(preds, im)
-            out.append((results, mqtts))
+            out.append(self.postprocess(preds, im))
         return out
 
 
@@ -534,6 +522,19 @@ class Streamer(ABC):
         if self.save_thread.is_alive():
             self.save_thread.join(timeout=5)
 
+    def stop_async_sink_worker(self) -> None:
+        if self._async_sink_worker_stopped:
+            return
+
+        self._async_sink_worker_stopped = True
+        try:
+            self.async_sink_queue.put_nowait(None)
+        except queue.Full:
+            Streamer.logger.warning("Async sink queue full during shutdown; pending sink tasks may be dropped.")
+
+        if self.async_sink_thread.is_alive():
+            self.async_sink_thread.join(timeout=5)
+
 
     def release_dataset_resources(self) -> None:
         if self.dataset is None:
@@ -581,6 +582,7 @@ class Streamer(ABC):
         if producer_flag is not None:
             producer_flag.value = False
 
+        self.stop_async_sink_worker()
         self.close_preview_stream(preview_queue)
         self.stop_save_worker()
         self.release_video_writers()
@@ -672,6 +674,77 @@ class Streamer(ABC):
         #     return
 
         Streamer.logger.warning(f"Uknown save task type: {task_type}")
+
+    def _async_sink_worker(self) -> None:
+        while True:
+            task = self.async_sink_queue.get()
+            if task is None:
+                break
+            try:
+                self._do_async_sink(task)
+            except Exception:
+                Streamer.logger.exception("Async sink task failed: %s", task[0] if task else task)
+
+    def _do_async_sink(self, task) -> None:
+        task_type = task[0]
+
+        if task_type == "result_outputs":
+            _, preds, p, frame, preview_queue, producer_flag, points_snapshot = task
+            self._do_result_outputs(preds, p, frame, preview_queue, producer_flag, points_snapshot)
+            return
+
+        if task_type == "preview_frame":
+            _, frame_bgr, preview_queue, producer_flag = task
+            self._do_preview_frame_output(frame_bgr, preview_queue, producer_flag)
+            return
+
+        if task_type == "mqtt_results":
+            _, preds, frame_images_bgr, frame_ids = task
+            self._do_publish_mqtt_results(preds, frame_images_bgr, frame_ids)
+            return
+
+        if task_type == "mqtt_no_detection":
+            _, preds, frame_ids = task
+            self._do_publish_mqtt_no_detection(preds, frame_ids)
+            return
+
+        if task_type == "hazard_event":
+            _, preds, image, hazards, frame_id = task
+            self._record_hazard_evidence(preds=preds, image=image, hazards=hazards, frame_id=frame_id, record_stage=False)
+            return
+
+        Streamer.logger.warning("Unknown async sink task type: %s", task_type)
+
+    def _enqueue_async_sink(
+        self,
+        task,
+        *,
+        stage: Optional[str] = None,
+        frame_id: Any = None,
+        frame_ids: Optional[List[Any]] = None,
+        drop_if_full: bool = False,
+    ) -> bool:
+        t0 = time.perf_counter()
+        queued = False
+        try:
+            if drop_if_full:
+                self.async_sink_queue.put_nowait(task)
+            else:
+                self.async_sink_queue.put(task, timeout=0.02)
+            queued = True
+        except queue.Full:
+            Streamer.logger.debug("Async sink queue full; dropping task %s", task[0] if task else None)
+        finally:
+            if stage is not None:
+                self._record_stage_time(stage, (time.perf_counter() - t0) * 1e3, frame_id=frame_id, frame_ids=frame_ids)
+        return queued
+
+    def _snapshot_points(self) -> Dict[Any, np.ndarray]:
+        return {
+            cls_id: pts.copy()
+            for cls_id, pts in self.points.items()
+            if isinstance(pts, np.ndarray)
+        }
 
 
     def _do_save_frame(self, save_path, frame, im): 
@@ -818,7 +891,7 @@ class Streamer(ABC):
             pass
 
 
-    def _encode_preview_frame(self, frame: np.ndarray) -> Optional[bytes]:
+    def _encode_preview_frame(self, frame: np.ndarray, *, record_stage: bool = True) -> Optional[bytes]:
         t0 = time.perf_counter()
         if frame is None:
             return None
@@ -845,12 +918,93 @@ class Streamer(ABC):
         ok, encoded_image = cv2.imencode(".jpg", preview, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
         if not ok:
             return None
-        self._record_stage_time(
-            "preview_encode_ms",
-            (time.perf_counter() - t0) * 1e3,
-            frame_id=self._perf_active_frame_id,
-        )
+        if record_stage:
+            self._record_stage_time(
+                "preview_encode_ms",
+                (time.perf_counter() - t0) * 1e3,
+                frame_id=self._perf_active_frame_id,
+            )
         return encoded_image.tobytes()
+
+    def _publish_preview_bytes(self, payload: Optional[bytes], preview_queue: Any, producer_flag: Any = None) -> None:
+        if preview_queue is None or payload is None:
+            return
+
+        if producer_flag is not None:
+            producer_flag.value = True
+
+        try:
+            preview_queue.put_nowait(payload)
+        except queue.Full:
+            try:
+                preview_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                preview_queue.put_nowait(payload)
+            except queue.Full:
+                pass
+
+    def _render_prediction_frame(self, preds: Any, points_snapshot: Optional[Dict[Any, np.ndarray]] = None) -> Optional[np.ndarray]:
+        plotted = preds.plot(
+            line_width=self.args.line_width,
+            boxes=self.args.show_boxes,
+            conf=self.args.show_conf,
+            labels=self.args.show_labels,
+        )
+        if plotted is None:
+            return None
+
+        if self.last_scene_masks.get("lane_mask") is not None:
+            plotted = self._draw_scene_regions(plotted)
+
+        hazards = getattr(preds, "hazard_events", None) or []
+        if hazards:
+            plotted = self._draw_hazard_boxes(plotted, hazards)
+
+        if self.use_roi and self.logic_module is not None and self.logic_module.get("ROI") is not None:
+            self.logic_module["ROI"]._show_regions(plotted)
+
+        points = points_snapshot if points_snapshot is not None else getattr(preds, "track_points", {})
+        for cls in points.keys():
+            cv2.polylines(plotted, [points[cls]], isClosed=False, color=colors(cls, True), thickness=2)
+        return plotted
+
+    def _do_preview_frame_output(self, frame_bgr: np.ndarray, preview_queue: Any, producer_flag: Any = None) -> None:
+        if preview_queue is None or frame_bgr is None or not self.args.show:
+            return
+        preview = frame_bgr.copy()
+        if self.use_roi and self.logic_module is not None and self.logic_module.get("ROI") is not None:
+            self.logic_module["ROI"]._show_regions(preview)
+        payload = self._encode_preview_frame(preview, record_stage=False)
+        self._publish_preview_bytes(payload, preview_queue, producer_flag)
+
+    def _do_result_outputs(
+        self,
+        preds: Any,
+        p: Path,
+        frame: int | None,
+        preview_queue: Any,
+        producer_flag: Any,
+        points_snapshot: Optional[Dict[Any, np.ndarray]] = None,
+    ) -> None:
+        rendered = None
+        if self.args.save or self.args.show:
+            rendered = self._render_prediction_frame(preds, points_snapshot=points_snapshot)
+
+        if self.args.save_txt or self.args.save_crop:
+            self.save_queue.put(("save_results", preds, p, frame))
+
+        if rendered is None:
+            return
+
+        if self.args.save:
+            self.save_queue.put(("save_frame", str(self.save_dir / p.name), frame, rendered.copy()))
+
+        if self.args.show:
+            preview_bgr = cv2.cvtColor(rendered, cv2.COLOR_RGB2BGR)
+            payload = self._encode_preview_frame(preview_bgr, record_stage=False)
+            self._publish_preview_bytes(payload, preview_queue, producer_flag)
 
 
     def publish_preview(self, preview_queue: Any, producer_flag: Any = None) -> None:
@@ -909,11 +1063,11 @@ class Streamer(ABC):
     ): 
 
         if results is None or results.boxes is None:
-            return {"crops": [], "boxes_xyxy": np.zeros((0,4), dtype=np.int32), "paths": []}
+            return {"crops": [], "boxes_xyxy": np.zeros((0,4), dtype=np.int32), "paths": [], "indices": []}
 
         # No detections 
         if results.boxes.xyxy.numel() == 0: 
-            return {"crops": [], "boxes_xyxy": np.zeros((0,4), dtype=np.int32), "paths": []}
+            return {"crops": [], "boxes_xyxy": np.zeros((0,4), dtype=np.int32), "paths": [], "indices": []}
 
         if isinstance(image, torch.Tensor): 
             image = image.detach().cpu().numpy() 
@@ -944,6 +1098,7 @@ class Streamer(ABC):
 
         crops: List[np.ndarray] = [] 
         paths: List[str] = [] 
+        selected_indices: List[int] = []
 
         out_dir = Path("assets") / self.cropped_image_dirname 
         if save: 
@@ -954,6 +1109,7 @@ class Streamer(ABC):
                 continue 
 
             crop = image[y1:y2, x1:x2] 
+            selected_indices.append(idx)
             if return_crops: 
                 crops.append(crop)
                 self.run_metrics["crop_count"] += 1
@@ -967,7 +1123,7 @@ class Streamer(ABC):
                 cv2.imwrite(str(fn), crop) 
                 paths.append(str(fn))
 
-        return {"crops": crops, "boxes_xyxy": xyxyi, "paths":paths}
+        return {"crops": crops, "boxes_xyxy": xyxyi, "paths":paths, "indices": selected_indices}
 
     def _extract_frame_id(self, preds: Any) -> str:
         path = str(getattr(preds, "path", "frame"))
@@ -1079,7 +1235,15 @@ class Streamer(ABC):
             writer = csv.writer(f)
             writer.writerows(rows)
 
-    def _record_hazard_evidence(self, preds: Any, image: np.ndarray, hazards: List[Dict[str, Any]], frame_id: Any = None) -> None:
+    def _record_hazard_evidence(
+        self,
+        preds: Any,
+        image: np.ndarray,
+        hazards: List[Dict[str, Any]],
+        frame_id: Any = None,
+        *,
+        record_stage: bool = True,
+    ) -> None:
         if image is None or not hazards:
             return
 
@@ -1132,12 +1296,21 @@ class Streamer(ABC):
 
         t_save0 = time.perf_counter()
         self.save_queue.put(("save_hazard_event", frame_path, annotated.copy(), crop_specs, csv_rows))
-        self._record_stage_time("event_saving_ms", (time.perf_counter() - t_save0) * 1e3, frame_id=frame_id)
+        if record_stage:
+            self._record_stage_time("event_saving_ms", (time.perf_counter() - t_save0) * 1e3, frame_id=frame_id)
         self.run_metrics["saved_hazard_events"] += 1
         self.run_metrics["saved_hazard_crops"] += len(crop_specs)
-        self._publish_hazard_alert(preds=preds, hazards=hazards, frame_name=frame_name, frame_id=frame_id)
+        self._publish_hazard_alert(preds=preds, hazards=hazards, frame_name=frame_name, frame_id=frame_id, record_stage=record_stage)
 
-    def _publish_hazard_alert(self, preds: Any, hazards: List[Dict[str, Any]], frame_name: str, frame_id: Any = None) -> None:
+    def _publish_hazard_alert(
+        self,
+        preds: Any,
+        hazards: List[Dict[str, Any]],
+        frame_name: str,
+        frame_id: Any = None,
+        *,
+        record_stage: bool = True,
+    ) -> None:
         if self.mqtt_interface is None or not hazards:
             return
 
@@ -1166,7 +1339,8 @@ class Streamer(ABC):
         try:
             t_pub0 = time.perf_counter()
             self.mqtt_interface.publish(topic, payload)
-            self._record_stage_time("mqtt_ms", (time.perf_counter() - t_pub0) * 1e3, frame_id=frame_id)
+            if record_stage:
+                self._record_stage_time("mqtt_ms", (time.perf_counter() - t_pub0) * 1e3, frame_id=frame_id)
             self.run_metrics["mqtt_hazard_messages"] += 1
         except Exception:
             Streamer.logger.exception("Failed to publish hazard MQTT event")
@@ -1216,6 +1390,41 @@ class Streamer(ABC):
                     frame_id=cr_fr,
                     include_bbox=True
                 ) 
+
+    def _do_publish_mqtt_results(self, preds, frame_images_bgr, frame_ids) -> None:
+        if self.mqtt_interface is None:
+            return
+
+        for r, image, fid in zip(preds, frame_images_bgr, frame_ids):
+            boxes_obj = getattr(r, "boxes", None)
+            if boxes_obj is None or boxes_obj.xyxy is None or boxes_obj.xyxy.numel() == 0:
+                continue
+
+            crop_bundle = self.capture_object_boxes(image=image, results=r, save=False, return_crops=True)
+            indices = crop_bundle.get("indices", [])
+            crops_payload = []
+            for crop_idx, det_idx in enumerate(indices):
+                if crop_idx >= len(crop_bundle["crops"]):
+                    break
+                cls_id = int(r.boxes.cls[det_idx].item())
+                track_id = None if r.boxes.id is None else r.boxes.id[det_idx]
+                crops_payload.append(
+                    {
+                        "img": crop_bundle["crops"][crop_idx],
+                        "bbox": crop_bundle["boxes_xyxy"][det_idx],
+                        "cls": self.converter.class_names[cls_id],
+                        "conf": r.boxes.conf[det_idx].item(),
+                        "track_id": None if track_id is None else int(track_id.item() if hasattr(track_id, "item") else track_id),
+                    }
+                )
+
+            self.mqtt_interface.publish_batch_from_crops(
+                crops=crops_payload,
+                cam_id="camera-1",
+                frame_id=fid,
+                include_bbox=True,
+            )
+            self.run_metrics["mqtt_batches"] += 1
                    
     def __generate_mqtt_message_no_motion(self, preds:Any, frame_index:list) -> Dict[str, Any]:
         frames = []
@@ -1239,6 +1448,13 @@ class Streamer(ABC):
             "inference_ran": False,
             "frames": frames,
         }
+
+    def _do_publish_mqtt_no_detection(self, preds: Any, frame_index: list) -> None:
+        if self.mqtt_interface is None:
+            return
+        message = self.__generate_mqtt_message_no_motion(preds, frame_index)
+        self.mqtt_interface.publish(self.mqtt_interface.topic, message)
+        self.run_metrics["mqtt_no_detection_batches"] += 1
     
 
     @abstractmethod
