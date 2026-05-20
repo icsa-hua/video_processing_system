@@ -1,4 +1,5 @@
 from multiprocessing.sharedctypes import Value
+from obs_system.detection_module.interface.detection_batch import FrameDetections
 from obs_system.logic_module.interface.event_extractor import EventExtractorInterface 
 from obs_system.utils.common import _empty_results
 
@@ -45,6 +46,25 @@ class TrackerHandler(EventExtractorInterface):
     def _detect(self, predictions, orig_img, save=False)->list: 
         
         detections = sv.Detections.from_ultralytics(predictions)
+        return self._update_with_detections(detections)
+
+    def _detections_from_components(self, boxes, scores, classes) -> sv.Detections:
+        if torch.is_tensor(boxes):
+            boxes = boxes.detach().cpu().numpy()
+        if torch.is_tensor(scores):
+            scores = scores.detach().cpu().numpy()
+        if torch.is_tensor(classes):
+            classes = classes.detach().cpu().numpy()
+
+        return sv.Detections(
+            xyxy=np.asarray(boxes, dtype=np.float32),
+            confidence=np.asarray(scores, dtype=np.float32),
+            class_id=np.asarray(classes, dtype=np.int64),
+        )
+
+    def _update_with_detections(self, detections: sv.Detections):
+        if len(detections) == 0:
+            return detections
 
         if self.__tracker_choice == "sort": 
             return self.__tracker.update(detections)
@@ -57,12 +77,9 @@ class TrackerHandler(EventExtractorInterface):
         else: 
             raise RuntimeError("Invalid tracker state")
 
-
-    def detect(self, predictions, save:bool, orig_frame, f_id:int, class_names:list, speed:dict={}) -> Any: 
-
-        detections = self._detect(predictions, save=save, orig_img=orig_frame)
+    def _results_from_detections(self, detections: sv.Detections, orig_frame, f_id: int, class_names: list, speed: dict = {}) -> Any:
         detections = detections[detections.tracker_id != -1] if isinstance(detections, sv.Detections) else [] 
-        
+
         if len(detections) == 0: 
             return _empty_results(orig_image=orig_frame, frame_id=f_id, class_names=class_names)
 
@@ -75,6 +92,26 @@ class TrackerHandler(EventExtractorInterface):
         tracked = Results(orig_img=orig_frame, path=f"image_{f_id}.jpg", names=class_names, boxes=results.T, speed=speed)
         tracked.sv_detections = detections
         return tracked
+
+
+    def detect(self, predictions, save:bool, orig_frame, f_id:int, class_names:list, speed:dict={}) -> Any: 
+
+        detections = self._detect(predictions, save=save, orig_img=orig_frame)
+        return self._results_from_detections(detections, orig_frame=orig_frame, f_id=f_id, class_names=class_names, speed=speed)
+
+    def detect_compact(self, frame: FrameDetections, class_names: list, speed: dict = {}) -> Any:
+        if frame.is_empty:
+            return _empty_results(orig_image=frame.orig_img, frame_id=frame.frame_id, class_names=class_names)
+
+        detections = self._detections_from_components(frame.boxes, frame.scores, frame.classes)
+        detections = self._update_with_detections(detections)
+        return self._results_from_detections(
+            detections,
+            orig_frame=frame.orig_img,
+            f_id=int(frame.frame_id) if isinstance(frame.frame_id, (int, np.integer)) else frame.frame_id,
+            class_names=class_names,
+            speed=speed,
+        )
 
     
     def update_tracker_history(self,results, logic_module:Any): 
@@ -148,5 +185,4 @@ class TrackerHandler(EventExtractorInterface):
 
          
     
-
 

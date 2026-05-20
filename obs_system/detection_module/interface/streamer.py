@@ -381,9 +381,12 @@ class Streamer(ABC):
             on_complete=lambda _name, ms: self._record_stage_time("hazard_logic_ms", ms, frame_id=frame_id),
         ):
             if preds.boxes is not None and preds.boxes.xyxy.numel() > 0:
+                detections = getattr(preds, "sv_detections", None)
+                hazard_boxes = detections.xyxy if detections is not None else preds.boxes.xyxy
+                hazard_classes = detections.class_id if detections is not None else preds.boxes.cls
                 hazards = analyze_lane_hazards(
-                    boxes=preds.boxes.xyxy,
-                    classes=preds.boxes.cls,
+                    boxes=hazard_boxes,
+                    classes=hazard_classes,
                     class_names=self.converter.class_names,
                     lane_mask=lane_mask,
                     crosswalk_mask=crosswalk_mask,
