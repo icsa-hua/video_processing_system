@@ -642,7 +642,7 @@ class OptimizedStreamer(Streamer):
                         boxes_t, 
                         scores_t, 
                         classes_t.long(), 
-                        iou_threshold=(1.0-NMS_IOU)
+                        iou_threshold=NMS_IOU
                     )
                     
                 # keep = keep_pc if keep_pc.numel()==0 else keep_pc[nms(boxes_t[keep_pc],scores_t[keep_pc], iou_threshold=(1-NMS_IOU))]
