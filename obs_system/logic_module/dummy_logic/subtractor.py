@@ -15,6 +15,7 @@ import cv2
 import os
 
 from collections import deque
+from pathlib import Path
 from typing import Optional
 
 logger = get_logger("obs_system"+__name__)
@@ -83,6 +84,9 @@ class Subtractor(EventExtractorInterface):
         self._recalibration_enabled = False
         self._recalibration_active = False
         self._frames_since_last_calibration = 0
+        self._saved_lane_extractions = 0
+        self._saved_crosswalk_extractions = 0
+        self._max_saved_scene_extractions = 2
 
 
     def configure_source_warmup(self, source_is_stream: bool) -> None:
@@ -385,8 +389,12 @@ class Subtractor(EventExtractorInterface):
             self.crosswalk_mask = previous_crosswalk
             logger.info("Runtime lane recalibration produced an empty mask; keeping previous lane mask")
         
-        if save_img and self.save_path and lanes_final is not None: 
-            self.__save_calibration(frame, lanes_final)
+        if save_img and self.save_path and lanes_final is not None:
+            self.__save_calibration(
+                frame=frame,
+                lanes_final=lanes_final,
+                crosswalk_final=self.crosswalk_mask,
+            )
         
         return lanes_final
 
@@ -587,11 +595,82 @@ class Subtractor(EventExtractorInterface):
 
 
 
-    def __save_calibration(self, last_frame, lanes_final): 
-        if last_frame is None: 
-            return 
+    def _build_scene_overlay(
+        self,
+        frame: np.ndarray,
+        lane_mask: Optional[np.ndarray],
+        crosswalk_mask: Optional[np.ndarray] = None,
+    ) -> Optional[np.ndarray]:
+        if frame is None:
+            return None
 
-        cv2.imwrite(self.save_path, lanes_final)
+        overlay = frame.copy()
+        out = frame.copy()
+        lane_color = (255, 200, 80)
+        crosswalk_color = (0, 255, 255)
+
+        if lane_mask is not None and lane_mask.size > 0 and cv2.countNonZero(lane_mask) > 0:
+            lane_contours, _ = cv2.findContours(lane_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            lane_contours = [cnt for cnt in lane_contours if cv2.contourArea(cnt) >= 500]
+            if lane_contours:
+                cv2.drawContours(overlay, lane_contours, -1, lane_color, thickness=-1)
+                cv2.drawContours(out, lane_contours, -1, lane_color, thickness=2)
+
+        if crosswalk_mask is not None and crosswalk_mask.size > 0 and cv2.countNonZero(crosswalk_mask) > 0:
+            crosswalk_contours, _ = cv2.findContours(crosswalk_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            crosswalk_contours = [cnt for cnt in crosswalk_contours if cv2.contourArea(cnt) >= 100]
+            if crosswalk_contours:
+                cv2.drawContours(overlay, crosswalk_contours, -1, crosswalk_color, thickness=-1)
+                cv2.drawContours(out, crosswalk_contours, -1, crosswalk_color, thickness=2)
+
+        return cv2.addWeighted(overlay, 0.22, out, 0.78, 0.0)
+
+    def __save_calibration(
+        self,
+        frame: np.ndarray,
+        lanes_final: np.ndarray,
+        crosswalk_final: Optional[np.ndarray],
+    ):
+        if frame is None:
+            return
+
+        save_path = Path(self.save_path).expanduser()
+        if not save_path.is_absolute():
+            save_path = Path.cwd() / save_path
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+
+        cv2.imwrite(str(save_path), lanes_final)
+
+        save_stem = save_path.stem or "lanes_final"
+        save_suffix = save_path.suffix or ".png"
+
+        if (
+            self._saved_lane_extractions < self._max_saved_scene_extractions
+            and lanes_final is not None
+            and lanes_final.size > 0
+            and cv2.countNonZero(lanes_final) > 0
+        ):
+            lane_overlay = self._build_scene_overlay(frame, lanes_final)
+            if lane_overlay is not None:
+                lane_path = save_path.parent / f"{save_stem}_lanes_{self._saved_lane_extractions + 1:02d}{save_suffix}"
+                cv2.imwrite(str(lane_path), lane_overlay)
+                self._saved_lane_extractions += 1
+
+        if (
+            self._saved_crosswalk_extractions < self._max_saved_scene_extractions
+            and crosswalk_final is not None
+            and crosswalk_final.size > 0
+            and cv2.countNonZero(crosswalk_final) > 0
+        ):
+            crosswalk_overlay = self._build_scene_overlay(frame, lanes_final, crosswalk_final)
+            if crosswalk_overlay is not None:
+                crosswalk_path = (
+                    save_path.parent
+                    / f"{save_stem}_crosswalks_{self._saved_crosswalk_extractions + 1:02d}{save_suffix}"
+                )
+                cv2.imwrite(str(crosswalk_path), crosswalk_overlay)
+                self._saved_crosswalk_extractions += 1
+
         # calb_contours, _ = cv2.findContours(lanes_final, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         # cv2.drawContours(last_frame, calb_contours, -1, (0,255,0), 2) 
         # cv2.imshow("Lanes Overlay", last_frame) 
