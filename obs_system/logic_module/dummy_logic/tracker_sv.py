@@ -134,10 +134,10 @@ class TrackerHandler(EventExtractorInterface):
 
         if boxes.size == 0: 
             return {}
-        bbox_center =np.column_stack((
-                (boxes[:, 0] + boxes[:, 2]) * 0.5,
-                (boxes[:, 1] + boxes[:, 3]) * 0.5,
-         ))
+        bbox_center = np.column_stack((
+            (boxes[:, 0] + boxes[:, 2]) * 0.5,
+            (boxes[:, 1] + boxes[:, 3]) * 0.5,
+        ))
 
         current_ids = set() 
 
@@ -147,9 +147,12 @@ class TrackerHandler(EventExtractorInterface):
             self.__track_class[int(track_id)] = int(cls_i)
             self.__history[int(track_id)].append(centr)
 
-        points = {} 
-        for track_id, cls, bcentr in zip(tr_ids,classes, bbox_center): 
-            points[cls] = np.hstack(self.__history[track_id]).astype(np.int32).reshape((-1,1,2))
+        points = {}
+        for track_id, cls, bcentr in zip(tr_ids, classes, bbox_center):
+            track_path = np.asarray(self.__history[int(track_id)], dtype=np.float32)
+            if track_path.size == 0:
+                continue
+            points[cls] = track_path.astype(np.int32).reshape((-1, 1, 2))
             if logic_module["ROI"] is not None: 
                 logic_module["ROI"].count_regions(bbox=bcentr)
 
@@ -185,4 +188,3 @@ class TrackerHandler(EventExtractorInterface):
 
          
     
-

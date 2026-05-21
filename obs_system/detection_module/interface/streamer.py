@@ -1,5 +1,5 @@
 from obs_system.compressed.interface.convert_to_Results import ConverterResults 
-from obs_system.logic_module.dummy_logic.obstacle_filtering import analyze_lane_hazards
+from obs_system.logic_module.dummy_logic.obstacle_filtering import analyze_lane_hazards, _lane_bounds, _mask_integral
 from obs_system.utils.appraisal import StepContext
 from obs_system.utils.logger import get_logger
 from obs_system.utils.common import *
@@ -94,6 +94,7 @@ class Streamer(ABC):
         self.preview_last_emit_ts = 0.0
         self.current_hazards: List[Dict[str, Any]] = []
         self.last_scene_masks: Dict[str, Any] = {"lane_mask": None, "crosswalk_mask": None}
+        self._scene_mask_cache: Dict[str, Any] = {}
         self.high_attention_countdown = 0
         self.high_attention_default_frames = 18
         self.normal_lane_expand_px = 0
@@ -314,6 +315,40 @@ class Streamer(ABC):
         self.last_scene_masks = scene_masks
         return scene_masks
 
+    def _prepare_scene_mask_cache(self, scene_masks: Dict[str, Optional[np.ndarray]]) -> Dict[str, Any]:
+        lane_mask = scene_masks.get("lane_mask")
+        crosswalk_mask = scene_masks.get("crosswalk_mask")
+
+        lane_id = id(lane_mask)
+        crosswalk_id = id(crosswalk_mask)
+        lane_shape = None if lane_mask is None else lane_mask.shape
+        crosswalk_shape = None if crosswalk_mask is None else crosswalk_mask.shape
+
+        cache = self._scene_mask_cache
+        if (
+            cache.get("lane_id") == lane_id
+            and cache.get("crosswalk_id") == crosswalk_id
+            and cache.get("lane_shape") == lane_shape
+            and cache.get("crosswalk_shape") == crosswalk_shape
+        ):
+            return cache
+
+        lane_nonzero = bool(lane_mask is not None and lane_mask.size > 0 and cv2.countNonZero(lane_mask) > 0)
+        crosswalk_nonzero = bool(crosswalk_mask is not None and crosswalk_mask.size > 0 and cv2.countNonZero(crosswalk_mask) > 0)
+
+        self._scene_mask_cache = {
+            "lane_id": lane_id,
+            "crosswalk_id": crosswalk_id,
+            "lane_shape": lane_shape,
+            "crosswalk_shape": crosswalk_shape,
+            "lane_bbox": _lane_bounds(lane_mask) if lane_nonzero else None,
+            "lane_integral": _mask_integral(lane_mask) if lane_nonzero else None,
+            "crosswalk_integral": _mask_integral(crosswalk_mask) if crosswalk_nonzero else None,
+            "lane_nonzero": lane_nonzero,
+            "crosswalk_nonzero": crosswalk_nonzero,
+        }
+        return self._scene_mask_cache
+
     def _activate_high_attention(self, hazards: List[Dict[str, Any]]) -> None:
         if not hazards:
             return
@@ -381,6 +416,7 @@ class Streamer(ABC):
             on_complete=lambda _name, ms: self._record_stage_time("hazard_logic_ms", ms, frame_id=frame_id),
         ):
             if preds.boxes is not None and preds.boxes.xyxy.numel() > 0:
+                scene_cache = self._prepare_scene_mask_cache(scene_masks)
                 detections = getattr(preds, "sv_detections", None)
                 hazard_boxes = detections.xyxy if detections is not None else preds.boxes.xyxy
                 hazard_classes = detections.class_id if detections is not None else preds.boxes.cls
@@ -390,6 +426,11 @@ class Streamer(ABC):
                     class_names=self.converter.class_names,
                     lane_mask=lane_mask,
                     crosswalk_mask=crosswalk_mask,
+                    lane_bbox=scene_cache.get("lane_bbox"),
+                    lane_integral=scene_cache.get("lane_integral"),
+                    crosswalk_integral=scene_cache.get("crosswalk_integral"),
+                    lane_nonzero=scene_cache.get("lane_nonzero"),
+                    crosswalk_nonzero=scene_cache.get("crosswalk_nonzero"),
                 )
                 self._activate_high_attention(hazards)
 
