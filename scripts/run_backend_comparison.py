@@ -84,6 +84,9 @@ def _configure_streamer_args(streamer: Any, config: PipelineConfig, run_dir: Pat
     streamer.args.perf_log_flush_every = 64
     streamer.args.perf_frame_log_flush_every = 128
     streamer.args.perf_timeline_flush_every = 128
+    streamer.args.jetson_profile = bool(config.jetson_profile)
+    streamer.args.jetson_hazard_scale = float(config.jetson_hazard_scale)
+    streamer.args.jetson_cpu_threads = int(config.jetson_cpu_threads)
 
 
 def _summarize_output_load(
@@ -146,6 +149,9 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
         preview_jpeg_quality=70,
         preview_fps=8.0,
         stream_limit_hours=float(args.stream_limit_hours),
+        jetson_profile=bool(args.jetson_profile),
+        jetson_hazard_scale=float(args.jetson_hazard_scale),
+        jetson_cpu_threads=int(args.jetson_cpu_threads),
     ).validate()
 
     perf.reset()
@@ -310,6 +316,9 @@ def main() -> None:
     parser.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=False, help="Verbose streamer logging.")
     parser.add_argument("--stream-limit-hours", type=float, default=0.0, help="Live-stream runtime cap in hours. Use 0 to disable.")
     parser.add_argument("--jetson-interval", type=float, default=1.0, help="Sampling interval for Jetson telemetry in seconds.")
+    parser.add_argument("--jetson-profile", action=argparse.BooleanOptionalAction, default=False, help="Enable the Jetson-optimized execution branch.")
+    parser.add_argument("--jetson-hazard-scale", type=float, default=1.0, help="Scale factor for Jetson hazard-mask processing. Use values below 1.0 to trade a small amount of precision for speed.")
+    parser.add_argument("--jetson-cpu-threads", type=int, default=0, help="CPU thread cap for the Jetson-optimized execution branch. Use 0 to keep runtime defaults.")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)

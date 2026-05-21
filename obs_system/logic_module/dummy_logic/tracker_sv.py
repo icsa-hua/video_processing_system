@@ -114,7 +114,7 @@ class TrackerHandler(EventExtractorInterface):
         )
 
     
-    def update_tracker_history(self,results, logic_module:Any): 
+    def update_tracker_history(self,results, logic_module:Any, build_points: bool = True): 
 
         if results is None or results.boxes is None:
             return {}
@@ -149,12 +149,14 @@ class TrackerHandler(EventExtractorInterface):
 
         points = {}
         for track_id, cls, bcentr in zip(tr_ids, classes, bbox_center):
+            if logic_module["ROI"] is not None: 
+                logic_module["ROI"].count_regions(bbox=bcentr)
+            if not build_points:
+                continue
             track_path = np.asarray(self.__history[int(track_id)], dtype=np.float32)
             if track_path.size == 0:
                 continue
             points[cls] = track_path.astype(np.int32).reshape((-1, 1, 2))
-            if logic_module["ROI"] is not None: 
-                logic_module["ROI"].count_regions(bbox=bcentr)
 
         #Remove track IDs from track history that were not detected in the current frame 
         lost_ids = set(self.__history.keys()) - current_ids 
@@ -163,7 +165,7 @@ class TrackerHandler(EventExtractorInterface):
             self.__track_class.pop(tid,None)
             points = {cls:pts for cls, pts in points.items() if cls not in lost_ids}
 
-        return points 
+        return points if build_points else {}
 
     def set_history_persistence(self, history_len: int) -> None:
         history_len = max(5, int(history_len))

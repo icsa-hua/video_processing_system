@@ -106,6 +106,9 @@ class Application:
         DEFAULT_CFG.preview_fps = float(config.preview_fps)
         DEFAULT_CFG.stream_limit_hours = float(config.stream_limit_hours)
         DEFAULT_CFG.lane_recalibration_interval_frames = int(config.lane_recalibration_interval_frames)
+        DEFAULT_CFG.jetson_profile = bool(config.jetson_profile)
+        DEFAULT_CFG.jetson_hazard_scale = float(config.jetson_hazard_scale)
+        DEFAULT_CFG.jetson_cpu_threads = int(config.jetson_cpu_threads)
 
         tracemalloc.start()
 

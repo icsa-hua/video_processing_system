@@ -72,6 +72,11 @@ def _clip_box_xyxy(box: np.ndarray, w: int, h: int) -> Tuple[int, int, int, int]
     return x1, y1, x2, y2
 
 
+def _box_xyxy_int(box: np.ndarray) -> Tuple[int, int, int, int]:
+    x1, y1, x2, y2 = box.tolist()
+    return int(np.floor(min(x1, x2))), int(np.floor(min(y1, y2))), int(np.ceil(max(x1, x2))), int(np.ceil(max(y1, y2)))
+
+
 def _mask_integral(mask: Optional[np.ndarray]) -> Optional[np.ndarray]:
     if mask is None or mask.size == 0:
         return None
@@ -152,6 +157,7 @@ def analyze_lane_hazards(
     class_names: Sequence[str],
     lane_mask: Optional[np.ndarray],
     crosswalk_mask: Optional[np.ndarray],
+    returned_boxes: Any = None,
     lane_bbox: Optional[Tuple[int, int, int, int]] = None,
     lane_integral: Optional[np.ndarray] = None,
     crosswalk_integral: Optional[np.ndarray] = None,
@@ -181,7 +187,14 @@ def analyze_lane_hazards(
     else:
         cls_np = np.asarray(classes)
 
-    if boxes_np.size == 0 or cls_np.size == 0:
+    if returned_boxes is None:
+        returned_boxes_np = boxes_np
+    elif torch.is_tensor(returned_boxes):
+        returned_boxes_np = returned_boxes.detach().cpu().numpy()
+    else:
+        returned_boxes_np = np.asarray(returned_boxes, dtype=np.float32)
+
+    if boxes_np.size == 0 or cls_np.size == 0 or returned_boxes_np.size == 0:
         return []
 
     h, w = lane_mask.shape[:2]
@@ -197,6 +210,7 @@ def analyze_lane_hazards(
         x1, y1, x2, y2 = _clip_box_xyxy(boxes_np[i], w=w, h=h)
         if x2 <= x1 or y2 <= y1:
             continue
+        rx1, ry1, rx2, ry2 = _clip_box_xyxy(returned_boxes_np[i], w=w, h=h) if returned_boxes_np is boxes_np else _box_xyxy_int(returned_boxes_np[i])
 
         class_name = _resolve_class_name(cls_np[i], class_names)
         name_norm = _normalize_name(class_name)
@@ -247,7 +261,7 @@ def analyze_lane_hazards(
                 "det_index": i,
                 "class_name": class_name,
                 "class_id": int(cls_np[i]) if np.isscalar(cls_np[i]) else -1,
-                "bbox_xyxy": [x1, y1, x2, y2],
+                "bbox_xyxy": [rx1, ry1, rx2, ry2],
                 "lane_overlap": float(lane_overlap),
                 "crosswalk_overlap": float(cross_overlap),
                 "risk": risk,
