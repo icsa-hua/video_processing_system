@@ -621,7 +621,7 @@ class Streamer(ABC):
                 pass
 
         if self.save_thread.is_alive():
-            self.save_thread.join(timeout=5)
+            self.save_thread.join(timeout=2)
 
     def stop_async_sink_worker(self) -> None:
         if self._async_sink_worker_stopped:
@@ -634,7 +634,7 @@ class Streamer(ABC):
             Streamer.logger.warning("Async sink queue full during shutdown; pending sink tasks may be dropped.")
 
         if self.async_sink_thread.is_alive():
-            self.async_sink_thread.join(timeout=5)
+            self.async_sink_thread.join(timeout=2)
 
 
     def release_dataset_resources(self) -> None:
@@ -831,7 +831,7 @@ class Streamer(ABC):
             if drop_if_full:
                 self.async_sink_queue.put_nowait(task)
             else:
-                self.async_sink_queue.put(task, timeout=0.02)
+                self.async_sink_queue.put(task, timeout=0.01)
             queued = True
         except queue.Full:
             Streamer.logger.debug("Async sink queue full; dropping task %s", task[0] if task else None)
