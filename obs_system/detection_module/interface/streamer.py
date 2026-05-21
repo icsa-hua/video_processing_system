@@ -112,6 +112,7 @@ class Streamer(ABC):
         self._save_worker_stopped = False
         self._async_sink_worker_stopped = False
         self._session_resources_released = False
+        self._execution_profile_applied = False
         self._source_setup_started_at: Optional[float] = None
         self._prev_numeric_frame_id: Optional[int] = None
         self.run_metrics: Dict[str, Any] = {
@@ -210,6 +211,35 @@ class Streamer(ABC):
 
     def _note_emitted_result(self, count: int = 1) -> None:
         self.run_metrics["frames_emitted"] += max(0, int(count))
+
+    def _apply_execution_profile(self) -> None:
+        if self._execution_profile_applied:
+            return
+
+        self._execution_profile_applied = True
+        jetson_profile = bool(getattr(self.args, "jetson_profile", False))
+        if not jetson_profile:
+            return
+
+        cpu_threads = int(getattr(self.args, "jetson_cpu_threads", 0) or 0)
+        if cpu_threads > 0:
+            try:
+                cv2.setNumThreads(cpu_threads)
+            except Exception:
+                Streamer.logger.debug("Failed to set OpenCV thread count", exc_info=True)
+            try:
+                torch.set_num_threads(cpu_threads)
+            except Exception:
+                Streamer.logger.debug("Failed to set Torch thread count", exc_info=True)
+
+        if torch.cuda.is_available():
+            try:
+                torch.backends.cudnn.benchmark = True
+            except Exception:
+                Streamer.logger.debug("Failed to enable cuDNN benchmark mode", exc_info=True)
+
+        self.normal_tracker_history = min(self.normal_tracker_history, 15)
+        self.high_attention_tracker_history = min(self.high_attention_tracker_history, 30)
         
 
     def __check_docker_env(self): 
@@ -318,6 +348,7 @@ class Streamer(ABC):
     def _prepare_scene_mask_cache(self, scene_masks: Dict[str, Optional[np.ndarray]]) -> Dict[str, Any]:
         lane_mask = scene_masks.get("lane_mask")
         crosswalk_mask = scene_masks.get("crosswalk_mask")
+        hazard_scale = float(getattr(self.args, "jetson_hazard_scale", 1.0) or 1.0) if bool(getattr(self.args, "jetson_profile", False)) else 1.0
 
         lane_id = id(lane_mask)
         crosswalk_id = id(crosswalk_mask)
@@ -330,20 +361,32 @@ class Streamer(ABC):
             and cache.get("crosswalk_id") == crosswalk_id
             and cache.get("lane_shape") == lane_shape
             and cache.get("crosswalk_shape") == crosswalk_shape
+            and cache.get("hazard_scale") == hazard_scale
         ):
             return cache
 
         lane_nonzero = bool(lane_mask is not None and lane_mask.size > 0 and cv2.countNonZero(lane_mask) > 0)
         crosswalk_nonzero = bool(crosswalk_mask is not None and crosswalk_mask.size > 0 and cv2.countNonZero(crosswalk_mask) > 0)
 
+        lane_proc = lane_mask
+        crosswalk_proc = crosswalk_mask
+        if hazard_scale < 1.0:
+            if lane_nonzero and lane_mask is not None:
+                lane_proc = cv2.resize(lane_mask, dsize=None, fx=hazard_scale, fy=hazard_scale, interpolation=cv2.INTER_NEAREST)
+            if crosswalk_nonzero and crosswalk_mask is not None:
+                crosswalk_proc = cv2.resize(crosswalk_mask, dsize=None, fx=hazard_scale, fy=hazard_scale, interpolation=cv2.INTER_NEAREST)
+
         self._scene_mask_cache = {
             "lane_id": lane_id,
             "crosswalk_id": crosswalk_id,
             "lane_shape": lane_shape,
             "crosswalk_shape": crosswalk_shape,
-            "lane_bbox": _lane_bounds(lane_mask) if lane_nonzero else None,
-            "lane_integral": _mask_integral(lane_mask) if lane_nonzero else None,
-            "crosswalk_integral": _mask_integral(crosswalk_mask) if crosswalk_nonzero else None,
+            "hazard_scale": hazard_scale,
+            "lane_mask_proc": lane_proc,
+            "crosswalk_mask_proc": crosswalk_proc,
+            "lane_bbox": _lane_bounds(lane_proc) if lane_nonzero else None,
+            "lane_integral": _mask_integral(lane_proc) if lane_nonzero else None,
+            "crosswalk_integral": _mask_integral(crosswalk_proc) if crosswalk_nonzero else None,
             "lane_nonzero": lane_nonzero,
             "crosswalk_nonzero": crosswalk_nonzero,
         }
@@ -420,12 +463,20 @@ class Streamer(ABC):
                 detections = getattr(preds, "sv_detections", None)
                 hazard_boxes = detections.xyxy if detections is not None else preds.boxes.xyxy
                 hazard_classes = detections.class_id if detections is not None else preds.boxes.cls
+                processing_boxes = hazard_boxes
+                hazard_scale = float(scene_cache.get("hazard_scale", 1.0) or 1.0)
+                if hazard_scale < 1.0:
+                    if torch.is_tensor(hazard_boxes):
+                        processing_boxes = hazard_boxes * hazard_scale
+                    else:
+                        processing_boxes = np.asarray(hazard_boxes, dtype=np.float32) * hazard_scale
                 hazards = analyze_lane_hazards(
-                    boxes=hazard_boxes,
+                    boxes=processing_boxes,
                     classes=hazard_classes,
                     class_names=self.converter.class_names,
-                    lane_mask=lane_mask,
-                    crosswalk_mask=crosswalk_mask,
+                    lane_mask=scene_cache.get("lane_mask_proc", lane_mask),
+                    crosswalk_mask=scene_cache.get("crosswalk_mask_proc", crosswalk_mask),
+                    returned_boxes=hazard_boxes,
                     lane_bbox=scene_cache.get("lane_bbox"),
                     lane_integral=scene_cache.get("lane_integral"),
                     crosswalk_integral=scene_cache.get("crosswalk_integral"),
@@ -446,7 +497,12 @@ class Streamer(ABC):
                 verbose=self.args.verbose,
                 on_complete=lambda _name, ms: self._record_stage_time("tracking_ms", ms, frame_id=frame_id),
             ):
-                self.points = self.tracker_model.update_tracker_history(preds, logic_module=self.logic_module)
+                need_track_points = bool(self.args.show or self.args.save or self.args.verbose)
+                self.points = self.tracker_model.update_tracker_history(
+                    preds,
+                    logic_module=self.logic_module,
+                    build_points=need_track_points,
+                )
 
         preds.track_points = self._snapshot_points()
         self.current_hazards = hazards
@@ -484,6 +540,7 @@ class Streamer(ABC):
     def setup_source(self, source:str)->None: 
         """Sets up source and inference mode."""
 
+        self._apply_execution_profile()
         self._note_source_setup_started()
         self.imgsz = check_imgsz(self.args.imgsz, stride=self.stride,min_dim=2) 
 

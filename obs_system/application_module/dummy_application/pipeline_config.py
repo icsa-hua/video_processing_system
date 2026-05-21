@@ -46,6 +46,9 @@ class PipelineConfig:
     preview_fps: float = 8.0
     stream_limit_hours: float = DEFAULT_STREAM_LIMIT_HOURS
     lane_recalibration_interval_frames: int = 0
+    jetson_profile: bool = False
+    jetson_hazard_scale: float = 1.0
+    jetson_cpu_threads: int = 0
 
     @classmethod
     def from_namespace(cls, args: argparse.Namespace) -> "PipelineConfig":
@@ -86,6 +89,12 @@ class PipelineConfig:
 
         if int(self.lane_recalibration_interval_frames) < 0:
             raise ValueError("Set lane_recalibration_interval_frames to a value greater than or equal to 0")
+
+        if not (0.0 < float(self.jetson_hazard_scale) <= 1.0):
+            raise ValueError("Set jetson_hazard_scale to a value in the interval (0, 1]")
+
+        if int(self.jetson_cpu_threads) < 0:
+            raise ValueError("Set jetson_cpu_threads to a value greater than or equal to 0")
 
         return self
 
@@ -129,4 +138,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     argparser.add_argument("--only_FPS", metavar="TRT", action=argparse.BooleanOptionalAction, help="Measure average FPS regardless of plotting.")
     argparser.add_argument( "--stream_limit_hours", metavar="SL", type=float, default=DEFAULT_STREAM_LIMIT_HOURS, help="Maximum runtime in hours for live streams only. Set to 0 to disable the limit.")
     argparser.add_argument("--lane_recalibration_interval_frames", metavar="LR", type=int, default=0, help="For live streams, rerun lane calibration after this many frames. Set to 0 to disable.")
+    argparser.add_argument("--jetson_profile", metavar="JP", action=argparse.BooleanOptionalAction, help="Enable the Jetson-optimized execution branch.")
+    argparser.add_argument("--jetson_hazard_scale", metavar="JHS", type=float, default=1.0, help="Scale factor for Jetson hazard-mask processing. Use values below 1.0 to downscale the hazard masks.")
+    argparser.add_argument("--jetson_cpu_threads", metavar="JCT", type=int, default=0, help="CPU thread cap for the Jetson-optimized execution branch. Use 0 to keep the runtime default.")
     return argparser

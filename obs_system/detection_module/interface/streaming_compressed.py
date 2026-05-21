@@ -428,6 +428,7 @@ class OptimizedStreamer(Streamer):
 
         return frame_log_rows
 
+
     def _ensure_benchmark_labels_loaded(self) -> None:
         if self._benchmark_labels_loaded or not self.args.bench:
             return
@@ -440,6 +441,7 @@ class OptimizedStreamer(Streamer):
             fixed_size=(FIXED_WIDTH, FIXED_HEIGHT),
         )
         self._benchmark_labels_loaded = True
+
 
     def _resolve_benchmark_gt(self, frame_id: Any) -> tuple[np.ndarray, np.ndarray]:
         if not self.args.bench:
