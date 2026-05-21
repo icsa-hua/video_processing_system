@@ -135,13 +135,13 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
         verbose=bool(args.verbose),
         save=bool(args.save_outputs),
         roi=bool(args.roi),
-        half=False,
+        half=True,
         fep=bool(args.fep),
         bench=bool(args.labels_dir),
         bench_labels=args.labels_dir or DEFAULT_BENCH_LABELS,
         use_TRT=(model_suffix == ".engine"),
         plot_perf=True,
-        only_FPS=True,
+        only_FPS=False,
         preview_max_width=960,
         preview_jpeg_quality=70,
         preview_fps=8.0,
@@ -317,6 +317,7 @@ def main() -> None:
 
     model_paths = [args.pt_model, args.onnx_model, args.engine_model]
     summaries = [_run_single_benchmark(model_path=path, args=args, output_dir=output_dir) for path in model_paths]
+
 
     summary_json = output_dir / "comparison_summary.json"
     dump_json(summary_json, summaries)

@@ -72,7 +72,19 @@ def _clip_box_xyxy(box: np.ndarray, w: int, h: int) -> Tuple[int, int, int, int]
     return x1, y1, x2, y2
 
 
-def _overlap_ratio(mask: Optional[np.ndarray], bbox_xyxy: Tuple[int, int, int, int]) -> float:
+def _mask_integral(mask: Optional[np.ndarray]) -> Optional[np.ndarray]:
+    if mask is None or mask.size == 0:
+        return None
+    binary = (mask > 0).astype(np.uint8)
+    return cv2.integral(binary)
+
+
+def _overlap_ratio(
+    mask: Optional[np.ndarray],
+    bbox_xyxy: Tuple[int, int, int, int],
+    *,
+    integral: Optional[np.ndarray] = None,
+) -> float:
     if mask is None or mask.size == 0:
         return 0.0
 
@@ -80,10 +92,13 @@ def _overlap_ratio(mask: Optional[np.ndarray], bbox_xyxy: Tuple[int, int, int, i
     if x2 <= x1 or y2 <= y1:
         return 0.0
 
-    region = mask[y1:y2, x1:x2]
     area = float((x2 - x1) * (y2 - y1))
     if area <= 0:
         return 0.0
+    if integral is not None:
+        count = integral[y2, x2] - integral[y1, x2] - integral[y2, x1] + integral[y1, x1]
+        return float(count) / area
+    region = mask[y1:y2, x1:x2]
     return float(cv2.countNonZero(region)) / area
 
 
@@ -137,6 +152,11 @@ def analyze_lane_hazards(
     class_names: Sequence[str],
     lane_mask: Optional[np.ndarray],
     crosswalk_mask: Optional[np.ndarray],
+    lane_bbox: Optional[Tuple[int, int, int, int]] = None,
+    lane_integral: Optional[np.ndarray] = None,
+    crosswalk_integral: Optional[np.ndarray] = None,
+    lane_nonzero: Optional[bool] = None,
+    crosswalk_nonzero: Optional[bool] = None,
     lane_overlap_threshold: float = 0.20,
     crosswalk_overlap_threshold: float = 0.20,
 ) -> List[Dict[str, Any]]:
@@ -145,7 +165,10 @@ def analyze_lane_hazards(
     """
     if boxes is None or classes is None:
         return []
-    if lane_mask is None or lane_mask.size == 0 or cv2.countNonZero(lane_mask) == 0:
+    lane_has_pixels = lane_nonzero if lane_nonzero is not None else (
+        lane_mask is not None and lane_mask.size > 0 and cv2.countNonZero(lane_mask) > 0
+    )
+    if lane_mask is None or lane_mask.size == 0 or not lane_has_pixels:
         return []
 
     if torch.is_tensor(boxes):
@@ -162,11 +185,11 @@ def analyze_lane_hazards(
         return []
 
     h, w = lane_mask.shape[:2]
-    lane_bbox = _lane_bounds(lane_mask)
+    lane_bbox = lane_bbox if lane_bbox is not None else _lane_bounds(lane_mask)
     crosswalk_available = (
         crosswalk_mask is not None
         and crosswalk_mask.size > 0
-        and cv2.countNonZero(crosswalk_mask) > 0
+        and (crosswalk_nonzero if crosswalk_nonzero is not None else cv2.countNonZero(crosswalk_mask) > 0)
     )
     hazards: List[Dict[str, Any]] = []
 
@@ -178,7 +201,7 @@ def analyze_lane_hazards(
         class_name = _resolve_class_name(cls_np[i], class_names)
         name_norm = _normalize_name(class_name)
 
-        lane_overlap = _overlap_ratio(lane_mask, (x1, y1, x2, y2))
+        lane_overlap = _overlap_ratio(lane_mask, (x1, y1, x2, y2), integral=lane_integral)
         in_lane = lane_overlap >= lane_overlap_threshold
         if not in_lane:
             continue
@@ -186,7 +209,7 @@ def analyze_lane_hazards(
         cross_overlap = 0.0
         in_crosswalk = False
         if name_norm == "person" and crosswalk_available:
-            cross_overlap = _overlap_ratio(crosswalk_mask, (x1, y1, x2, y2))
+            cross_overlap = _overlap_ratio(crosswalk_mask, (x1, y1, x2, y2), integral=crosswalk_integral)
             in_crosswalk = cross_overlap >= crosswalk_overlap_threshold
 
         # Explicit policy:

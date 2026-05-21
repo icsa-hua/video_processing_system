@@ -117,9 +117,11 @@ class RegionSetter(EventExtractorInterface):
 
 
     def count_regions(self, bbox) -> None:
-        for region in self.regions:
-            if region["polygon"].contains(Point((bbox[0], bbox[1]))):
-                    region["counts"] += 1
+        x = float(bbox[0])
+        y = float(bbox[1])
+        if self.x_start <= x <= self.x_end and self.y_start <= y <= self.y_end:
+            for region in self.regions:
+                region["counts"] += 1
 
 
     def mouse_callback(self, event:int, x:int, y:int, flags:int, param:Any)->None:

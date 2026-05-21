@@ -831,9 +831,15 @@ class OptimizedStreamer(Streamer):
                     if r.boxes is None or r.boxes.xyxy.numel() == 0:
                         det_boxes, det_scores, det_classes = _empty_dets_numpy()
                     else:
-                        det_boxes = r.boxes.xyxy.detach().cpu().numpy().astype(np.float32)
-                        det_scores = r.boxes.conf.detach().cpu().numpy().astype(np.float32)
-                        det_classes = r.boxes.cls.detach().cpu().numpy().astype(np.int64)
+                        detections = getattr(r, "sv_detections", None)
+                        if detections is not None:
+                            det_boxes = np.asarray(detections.xyxy, dtype=np.float32)
+                            det_scores = np.asarray(detections.confidence, dtype=np.float32)
+                            det_classes = np.asarray(detections.class_id, dtype=np.int64)
+                        else:
+                            det_boxes = r.boxes.xyxy.detach().cpu().numpy().astype(np.float32)
+                            det_scores = r.boxes.conf.detach().cpu().numpy().astype(np.float32)
+                            det_classes = r.boxes.cls.detach().cpu().numpy().astype(np.int64)
                     self.mp.update(
                         boxes_xyxy=det_boxes,
                         scores=det_scores,
