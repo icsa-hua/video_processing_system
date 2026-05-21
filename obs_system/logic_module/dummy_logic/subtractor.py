@@ -29,7 +29,7 @@ class Subtractor(EventExtractorInterface):
                  empty_background_image="",
                  downscale=(320,320),
                  accum_time:int=100,
-                 save_path:str="assets/background_check",
+                 save_path:str="assets/background_check/lane_image.jpg",
                  recalibration_interval_frames:int=0,
                  recalibration_accum_time:Optional[int]=None,
     ):
