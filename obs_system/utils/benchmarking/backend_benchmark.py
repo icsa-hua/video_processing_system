@@ -114,14 +114,14 @@ def _run_command_output(cmd: list[str]) -> str | None:
 
 def _read_sysfs_number(paths: list[str], scale: float = 1.0) -> float | None:
     for raw_path in paths:
-        path = Path(raw_path)
-        if not path.exists():
-            continue
         try:
-            value = float(path.read_text(encoding="utf-8").strip())
+            # Skip path.exists() – on Python <3.12 it raises PermissionError for
+            # /sys/kernel/debug/* files that require root to stat().  Attempting
+            # the read directly is cheaper and handles all error cases uniformly.
+            value = float(Path(raw_path).read_text(encoding="utf-8").strip())
+            return value / scale if scale else value
         except Exception:
             continue
-        return value / scale if scale else value
     return None
 
 
@@ -219,7 +219,11 @@ def read_cbor_lines(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
 
-    import cbor2
+    try:
+        import cbor2
+    except ImportError:
+        logger.debug("cbor2 not installed; MQTT archive at %s will be skipped", path)
+        return []
 
     messages: list[dict[str, Any]] = []
     for raw in path.read_bytes().splitlines():
@@ -232,6 +236,34 @@ def read_cbor_lines(path: Path) -> list[dict[str, Any]]:
         if isinstance(payload, dict):
             messages.append(payload)
     return messages
+
+
+def probe_model_backend(model_path: str) -> tuple[bool, str]:
+    """
+    Check whether *model_path* can be run in the current environment.
+
+    Returns ``(True, "ok")`` when the model is runnable, or
+    ``(False, <human-readable reason>)`` when it should be skipped.
+
+    Reasons for skipping:
+    - File does not exist
+    - ``.engine`` backend requires TensorRT, which is not installed
+      (common on WSL / non-Jetson hosts)
+    """
+    path = Path(model_path)
+    if not path.exists():
+        return False, f"file not found: {path}"
+
+    if path.suffix.lower() == ".engine":
+        try:
+            import tensorrt  # noqa: F401
+        except ImportError:
+            return False, (
+                "TensorRT is not available in this environment "
+                "(install tensorrt or run on a Jetson / TRT-capable host)"
+            )
+
+    return True, "ok"
 
 
 def latency_summary(frame_rows: list[dict[str, str]]) -> dict[str, float]:
