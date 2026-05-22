@@ -168,6 +168,8 @@ def analyze_lane_hazards(
 ) -> List[Dict[str, Any]]:
     """
     Uses post-NMS detections + lane/crosswalk masks to produce hazard metadata.
+    Vectorised: integral-image lookups for all boxes in a single numpy op,
+    Python loop only over the (typically small) in-lane subset.
     """
     if boxes is None or classes is None:
         return []
@@ -194,48 +196,92 @@ def analyze_lane_hazards(
     else:
         returned_boxes_np = np.asarray(returned_boxes, dtype=np.float32)
 
-    if boxes_np.size == 0 or cls_np.size == 0 or returned_boxes_np.size == 0:
+    n = min(len(boxes_np), len(cls_np))
+    if n == 0 or boxes_np.size == 0 or returned_boxes_np.size == 0:
         return []
 
     h, w = lane_mask.shape[:2]
-    lane_bbox = lane_bbox if lane_bbox is not None else _lane_bounds(lane_mask)
+    raw = boxes_np[:n]
+
+    # Vectorised box clipping – avoids per-box Python .tolist() calls
+    bx1 = np.clip(np.floor(np.minimum(raw[:, 0], raw[:, 2])), 0, max(w - 1, 0)).astype(np.int32)
+    by1 = np.clip(np.floor(np.minimum(raw[:, 1], raw[:, 3])), 0, max(h - 1, 0)).astype(np.int32)
+    bx2 = np.clip(np.ceil(np.maximum(raw[:, 0], raw[:, 2])), 0, w).astype(np.int32)
+    by2 = np.clip(np.ceil(np.maximum(raw[:, 1], raw[:, 3])), 0, h).astype(np.int32)
+    valid = (bx2 > bx1) & (by2 > by1)
+    areas = ((bx2 - bx1) * (by2 - by1)).astype(np.float64)
+
+    # Vectorised lane overlap using integral image fancy indexing
+    if lane_integral is not None and valid.any():
+        ih, iw = lane_integral.shape
+        ix1 = np.clip(bx1, 0, iw - 1)
+        iy1 = np.clip(by1, 0, ih - 1)
+        ix2 = np.clip(bx2, 0, iw - 1)
+        iy2 = np.clip(by2, 0, ih - 1)
+        counts = (
+            lane_integral[iy2, ix2]
+            - lane_integral[iy1, ix2]
+            - lane_integral[iy2, ix1]
+            + lane_integral[iy1, ix1]
+        ).astype(np.float64)
+        lane_overlaps = np.where(areas > 0, counts / areas, 0.0)
+    else:
+        lane_overlaps = np.zeros(n, dtype=np.float64)
+        for i in np.where(valid)[0]:
+            region = lane_mask[by1[i]:by2[i], bx1[i]:bx2[i]]
+            lane_overlaps[i] = float(cv2.countNonZero(region)) / areas[i]
+
+    in_lane_mask = valid & (lane_overlaps >= lane_overlap_threshold)
+    if not in_lane_mask.any():
+        return []
+
+    # Vectorised crosswalk overlap for person candidates in-lane
     crosswalk_available = (
         crosswalk_mask is not None
         and crosswalk_mask.size > 0
         and (crosswalk_nonzero if crosswalk_nonzero is not None else cv2.countNonZero(crosswalk_mask) > 0)
     )
+    cross_overlaps = np.zeros(n, dtype=np.float64)
+    if crosswalk_available and crosswalk_integral is not None and in_lane_mask.any():
+        ih, iw = crosswalk_integral.shape
+        ix1 = np.clip(bx1, 0, iw - 1)
+        iy1 = np.clip(by1, 0, ih - 1)
+        ix2 = np.clip(bx2, 0, iw - 1)
+        iy2 = np.clip(by2, 0, ih - 1)
+        cw_counts = (
+            crosswalk_integral[iy2, ix2]
+            - crosswalk_integral[iy1, ix2]
+            - crosswalk_integral[iy2, ix1]
+            + crosswalk_integral[iy1, ix1]
+        ).astype(np.float64)
+        cross_overlaps = np.where(areas > 0, cw_counts / areas, 0.0)
+
+    lane_bbox = lane_bbox if lane_bbox is not None else _lane_bounds(lane_mask)
+    frame_area = float(max(w * h, 1))
     hazards: List[Dict[str, Any]] = []
 
-    for i in range(min(len(boxes_np), len(cls_np))):
-        x1, y1, x2, y2 = _clip_box_xyxy(boxes_np[i], w=w, h=h)
-        if x2 <= x1 or y2 <= y1:
-            continue
-        rx1, ry1, rx2, ry2 = _clip_box_xyxy(returned_boxes_np[i], w=w, h=h) if returned_boxes_np is boxes_np else _box_xyxy_int(returned_boxes_np[i])
-
+    # Inner loop only over in-lane boxes (small subset after vectorised filter)
+    for i in np.where(in_lane_mask)[0]:
         class_name = _resolve_class_name(cls_np[i], class_names)
         name_norm = _normalize_name(class_name)
 
-        lane_overlap = _overlap_ratio(lane_mask, (x1, y1, x2, y2), integral=lane_integral)
-        in_lane = lane_overlap >= lane_overlap_threshold
-        if not in_lane:
+        if name_norm in NORMALIZED_ALLOWED_VEHICLES:
             continue
 
-        cross_overlap = 0.0
-        in_crosswalk = False
-        if name_norm == "person" and crosswalk_available:
-            cross_overlap = _overlap_ratio(crosswalk_mask, (x1, y1, x2, y2), integral=crosswalk_integral)
-            in_crosswalk = cross_overlap >= crosswalk_overlap_threshold
-
-        # Explicit policy:
-        # - person in crosswalk is allowed
-        # - person in lane outside crosswalk is hazard
-        # - any non-allowed object in lane is hazard
-        if name_norm == "person" and in_crosswalk:
+        lane_overlap = float(lane_overlaps[i])
+        cross_overlap = float(cross_overlaps[i])
+        is_person = name_norm == "person"
+        in_crosswalk = is_person and crosswalk_available and cross_overlap >= crosswalk_overlap_threshold
+        if in_crosswalk:
             continue
 
-        is_allowed_vehicle = name_norm in NORMALIZED_ALLOWED_VEHICLES
-        if is_allowed_vehicle:
-            continue
+        x1, y1, x2, y2 = int(bx1[i]), int(by1[i]), int(bx2[i]), int(by2[i])
+
+        rb = returned_boxes_np[i]
+        rx1 = int(np.floor(min(float(rb[0]), float(rb[2]))))
+        ry1 = int(np.floor(min(float(rb[1]), float(rb[3]))))
+        rx2 = int(np.ceil(max(float(rb[0]), float(rb[2]))))
+        ry2 = int(np.ceil(max(float(rb[1]), float(rb[3]))))
 
         y_center = 0.5 * (y1 + y2)
         risk = _risk_from_position(y_center=y_center, lane_bbox=lane_bbox)
@@ -244,33 +290,25 @@ def analyze_lane_hazards(
         lane_w = max(float(lane_right - lane_left), 1.0)
         near_edge = (x_center - lane_left) / lane_w < 0.15 or (lane_right - x_center) / lane_w < 0.15
 
-        box_area = float((x2 - x1) * (y2 - y1))
-        frame_area = float(max(w * h, 1))
-        area_ratio = box_area / frame_area
+        area_ratio = float((x2 - x1) * (y2 - y1)) / frame_area
+        category, action = _categorize_hazard(class_name, risk, area_ratio, near_edge)
+        kind = "Person in Lane" if is_person else "Object in Path"
 
-        category, action = _categorize_hazard(
-            class_name=class_name,
-            risk_level=risk,
-            box_area_ratio=area_ratio,
-            near_lane_edge=near_edge,
-        )
-
-        kind = "Person in Lane" if name_norm == "person" else "Object in Path"
         hazards.append(
             {
-                "det_index": i,
+                "det_index": int(i),
                 "class_name": class_name,
                 "class_id": int(cls_np[i]) if np.isscalar(cls_np[i]) else -1,
                 "bbox_xyxy": [rx1, ry1, rx2, ry2],
-                "lane_overlap": float(lane_overlap),
-                "crosswalk_overlap": float(cross_overlap),
+                "lane_overlap": lane_overlap,
+                "crosswalk_overlap": cross_overlap,
                 "risk": risk,
                 "category": category,
                 "action": action,
                 "kind": kind,
                 "message": f"{kind} ({risk.upper()})",
                 "in_crosswalk": bool(in_crosswalk),
-                "in_lane": bool(in_lane),
+                "in_lane": True,
             }
         )
 

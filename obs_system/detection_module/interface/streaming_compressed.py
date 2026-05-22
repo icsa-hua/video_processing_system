@@ -367,8 +367,17 @@ class OptimizedStreamer(Streamer):
             else:
                 tracked_results.append(frame.to_results(self.converter.class_names))
 
-        with profilers[2]:
-            postprocessed = self.postprocess_batch(tracked_results, orig_images=orig_images_bgr)
+        # Pre-compute scene masks ONCE for the whole batch and cache them so
+        # that postprocess() per frame skips redundant get_scene_masks() calls.
+        target_hw = orig_images_bgr[0].shape[:2] if orig_images_bgr else None
+        batch_scene_masks = self._resolve_scene_masks(target_hw=target_hw)
+        self._batch_scene_cache = self._prepare_scene_mask_cache(batch_scene_masks)
+        try:
+            with profilers[2]:
+                postprocessed = self.postprocess_batch(tracked_results, orig_images=orig_images_bgr)
+        finally:
+            self._batch_scene_cache = None  # restore per-frame fallback behaviour
+
         return frame_bundles, postprocessed
 
     def _stage_d_dispatch_optional_sinks(

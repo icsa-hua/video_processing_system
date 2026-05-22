@@ -402,11 +402,11 @@ class Subtractor(EventExtractorInterface):
         """
         Returns lane and crosswalk masks in current frame coordinates.
         `expand_px` dilates regions to increase tolerance (high-attention mode).
-        """
-        lane = None if self.lanes_mask is None else self.lanes_mask.copy()
-        crosswalk = None if self.crosswalk_mask is None else self.crosswalk_mask.copy()
 
-        if lane is None:
+        When expand_px == 0 the stored masks are returned by reference
+        (no copy). Callers must not mutate the returned arrays.
+        """
+        if self.lanes_mask is None:
             if self._last_frame_shape is None:
                 return {"lane_mask": None, "crosswalk_mask": None}
             h, w = self._last_frame_shape
@@ -415,17 +415,27 @@ class Subtractor(EventExtractorInterface):
                 "crosswalk_mask": np.zeros((h, w), dtype=np.uint8),
             }
 
-        if expand_px > 0:
-            k = max(3, int(expand_px) * 2 + 1)
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-            lane = cv2.dilate(lane, kernel, iterations=1)
-            if crosswalk is not None:
-                crosswalk = cv2.dilate(crosswalk, kernel, iterations=1)
-                crosswalk = cv2.bitwise_and(crosswalk, lane)
+        if expand_px <= 0:
+            # Fast path: return references – avoids copying large mask arrays
+            # on every postprocess() call (once per frame in a batch).
+            cw = self.crosswalk_mask
+            if cw is None:
+                if not hasattr(self, "_zeros_crosswalk") or self._zeros_crosswalk.shape != self.lanes_mask.shape:
+                    self._zeros_crosswalk = np.zeros_like(self.lanes_mask, dtype=np.uint8)
+                cw = self._zeros_crosswalk
+            return {"lane_mask": self.lanes_mask, "crosswalk_mask": cw}
 
+        # Dilation path (high-attention mode) – copies are required here
+        lane = self.lanes_mask.copy()
+        crosswalk = None if self.crosswalk_mask is None else self.crosswalk_mask.copy()
+        k = max(3, int(expand_px) * 2 + 1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        lane = cv2.dilate(lane, kernel, iterations=1)
+        if crosswalk is not None:
+            crosswalk = cv2.dilate(crosswalk, kernel, iterations=1)
+            crosswalk = cv2.bitwise_and(crosswalk, lane)
         if crosswalk is None:
             crosswalk = np.zeros_like(lane, dtype=np.uint8)
-
         return {"lane_mask": lane, "crosswalk_mask": crosswalk}
 
     def __detect_crosswalks(self, last_frame: Optional[np.ndarray], lanes_mask: Optional[np.ndarray]) -> np.ndarray:
