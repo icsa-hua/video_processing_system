@@ -59,9 +59,14 @@ class Streamer(ABC):
         self.save_queue = queue.Queue(maxsize=10)
         self.save_thread = threading.Thread(target=self._save_worker, daemon=True)
         self.save_thread.start()
+        # Render worker: result_outputs, preview_frame (CPU-bound plot/encode)
         self.async_sink_queue = queue.Queue(maxsize=32)
         self.async_sink_thread = threading.Thread(target=self._async_sink_worker, daemon=True)
         self.async_sink_thread.start()
+        # IO worker: hazard_event, mqtt_results, mqtt_no_detection (I/O-bound, releases GIL)
+        self._io_sink_queue: queue.Queue = queue.Queue(maxsize=32)
+        self._io_sink_thread = threading.Thread(target=self._io_sink_worker, daemon=True)
+        self._io_sink_thread.start()
         
         self.seen = 0 
         self.speed = {} 
@@ -111,7 +116,10 @@ class Streamer(ABC):
         self.stop_reason: Optional[str] = None
         self._save_worker_stopped = False
         self._async_sink_worker_stopped = False
+        self._io_sink_worker_stopped = False
         self._session_resources_released = False
+        # Set by streaming_compressed before postprocess_batch; cleared after
+        self._batch_scene_cache: Optional[Dict[str, Any]] = None
         self._execution_profile_applied = False
         self._source_setup_started_at: Optional[float] = None
         self._prev_numeric_frame_id: Optional[int] = None
@@ -439,16 +447,25 @@ class Streamer(ABC):
 
 
     @abstractmethod
-    def postprocess(self, preds:Any, orig_image:Any)->Any : 
-        if not isinstance(preds, Results): 
-            raise ValueError("Not using ultralytics.Results class in postprocess of Streamer.") 
+    def postprocess(self, preds:Any, orig_image:Any)->Any :
+        if not isinstance(preds, Results):
+            raise ValueError("Not using ultralytics.Results class in postprocess of Streamer.")
 
-        preds.save_dir = self.save_dir.__str__() 
+        preds.save_dir = self.save_dir.__str__()
         frame_id = self._extract_frame_id(preds)
 
         hazards: List[Dict[str, Any]] = []
         target_hw = None if orig_image is None else orig_image.shape[:2]
-        scene_masks = self._resolve_scene_masks(target_hw=target_hw)
+
+        # Use batch-level scene cache pre-computed by streaming_compressed (avoids
+        # calling _resolve_scene_masks + get_scene_masks for every frame in a batch).
+        scene_cache = self._batch_scene_cache
+        if scene_cache is not None:
+            scene_masks = self.last_scene_masks
+        else:
+            scene_masks = self._resolve_scene_masks(target_hw=target_hw)
+            scene_cache = self._prepare_scene_mask_cache(scene_masks)
+
         lane_mask = scene_masks.get("lane_mask")
         crosswalk_mask = scene_masks.get("crosswalk_mask")
 
@@ -459,7 +476,6 @@ class Streamer(ABC):
             on_complete=lambda _name, ms: self._record_stage_time("hazard_logic_ms", ms, frame_id=frame_id),
         ):
             if preds.boxes is not None and preds.boxes.xyxy.numel() > 0:
-                scene_cache = self._prepare_scene_mask_cache(scene_masks)
                 detections = getattr(preds, "sv_detections", None)
                 hazard_boxes = detections.xyxy if detections is not None else preds.boxes.xyxy
                 hazard_classes = detections.class_id if detections is not None else preds.boxes.cls
@@ -636,6 +652,19 @@ class Streamer(ABC):
         if self.async_sink_thread.is_alive():
             self.async_sink_thread.join(timeout=2)
 
+    def stop_io_sink_worker(self) -> None:
+        if self._io_sink_worker_stopped:
+            return
+
+        self._io_sink_worker_stopped = True
+        try:
+            self._io_sink_queue.put_nowait(None)
+        except queue.Full:
+            Streamer.logger.warning("IO sink queue full during shutdown; pending IO tasks may be dropped.")
+
+        if self._io_sink_thread.is_alive():
+            self._io_sink_thread.join(timeout=2)
+
 
     def release_dataset_resources(self) -> None:
         if self.dataset is None:
@@ -684,6 +713,7 @@ class Streamer(ABC):
             producer_flag.value = False
 
         self.stop_async_sink_worker()
+        self.stop_io_sink_worker()
         self.close_preview_stream(preview_queue)
         self.stop_save_worker()
         self.release_video_writers()
@@ -777,6 +807,7 @@ class Streamer(ABC):
         Streamer.logger.warning(f"Uknown save task type: {task_type}")
 
     def _async_sink_worker(self) -> None:
+        """Render worker: handles CPU-bound plot/encode tasks (result_outputs, preview_frame)."""
         while True:
             task = self.async_sink_queue.get()
             if task is None:
@@ -785,6 +816,17 @@ class Streamer(ABC):
                 self._do_async_sink(task)
             except Exception:
                 Streamer.logger.exception("Async sink task failed: %s", task[0] if task else task)
+
+    def _io_sink_worker(self) -> None:
+        """IO worker: handles I/O-bound tasks (hazard_event, mqtt_results, mqtt_no_detection)."""
+        while True:
+            task = self._io_sink_queue.get()
+            if task is None:
+                break
+            try:
+                self._do_io_sink(task)
+            except Exception:
+                Streamer.logger.exception("IO sink task failed: %s", task[0] if task else task)
 
     def _do_async_sink(self, task) -> None:
         task_type = task[0]
@@ -798,6 +840,11 @@ class Streamer(ABC):
             _, frame_bgr, preview_queue, producer_flag = task
             self._do_preview_frame_output(frame_bgr, preview_queue, producer_flag)
             return
+
+        Streamer.logger.warning("Unknown async sink task type: %s", task_type)
+
+    def _do_io_sink(self, task) -> None:
+        task_type = task[0]
 
         if task_type == "mqtt_results":
             _, preds, frame_images_bgr, frame_ids = task
@@ -814,7 +861,10 @@ class Streamer(ABC):
             self._record_hazard_evidence(preds=preds, image=image, hazards=hazards, frame_id=frame_id, record_stage=False)
             return
 
-        Streamer.logger.warning("Unknown async sink task type: %s", task_type)
+        Streamer.logger.warning("Unknown IO sink task type: %s", task_type)
+
+    # Task types routed to the dedicated IO sink worker
+    _IO_SINK_TASK_TYPES = frozenset({"mqtt_results", "mqtt_no_detection", "hazard_event"})
 
     def _enqueue_async_sink(
         self,
@@ -827,14 +877,15 @@ class Streamer(ABC):
     ) -> bool:
         t0 = time.perf_counter()
         queued = False
+        target_q = self._io_sink_queue if (task and task[0] in self._IO_SINK_TASK_TYPES) else self.async_sink_queue
         try:
             if drop_if_full:
-                self.async_sink_queue.put_nowait(task)
+                target_q.put_nowait(task)
             else:
-                self.async_sink_queue.put(task, timeout=0.01)
+                target_q.put(task, timeout=0.01)
             queued = True
         except queue.Full:
-            Streamer.logger.debug("Async sink queue full; dropping task %s", task[0] if task else None)
+            Streamer.logger.debug("Sink queue full; dropping task %s", task[0] if task else None)
         finally:
             if stage is not None:
                 self._record_stage_time(stage, (time.perf_counter() - t0) * 1e3, frame_id=frame_id, frame_ids=frame_ids)

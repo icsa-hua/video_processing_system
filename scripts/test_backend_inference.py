@@ -18,6 +18,7 @@ from obs_system.utils.benchmarking.backend_benchmark import (
     dump_json,
     fmt_opt,
     latency_summary,
+    probe_model_backend,
     read_csv_rows,
 )
 from obs_system.utils.benchmarking.metrics.pc_performance import (
@@ -144,12 +145,15 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
     run_dir = output_dir / resolved_model_path.stem
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    streamer = _build_streamer(
-        model_path=resolved_model_path,
-        batch_size=args.batch_size,
-        device=args.device,
-        verbose=bool(args.verbose),
-    )
+    try:
+        streamer = _build_streamer(
+            model_path=resolved_model_path,
+            batch_size=args.batch_size,
+            device=args.device,
+            verbose=bool(args.verbose),
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Failed to load model '{model_path}': {exc}") from exc
 
     perf_logger = PerfLogger(str(run_dir / "perf_log.csv"), flush_every=64)
     frame_logger = FramePerfLogger(str(run_dir / "perf_frames.csv"), flush_every=128)
@@ -303,7 +307,13 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run inference-only PT/ONNX/ENGINE backend comparison on the same video.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run inference-only PT/ONNX/ENGINE backend comparison on the same video. "
+            "On WSL / non-Jetson hosts the .engine backend is automatically skipped "
+            "when TensorRT is not installed; missing model files are also skipped."
+        )
+    )
     parser.add_argument("--video-source", required=True, help="Input video path or stream URL.")
     parser.add_argument("--output-dir", default="assets/backend_inference_comparison", help="Directory where run summaries/logs are written.")
     parser.add_argument("--pt-model", default=DEFAULT_PT_MODEL, help="Path to the PT model.")
@@ -321,8 +331,33 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    model_paths = [args.pt_model, args.onnx_model, args.engine_model]
-    summaries = [_run_single_benchmark(model_path=path, args=args, output_dir=output_dir) for path in model_paths]
+    candidate_paths = [args.pt_model, args.onnx_model, args.engine_model]
+
+    # Filter to backends that can actually run in this environment.
+    # On WSL / non-Jetson hosts this silently drops the .engine backend when
+    # TensorRT is not installed and any model whose file is missing.
+    runnable: list[str] = []
+    for mp in candidate_paths:
+        ok, reason = probe_model_backend(mp)
+        if ok:
+            runnable.append(mp)
+        else:
+            print(f"[SKIP] {mp}  —  {reason}")
+
+    if not runnable:
+        print("No runnable model backends found. Exiting.")
+        return
+
+    summaries: list[dict[str, Any]] = []
+    for path in runnable:
+        try:
+            summaries.append(_run_single_benchmark(model_path=path, args=args, output_dir=output_dir))
+        except Exception as exc:
+            print(f"[ERROR] {path}  —  {exc}")
+
+    if not summaries:
+        print("All benchmarks failed. Check model files and backend availability.")
+        return
 
     dump_json(output_dir / "comparison_summary.json", summaries)
     _write_markdown_summary(output_dir / "comparison_summary.md", summaries)
