@@ -1,164 +1,391 @@
-# Obstacle_Recognition_Edge_Ai
-Obstacle Recognition 
+# Obstacle Recognition Edge AI
+
+Obstacle recognition and tracking pipeline for roadside perception video streams, with support for PyTorch, ONNX, and TensorRT backends.
+
 ![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)
 
+## Repository
+
+- Remote: `https://github.com/icsa-hua/video_processing_system.git`
+- Current development branch: `claude_v2_deploy`
 
 ## Overview
-This Video Processing System is a Python-based application designed for handling video/streaming feeds performing object detection and tracking for Road Side Perception Units (RSPUs) that remain motionless while monitoring an intersection or a highway. Detection results are transferred through MQTT to a server from a client that in later stages will be used to transmit the detection results if an abnormality is discovered. 
 
-This uses the pretrained **You Only Look Once (YOLO)** models, for their great performance in regarsd to multiobject detection while maintaining a low GPU and memory utilization. Tracking of the objects is done with the **Bytetracker** algorithm included in the ultralytics package. 
+This repository contains a video processing pipeline for static roadside cameras. It performs:
 
-This system saves the results, constructing the new view (with detections) in the runs/det/ directory. 
+- motion gating with background subtraction
+- object detection
+- tracking
+- hazard logic
+- optional MQTT publishing
+- optional preview / saved outputs
+- backend benchmarking for `.pt`, `.onnx`, and `.engine`
 
+The current pipeline and benchmark flows have been exercised on:
 
-## Prerequisites
+- WSL
+- NVIDIA Jetson
 
-### Utilized Software / Requirements. 
-* Python --> 3.10
-* Torch (with cuda for better performance)
-* Ultralytics (python package)
-* paho_mqtt (python package)
-* Shapely (python package)
-* FastAPI (python package)
-* Streamlit (python package)
-* ONNX - ONNXRuntime 
+## Requirements
 
-### Installation of Requirements 
-There are two ways to go about it: 
+### Software
 
-1. Use `pip install -r requirements.txt` after cloning the module 
-2. Install it as a package with: 
-```sh 
+- Python 3.10
+- PyTorch
+- Ultralytics
+- OpenCV
+- ONNX / ONNX Runtime
+- paho-mqtt
+- FastAPI
+- Streamlit
+- Shapely
+
+### Installation
+
+Use either:
+
+```bash
+pip install -r requirements.txt
+```
+
+or:
+
+```bash
 pip install -e .
 ```
 
-You can change what is installed with the __setup.py__. 
+### Hardware
 
-### Required Hardware
-The program can execute with a CPU-only systems
-however it is recommended that there is an 
-NVIDIA GPU to significantly improve performance. 
+The pipeline can run on CPU-only systems, but GPU execution is strongly recommended. Jetson devices are supported, and TensorRT is intended primarily for Jetson deployment.
 
-Works on Unix-based systems.  
+## Getting Started
 
+Clone the repository:
 
-## Installation Instructions 
-
-Clone the repository from the default branch:
-```sh
-git clone -b clean-branch https://github.com/icsa-hua/video_processing_system.git
-```
-Navigate to the project directory:
-```sh
-
+```bash
+git clone -b claude_v2_deploy https://github.com/icsa-hua/video_processing_system.git
 cd video_processing_system
 ```
-[!] NOTE: You should consider using a virtual environment. 
 
+Using a virtual environment is recommended.
 
-## Usage Instructions 
-To execute a simple program execution which is recommended to test everything is functional:
-```sh
-python3 obs_pipeline.py 
-```
-This uses the default video located in /samples
+If module resolution is inconsistent in your shell, set:
 
-> To pass your own source of video use the following command:
-```sh
-python3 obs_pipeline.py --source=samples/sample_video.mp4
+```bash
+export PYTHONPATH="$(pwd):${PYTHONPATH}"
 ```
 
-> To see the processed video in real time use the `---show` argument: 
-```sh
-python3 obs_pipeline.py --source=samples/sample_video.mp4 --show
+## Main Pipeline Execution
+
+The main entry point is:
+
+```bash
+python3 scripts/obs_pipeline.py
 ```
 
-> To see the logs and the detections returned from inference use the `---verbose` argument: 
-```sh
-python3 obs_pipeline.py --source=samples/sample_video.mp4 --verbose
+### Common examples
+
+Run the pipeline with a specific video:
+
+```bash
+python3 scripts/obs_pipeline.py --video_source samples/sample_video.mp4
 ```
 
-> You can opt to use another model by changing the ```--name``` argument.  
-[!] Models supported are YOLOv5 (all) and YOLOv8 (all) and their compressed form through ONNX. 
+Run with a specific model:
 
-```sh
-python3 obs_pipeline.py --source=samples/sample_video.mp4 --name='yolov8s' 
+```bash
+python3 scripts/obs_pipeline.py --video_source samples/sample_video.mp4 --model_name assets/compressed_models/yolov8s.pt
 ```
 
-You can opt to use a web interface created with Streamlit and backend with Fast API. 
-```sh
-python3 obs_pipeline.py --gui
+Run a TensorRT engine:
+
+```bash
+python3 scripts/obs_pipeline.py --video_source samples/sample_video.mp4 --model_name assets/compressed_models/yolov8s.engine --use_TRT
 ```
 
-This will open a web interface to receive your inputs and 
-view the processed video. An example can be seen below: 
+Show preview:
 
-![Screenshot 2025-01-23 104120](https://github.com/user-attachments/assets/ade0d614-d96b-4a41-b2cd-480b5755ae2f)
-
-
-The pipeline initiates both the fast api server and the streamlit interface. To use the program for a stream it is recommended to use the .m3u8 stream format. 
-
-Now if the interface was connected to the backend server, you should be able to see the results of the inference. 
-![Screenshot 2025-01-23 110806](https://github.com/user-attachments/assets/03b99a2c-e4f2-4e42-910d-e2d7c57f86af)
-
-![Screenshot 2025-01-23 110818](https://github.com/user-attachments/assets/a9e19e4a-6423-4ecd-a630-a7f8c301ed7a)
-
-You can opt to not use the MQTT broker to get better performance from the model. Just do not include the ```--mqtt``` argument on execution. 
-Using the MQTT will transmit to your designated broker information for speed (preprocessing, inference, postprocessing). 
-
-For the same reasoning you can opt to not show the results during inference, or print out the performance from the inference of batches.
-Simply do not include the ```--show``` or ```--verbose``` arguments. 
-
-If you encounter any problem with the modules, setting the PYTHONPATH can be a potential solution:
-```sh
-export PYTHONPATH="/path to project:${PYTHONPATH}"
+```bash
+python3 scripts/obs_pipeline.py --video_source samples/sample_video.mp4 --show
 ```
 
+Verbose detections and logs:
 
-## Documentation
-The main classes of the API can be found inside the obs_system directory. Almost every sub-directory includes an interface with the generalized class and the scripts to use it. 
-
-> Detection Module
-
-This module is responsible for processing the video source and using batches of frames to inference them altogether, thus improving the time of execution without mitigating the accuracy. 
-Includes the YOLOStreamer interface which is used to create YOLO5Streamer/YOLO8Streamer that sets up the model, with pytorch, calls the data loader based on the type of source and finally inferences batches of images. 
-
-> Communication Module
-
-This module creates the publisher and subscriber for an MQTT communication and transmits the performance results.
-The main class here is the RealMQTT which uses the MQTTInterface interface for 4 basic methods, connect, publish, subscribe and on_connect. 
-
-> Application Module
-
-This is the initial execution script to deploy the necessary resources and pipelines for the intended scenario as provided by the user.
-Takes the input arguments and deploys the detection model, creates the mqtt broker and configures the process.
-It also provides some statistics mostly for debugging and performance benchmarking.
-The class Application is the main object during execution that is used based on the configuration provided by the user
-
-> Logic Module
-
-This is used to store the ROI implementation with lane detection.
-We are also currently examining depth imaging algorithms but will include it on later stages. 
-
-## FAQ and Troubleshooting 
-1. Streaming approach is provided by the Ultralytics implementation which can be found in the documentation [here](https://docs.ultralytics.com/reference/engine/predictor/?h=stream#ultralytics.engine.predictor.BasePredictor.setup_model). This was tailored to yolov8 but we transformed it to work for yolov5 as well.
-
-2. Why use both model architectures? 
-> Having the option to interchange models and benchmark their performance is critical for applications that are aiming towards embedded AI platforms. 
-
-3. Execution failed with loaders.py not containing the required methods. 
-> We have modified the loaders.py file to include cropping & zooming in so that unnecessary data is not included 
-making the perofmance of the model better. We include the modified file in the repo. To use it, you must copy the file 
-to the ultralytics directory in your environment. Specifically, you need to copy the file to the ultralytics/data/ directory. 
-Overwrite the previouus file with this new one. 
-
-4. We can view the inference performance of the model based on profiling using pytorch Profiler. 
-> We have included the profiling results in the repo in the trace_ json file. To view the results we utilize the 
-viztracer package. It is included in the requirements.txt file. To use it: 
-```sh
-vizviewer trace_yolov8.json
+```bash
+python3 scripts/obs_pipeline.py --video_source samples/sample_video.mp4 --verbose
 ```
-Then open it in the browser.
 
-5. Connection Error 
-> In some cases the local host address or the port might already be in use. Make sure that no process is occupying the port. 
+Enable ROI:
+
+```bash
+python3 scripts/obs_pipeline.py --video_source samples/sample_video.mp4 --roi
+```
+
+Enable MQTT:
+
+```bash
+python3 scripts/obs_pipeline.py --video_source samples/sample_video.mp4 --mqtt
+```
+
+Enable fisheye projection:
+
+```bash
+python3 scripts/obs_pipeline.py --video_source samples/sample_video.mp4 --fep
+```
+
+Save rendered outputs:
+
+```bash
+python3 scripts/obs_pipeline.py --video_source samples/sample_video.mp4 --save
+```
+
+Enable benchmark accounting:
+
+```bash
+python3 scripts/obs_pipeline.py --video_source samples/sample_video.mp4 --bench --bench-labels samples/labels --plot_perf
+```
+
+Run the Jetson execution branch:
+
+```bash
+python3 scripts/obs_pipeline.py \
+  --video_source samples/sample_video.mp4 \
+  --model_name assets/compressed_models/yolov8s.engine \
+  --use_TRT \
+  --jetson_profile \
+  --jetson_hazard_scale 0.5 \
+  --jetson_cpu_threads 2
+```
+
+Launch the web interface:
+
+```bash
+python3 scripts/obs_pipeline.py --gui
+```
+
+## Main Pipeline CLI Choices
+
+The primary execution script supports the following options through `obs_system/application_module/dummy_application/pipeline_config.py`:
+
+- `--model_name`
+  Model path or model file to load. Supports `.pt`, `.onnx`, and `.engine`.
+- `--video_source`
+  Local video path, RTSP source, or configured stream source.
+- `--type`
+  Pipeline mode. Current default is `tracking`.
+- `--gui` / `--no-gui`
+  Launch the Streamlit/FastAPI interface instead of direct CLI execution.
+- `--mqtt` / `--no-mqtt`
+  Enable or disable MQTT publishing.
+- `--show` / `--no-show`
+  Enable preview generation.
+- `--verbose` / `--no-verbose`
+  Enable detailed console logging.
+- `--port_address`
+  GUI / service port.
+- `--host_address`
+  GUI / service host address.
+- `--save` / `--no-save`
+  Save rendered outputs.
+- `--roi` / `--no-roi`
+  Enable region-of-interest cropping.
+- `--half` / `--no-half`
+  Enable reduced resource / half-style execution path where supported.
+- `--fep` / `--no-fep`
+  Enable fisheye projection logic.
+- `--bench` / `--no-bench`
+  Enable benchmark scoring against ground truth labels.
+- `--bench-labels`
+  Ground-truth label directory for benchmark mode.
+- `--use_TRT` / `--no-use_TRT`
+  Required when using `.engine` TensorRT models.
+- `--plot_perf` / `--no-plot_perf`
+  Save pipeline performance logs for later analysis.
+- `--only_FPS` / `--no-only_FPS`
+  Track FPS-focused execution without full plotting requirements.
+- `--stream_limit_hours`
+  Runtime cap for live streams. `0` disables the cap.
+- `--lane_recalibration_interval_frames`
+  Periodic lane recalibration interval for long-running streams.
+- `--jetson_profile` / `--no-jetson_profile`
+  Enable the Jetson-optimized execution branch.
+- `--jetson_hazard_scale`
+  Downscale factor for Jetson hazard-mask processing. Valid range: `(0, 1]`.
+- `--jetson_cpu_threads`
+  CPU thread cap for the Jetson branch. `0` keeps the default runtime behavior.
+
+## Benchmark and Test Scripts
+
+### 1. Full pipeline backend comparison
+
+```bash
+python3 scripts/run_backend_comparison.py --video-source samples/sample_video.mp4
+```
+
+This runs `.pt`, `.onnx`, and `.engine` through the main pipeline on the same video and stores:
+
+- per-backend `summary.json`
+- `perf_log.csv`
+- `perf_frames.csv`
+- `perf_timeline.jsonl`
+- `comparison_summary.json`
+- `comparison_summary.md`
+
+Important toggles:
+
+- `--roi` / `--no-roi`
+- `--fep` / `--no-fep`
+- `--mqtt` / `--no-mqtt`
+- `--save-outputs` / `--no-save-outputs`
+- `--verbose` / `--no-verbose`
+- `--labels-dir`
+- `--stream-limit-hours`
+- `--jetson-profile`
+- `--jetson-hazard-scale`
+- `--jetson-cpu-threads`
+
+### 2. Inference-only backend comparison
+
+```bash
+python3 scripts/test_backend_inference.py --video-source samples/sample_video.mp4
+```
+
+This compares `.pt`, `.onnx`, and `.engine` on the same video while timing backend inference only. It is useful for separating raw model throughput from the end-to-end pipeline.
+
+### 3. Other scripts
+
+Additional helper scripts live in `scripts/`, including:
+
+- `plot_perf_comparisons.py`
+- `plot_perf_extended.py`
+- `bench_postprocess.py`
+- `fine_tuned_tester.py`
+- `test_fisheye.py`
+
+## Docker
+
+This repository includes:
+
+- `Dockerfile`
+- `docker-compose.yml`
+
+### Build and start
+
+```bash
+docker compose up --build -d
+```
+
+Enter the container:
+
+```bash
+docker exec -it dev_cont bash
+```
+
+Inside the container, the repository is mounted at:
+
+```bash
+/workspace
+```
+
+Typical in-container execution:
+
+```bash
+cd /workspace
+python3 scripts/obs_pipeline.py --video_source samples/sample_video.mp4
+```
+
+### Docker notes
+
+- The compose setup is configured for NVIDIA runtime use.
+- The current image is Jetson-oriented and based on `ultralytics/ultralytics:latest-jetson-jetpack6`.
+- The repository is bind-mounted into the container, so code edits on the host are immediately visible inside the container.
+- `jtop` socket passthrough is configured in `docker-compose.yml` for Jetson telemetry access when available.
+
+## Important Jetson TensorRT Note
+
+When first going to use the Docker environment on a Jetson device, the TensorRT options require a model generated on your specific Jetson.
+
+Recommended workflow:
+
+1. Enter the Docker environment.
+2. Export a YOLO model to ONNX from Python.
+3. Convert that ONNX model to a TensorRT engine on the Jetson.
+4. Pass that resulting `.engine` file through `--model_name`.
+
+Example ONNX export from Python with Ultralytics:
+
+```python
+from ultralytics import YOLO
+
+model = YOLO("yolov8s.pt")
+model.export(format="onnx")
+```
+
+Then convert ONNX to TensorRT inside the container, typically with:
+
+```bash
+/usr/src/tensorrt/bin/trtexec --onnx=/path/to/model.onnx --saveEngine=/path/to/model.engine
+```
+
+Then run the pipeline with:
+
+```bash
+python3 scripts/obs_pipeline.py --video_source samples/sample_video.mp4 --model_name /path/to/model.engine --use_TRT
+```
+
+## Notes on Model Selection
+
+The pipeline accepts:
+
+- `.pt`
+- `.onnx`
+- `.engine`
+
+For TensorRT:
+
+- `.engine` requires `--use_TRT`
+- on Jetson, the `.engine` should be built on the target device for best compatibility
+
+## Project Structure
+
+- `scripts/`
+  Main execution and benchmarking scripts.
+- `obs_system/application_module/`
+  Application setup, configuration, GUI/backend integration.
+- `obs_system/detection_module/`
+  Streamers, model adapters, inference flow.
+- `obs_system/logic_module/`
+  ROI, subtractor, hazard logic, tracking helpers.
+- `obs_system/communication_module/`
+  MQTT integration.
+- `assets/`
+  Models, benchmark outputs, saved MQTT payloads, hazard outputs.
+
+## Troubleshooting
+
+### TensorRT engine does not load
+
+- Ensure the engine was built for the same Jetson device and software stack.
+- Ensure you passed `--use_TRT`.
+- Ensure `--model_name` points to the `.engine` file.
+
+### Benchmark numbers differ between scripts
+
+That is expected:
+
+- `scripts/test_backend_inference.py` measures inference-only throughput.
+- `scripts/run_backend_comparison.py` measures end-to-end pipeline throughput.
+
+### Labels path error in benchmark mode
+
+If `--bench` is enabled, ensure `--bench-labels` points to an existing label directory.
+
+### Preview / GUI issues in Docker
+
+- Use the web interface path with `--gui` when appropriate.
+- For headless Docker usage, prefer saved outputs or the browser-based interface instead of direct local window display.
+
+### MQTT issues
+
+- Verify broker certificates and MQTT configuration under `obs_system/communication_module/mqtt_com/`.
+- For pure throughput testing, keep `--no-mqtt`.
