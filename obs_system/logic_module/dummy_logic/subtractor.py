@@ -9,6 +9,7 @@ from obs_system.utils.global_config import (
     MIN_OBJ_AREA,
 )
 from obs_system.utils.logger import get_logger
+from obs_system.utils.common import detect_static_lanes
 
 import numpy as np
 import cv2
@@ -50,11 +51,6 @@ class Subtractor(EventExtractorInterface):
                     detectShadows=detect_shadows)
 
 
-        self.fgbg = cv2.createBackgroundSubtractorMOG2(
-                    history=history, 
-                    varThreshold=VARTHRESHOLD,
-                    detectShadows=False)
-
         self.kernel3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
         self.kernel5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
         self.kernel15 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15,15))
@@ -87,6 +83,27 @@ class Subtractor(EventExtractorInterface):
         self._saved_lane_extractions = 0
         self._saved_crosswalk_extractions = 0
         self._max_saved_scene_extractions = 2
+
+        # Cached per-resolution constants (set on first processed frame, avoids
+        # recomputing total pixels and threshold every call)
+        self._cached_total_pixels: float = 0.0
+        self._cached_threshold: int = 0
+
+        # Raw MOG2 output stored for the calibration accumulator so it can reuse
+        # it without running a second background subtractor
+        self._last_fg_mask: Optional[np.ndarray] = None
+        self._last_motion_score: float = 0.0
+
+        # Static lane detection — primary path for sparse-traffic environments
+        self._static_lanes_mask: Optional[np.ndarray] = None
+        self._static_bg_sampled: bool = False
+        self._static_bg_warmup_frames: int = 50   # frames to stabilise MOG2 background
+
+        # Rolling motion-density window for hybrid branch decision
+        self._motion_score_window: deque = deque(maxlen=60)
+        self._frames_processed: int = 0
+        self._motion_sparse_threshold: float = 0.001  # below → static mask is primary
+        self._motion_dense_threshold: float = 0.006   # above → blend motion accumulation
 
 
     def configure_source_warmup(self, source_is_stream: bool) -> None:
@@ -141,6 +158,7 @@ class Subtractor(EventExtractorInterface):
         if not self._recalibration_enabled or self.recalibration_accum_time <= 0:
             return
 
+        self._run_static_lane_detection()  # refresh static baseline before accumulating
         self.accum_time = self.recalibration_accum_time
         self._recalibration_active = True
         self._frames_since_last_calibration = 0
@@ -231,7 +249,7 @@ class Subtractor(EventExtractorInterface):
             motion_flag = self.__call_subtractor(frame, save_dir=save_dir, save_img=save_img, save_idx=save_idx)
 
             motion_flags.append(motion_flag)
-            motion_scores.append(getattr(self, '_last_motion_score', 0.0))
+            motion_scores.append(self._last_motion_score)
 
             if save_img and save_idx is not None: 
                 save_idx += 1 
@@ -244,6 +262,14 @@ class Subtractor(EventExtractorInterface):
                 self.__cal_calibrator(frame, size=(h,w))
                 if startup_skip_batch:
                     self._startup_frames_seen = min(self.initial_accum_time, self._startup_frames_seen + 1)
+
+        # Update rolling density window and trigger one-shot static detection
+        # once the background model has had enough frames to stabilise
+        self._motion_score_window.extend(motion_scores)
+        self._frames_processed += len(batch)
+        if not self._static_bg_sampled and self._frames_processed >= self._static_bg_warmup_frames:
+            self._run_static_lane_detection()
+            self._static_bg_sampled = True
 
         if self.accum_time == 0 and self.__calibration_ended :
             lanes_final = self.__apply_calibration(last_frame, save_img=save_img)
@@ -269,52 +295,53 @@ class Subtractor(EventExtractorInterface):
         return motion_flags, lanes_final
         
 
-    def __call_subtractor(self, frame, save_dir=None, save_img=False, save_idx:int=0): 
-     
-        # Learning rate: 0 if static pre-trained background, default otherwise
-        lr = 0.0 if self.static_bg else -1 
-        mask = self.bg_subtractor.apply(frame, learningRate=lr) 
+    def __call_subtractor(self, frame, save_dir=None, save_img=False, save_idx:int=0):
 
-        _,subtractor_mask = cv2.threshold(mask, 254, 255, cv2.THRESH_BINARY)
+        lr = 0.0 if self.static_bg else -1
+        raw = self.bg_subtractor.apply(frame, learningRate=lr)
+        self._last_fg_mask = raw  # stored for calibration accumulator (uses lower threshold)
+
+        _, subtractor_mask = cv2.threshold(raw, 254, 255, cv2.THRESH_BINARY)
+
+        # Cache resolution-dependent constants on first call
+        if self._cached_total_pixels == 0:
+            dh, dw = subtractor_mask.shape[:2]
+            self._cached_total_pixels = float(dh * dw)
+            self._cached_threshold = int(self.threshold_ratio * dh * dw)
+
+        motion_pixels = cv2.countNonZero(subtractor_mask)
+        self._last_motion_score = motion_pixels / self._cached_total_pixels
+
+        # Early exit: hysteresis hold is active — skip morph + contour work
+        if self._hold > 0:
+            self._hold -= 1
+            # Use pixel-count gate to track actual motion state in _recent
+            self._recent.append(motion_pixels > self._cached_threshold)
+            if save_dir is not None and save_img and save_idx is not None:
+                s = cv2.morphologyEx(subtractor_mask, cv2.MORPH_OPEN, self.kernel3)
+                s = cv2.morphologyEx(s, cv2.MORPH_CLOSE, self.kernel3)
+                self.__save_subtractor(frame, s, save_dir, save_idx)
+            return True
+
         subtractor_mask = cv2.morphologyEx(subtractor_mask, cv2.MORPH_OPEN, self.kernel3)
         subtractor_mask = cv2.morphologyEx(subtractor_mask, cv2.MORPH_CLOSE, self.kernel3)
 
-        # Motion score: foreground pixel ratio in [0,1]
-        motion_pixels = cv2.countNonZero(subtractor_mask)
-        total_pixels = float(subtractor_mask.shape[0] * subtractor_mask.shape[1])
-        motion_score = (motion_pixels / total_pixels) if total_pixels > 0 else 0.0
-        self._last_motion_score = motion_score
-        contours, _ = cv2.findContours(subtractor_mask,cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(subtractor_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        flag = False 
-        if contours:  
-            
-            # Edge case single moving car will fail 
-            motion_pixels = cv2.countNonZero(subtractor_mask) 
-            total = subtractor_mask.shape[0] * subtractor_mask.shape[1] 
+        flag = False
+        if contours:
+            max_obj_area = max((cv2.contourArea(c) for c in contours), default=0)
+            min_obj_area = MIN_OBJ_AREA * self._cached_total_pixels
+            flag = (motion_pixels > self._cached_threshold) or (max_obj_area > min_obj_area)
 
-            threshold = int(self.threshold_ratio * total) 
+        self._recent.append(flag)
+        if len(self._recent) == self._recent.maxlen and all(self._recent):
+            self._hold = self.hold_frames
 
-            #Object aware threshold (largest contour area) 
-            max_obj_area = max((cv2.contourArea(c) for c in contours), default=0) 
-            min_obj_area = MIN_OBJ_AREA * total 
-            flag = (motion_pixels > threshold) or (max_obj_area > min_obj_area) 
-
-        # Hysteresis
-        self._recent.append(flag) 
-
-        if self._hold > 0: 
-            motion_flag = True 
-            self._hold -= 1 
-        else: 
-            motion_flag = flag 
-            if len(self._recent) == self._recent.maxlen and all(self._recent): 
-                self._hold = self.hold_frames 
-        
-        if save_dir is not None and save_img and save_idx is not None: 
+        if save_dir is not None and save_img and save_idx is not None:
             self.__save_subtractor(frame, subtractor_mask, save_dir, save_idx)
 
-        return motion_flag 
+        return flag
 
             
     def __save_subtractor(self, frame, mask, save_dir:str, idx:int): 
@@ -322,30 +349,33 @@ class Subtractor(EventExtractorInterface):
         cv2.imwrite(os.path.join(save_dir, f"{idx:06d}_motion.png"), motion_cutout) 
 
 
-    def __cal_calibrator(self, frame, **kwargs): 
+    def __cal_calibrator(self, frame, **kwargs):
 
-        if self.__calibration_ended: 
-            return self.acc_mask, self.prev_mask
+        if self.__calibration_ended:
+            return
+
+        if self._last_fg_mask is None:
+            return
 
         h, w = kwargs["size"]
 
-        fg_mask = self.fgbg.apply(frame, learningRate=0.01) 
-        _, fgmask_threshold = cv2.threshold(fg_mask, 180, 255, cv2.THRESH_BINARY) 
+        # Reuse the raw MOG2 output already computed in __call_subtractor.
+        # Threshold at 127 to include shadow regions, which also mark vehicle paths,
+        # giving denser accumulation than the motion-gate mask (threshold 254).
+        _, fg = cv2.threshold(self._last_fg_mask, 127, 255, cv2.THRESH_BINARY)
+        fg_clean = cv2.morphologyEx(fg, cv2.MORPH_OPEN, self.kernel3)
 
-        fgmask_clean = cv2.morphologyEx(fgmask_threshold, cv2.MORPH_OPEN, self.kernel5, iterations=2) 
-        fgmask_clean = cv2.morphologyEx(fgmask_clean, cv2.MORPH_CLOSE, self.kernel5, iterations=2)
-
-        mask_resized = cv2.resize(fgmask_clean, (w,h))
-        blended = cv2.addWeighted(mask_resized.astype(np.float32), 0.6, self.prev_mask, 0.4, 0)
-
+        mask_resized = cv2.resize(fg_clean.astype(np.float32), (w, h))
+        # Conservative EWA blend: raw single-frame mask is noisier than the old
+        # slow-learning fgbg, so weight the new frame less than the original 0.6
+        blended = cv2.addWeighted(mask_resized, 0.35, self.prev_mask, 0.65, 0)
         self.prev_mask = blended
-        self.acc_mask = cv2.add(self.acc_mask, blended) 
+        self.acc_mask = cv2.add(self.acc_mask, blended)
 
-        if not self.__calibration_ended and self.accum_time > 0: 
+        if self.accum_time > 0:
             self.accum_time -= 1
-
-        if self.accum_time == 0: 
-            self.__calibration_ended = True 
+        if self.accum_time == 0:
+            self.__calibration_ended = True
 
 
     def __apply_calibration(self, frame, **kwargs): 
@@ -362,18 +392,23 @@ class Subtractor(EventExtractorInterface):
 
         _, labels, stats, _ = cv2.connectedComponentsWithStats(lanes_closed, connectivity=8)
 
-        min_area = 15000 
-        lanes_clean = np.zeros_like(lanes_closed) 
+        # Fraction-based threshold adapts to any input resolution
+        h_acc, w_acc = self.acc_mask.shape
+        min_area = max(500, int(0.005 * h_acc * w_acc))
+        lanes_clean = np.zeros_like(lanes_closed)
 
-        for i, stat in enumerate(stats): 
-            if i == 0 : 
-                continue 
-
-            if stat[cv2.CC_STAT_AREA] >= min_area: 
+        for i, stat in enumerate(stats):
+            if i == 0:
+                continue
+            if stat[cv2.CC_STAT_AREA] >= min_area:
                 lanes_clean[labels == i] = 255
 
-        lanes_smooth = cv2.GaussianBlur(lanes_clean, (11,11), 0) 
+        lanes_smooth = cv2.GaussianBlur(lanes_clean, (11, 11), 0)
         _, candidate_lanes = cv2.threshold(lanes_smooth, 50, 255, cv2.THRESH_BINARY)
+
+        # Hybrid merge: blend motion accumulation result with static geometry baseline
+        candidate_lanes = self._merge_with_static(candidate_lanes)
+
         candidate_crosswalk = self.__detect_crosswalks(last_frame=frame, lanes_mask=candidate_lanes)
 
         previous_lanes = None if self.lanes_mask is None else self.lanes_mask.copy()
@@ -398,6 +433,60 @@ class Subtractor(EventExtractorInterface):
         
         return lanes_final
 
+    def _run_static_lane_detection(self) -> None:
+        bg = self.bg_subtractor.getBackgroundImage()
+        if bg is None or self._last_frame_shape is None:
+            return
+        h, w = self._last_frame_shape
+        if bg.shape[:2] != (h, w):
+            bg = cv2.resize(bg, (w, h), interpolation=cv2.INTER_LINEAR)
+        mask = detect_static_lanes(bg, kernel15=self.kernel15)
+        if mask is not None:
+            self._static_lanes_mask = mask
+            logger.info(
+                "Static lane detection: %d foreground pixels (%.1f%% of frame)",
+                cv2.countNonZero(mask),
+                100.0 * cv2.countNonZero(mask) / max(float(mask.size), 1.0),
+            )
+        else:
+            logger.debug("Static lane detection: no reliable road markings found")
+
+
+    def _merge_with_static(self, motion_mask: np.ndarray) -> np.ndarray:
+        """
+        Merge the motion-accumulation lane candidate with the static geometry baseline.
+
+        - No static mask available → return motion_mask unchanged.
+        - Sparse traffic (low mean density) → static mask is primary; motion
+          accumulation did not observe enough vehicles to be trustworthy.
+        - Dense-enough traffic → union of both: static captures geometry,
+          motion confirms and extends to actual vehicle paths.
+        """
+        if self._static_lanes_mask is None:
+            return motion_mask
+
+        static = self._static_lanes_mask
+        if static.shape != motion_mask.shape:
+            static = cv2.resize(
+                static, (motion_mask.shape[1], motion_mask.shape[0]),
+                interpolation=cv2.INTER_NEAREST,
+            )
+
+        mean_density = (
+            float(np.mean(list(self._motion_score_window)))
+            if self._motion_score_window else 0.0
+        )
+
+        if self._has_nonempty_mask(motion_mask) and mean_density >= self._motion_sparse_threshold:
+            merged = cv2.bitwise_or(motion_mask, static)
+            logger.debug("Lane mask: hybrid (motion + static), density=%.4f", mean_density)
+        else:
+            merged = static.copy()
+            logger.debug("Lane mask: static primary, density=%.4f", mean_density)
+
+        return merged
+
+
     def get_scene_masks(self, expand_px: int = 0) -> dict:
         """
         Returns lane and crosswalk masks in current frame coordinates.
@@ -407,6 +496,13 @@ class Subtractor(EventExtractorInterface):
         (no copy). Callers must not mutate the returned arrays.
         """
         if self.lanes_mask is None:
+            # Calibration hasn't finalised yet; if static detection already ran,
+            # serve that as a provisional mask rather than returning empty.
+            if self._static_lanes_mask is not None:
+                return {
+                    "lane_mask": self._static_lanes_mask,
+                    "crosswalk_mask": np.zeros_like(self._static_lanes_mask, dtype=np.uint8),
+                }
             if self._last_frame_shape is None:
                 return {"lane_mask": None, "crosswalk_mask": None}
             h, w = self._last_frame_shape
