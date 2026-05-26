@@ -332,7 +332,7 @@ class Subtractor(EventExtractorInterface):
         if contours:
             max_obj_area = max((cv2.contourArea(c) for c in contours), default=0)
             min_obj_area = MIN_OBJ_AREA * self._cached_total_pixels
-            flag = (motion_pixels > self._cached_threshold) or (max_obj_area > min_obj_area)
+            flag = (motion_pixels > self._cached_threshold) and (max_obj_area > min_obj_area)
 
         self._recent.append(flag)
         if len(self._recent) == self._recent.maxlen and all(self._recent):
