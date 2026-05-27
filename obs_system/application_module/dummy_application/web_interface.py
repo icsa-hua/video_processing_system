@@ -146,6 +146,13 @@ with st.sidebar:
     only_fps = st.checkbox("Measure FPS Only", value=True)
     half = st.checkbox("Use Half Precision", value=False)
     fep = st.checkbox("Enable FishEye Projection", value=False)
+    force_tiles = st.checkbox(
+        "Force Tiled Inference",
+        value=False,
+        help="Split each frame into overlapping tiles before inference. "
+             "Improves detection on wide/panoramic streams regardless of resolution. "
+             "Enabled automatically for very large frames; this toggle forces it for any size.",
+    )
     lane_recalibration_interval_frames = st.number_input(
         "Lane recalibration interval (frames)",
         min_value=0,
@@ -240,6 +247,7 @@ with tab1:
                 "plot_perf": False,
                 "only_FPS": only_fps,
                 "lane_recalibration_interval_frames": int(lane_recalibration_interval_frames),
+                "force_tiles": force_tiles,
             }
             logger.debug("UI payload: %s", payload)
 

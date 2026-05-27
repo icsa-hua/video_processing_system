@@ -124,7 +124,6 @@ class _PtAdapter(_BaseModelAdapter):
 class UnifiedModelStreamer(OptimizedStreamer):
     def __init__(self, cfg: Any = DEFAULT_CFG, overrides=None, _callbacks=None) -> None:
         super().__init__(cfg, overrides or {}, _callbacks)
-        self.force_streaming_no_tiles = True
         self.model_backend = ""
         self.model_tag = "model"
 
@@ -201,7 +200,8 @@ class UnifiedModelStreamer(OptimizedStreamer):
         return super().stream_inference(source, model, producer_flag, preview_queue, *args, **kwargs)
 
 
-    def _stream_inference_impl_tiles(self, **kwargs)->Generator[Optional[Any], None, None]: 
+    @smart_inference_mode()
+    def _stream_inference_impl_tiles(self, **kwargs) -> Generator[Optional[Any], None, None]:
         return super()._stream_inference_impl_tiles(**kwargs)
 
 
