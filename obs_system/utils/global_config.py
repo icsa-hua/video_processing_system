@@ -7,9 +7,10 @@ CLASS_AGNOSTIC = True
 
 
 #---------- Image Tiling parameters ---------
-TILE_SIZE = 640 
-TILE_OVERLAP = 0.25 
-TILE_THR = 3 
+TILE_SIZE = 640
+TILE_OVERLAP = 0.05
+TILE_NMS_IOU = 0.30
+TILE_THR = 3
 
 #--------- Defish Parameters --------- 
 DEFISH_K = 0.35
