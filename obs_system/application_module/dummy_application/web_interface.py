@@ -203,7 +203,7 @@ with tab1:
 
     video_source = None
     if option == "Local Video":
-        uploaded_file = st.file_uploader("Upload Video", accept_multiple_files=False, type=["mp4", "avi"])
+        uploaded_file = st.file_uploader("Upload Video", accept_multiple_files=False, type=["mp4", "avi", "mkv"])
         if uploaded_file:
             suffix = Path(uploaded_file.name).suffix or ".mp4"
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
