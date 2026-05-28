@@ -67,7 +67,6 @@ class _Yolov8PtAdapter:
 class Yolov8Streamer(OptimizedStreamer):
     def __init__(self, cfg: Any = DEFAULT_CFG, overrides=None, _callbacks=None) -> None:
         super().__init__(cfg, overrides or {}, _callbacks)
-        self.force_streaming_no_tiles = True
         self.model_tag = "pt_yolov8"
 
     def __call__(self, source=None, model=None, logic_module=None, mqtt_broker=None, producer_flag=None, preview_queue=None, *args, **kwargs):
@@ -123,5 +122,6 @@ class Yolov8Streamer(OptimizedStreamer):
     def _stream_inference_impl(self, **kwargs):
         return super()._stream_inference_impl(**kwargs)
 
+    @mem_profile
     def _stream_inference_impl_tiles(self, **kwargs):
-        return self._stream_inference_impl(**kwargs)
+        return super()._stream_inference_impl_tiles(**kwargs)

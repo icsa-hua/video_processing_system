@@ -55,6 +55,7 @@ class VideoProcessingRequest(BaseModel):
     preview_fps: float = 8.0
     stream_limit_hours: float = 1.0
     lane_recalibration_interval_frames: int = 0
+    force_tiles: bool = False
 
 
 class StreamExaminationRequest(BaseModel):

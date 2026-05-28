@@ -1,156 +1,202 @@
 # List of Components
 
 ## Python packages apparent in the repository
-- `ultralytics`: primary YOLO integration, `YOLO` model loading, `Results`, letterboxing, source loaders, plotting helpers, callback integration, image-size checks.
-- `torch`: tensor handling, CUDA execution, warmup, tensor conversion, GPU stream/event synchronization, TensorRT/ONNX handoff.
-- `torchvision`: NMS utilities via `torchvision.ops.nms` and `torchvision.ops.batched_nms`.
-- `opencv-python` / `cv2`: video capture, RTSP handling, background subtraction, morphology, contour extraction, encoding/decoding JPEG, drawing, connected components, fisheye geometry.
-- `numpy`: frame arrays, geometry, thresholds, statistics, mask processing, benchmarking math.
+- `ultralytics`: primary YOLO integration for `.pt` models, `Results` handling, inference-source loading, image-size validation, plotting helpers, and callback wiring.
+- `torch`: tensor preparation, CUDA execution, warmup, device transfers, GPU stream/event synchronization, and handoff to ONNX Runtime or TensorRT wrappers.
+- `torchvision`: NMS helpers via `torchvision.ops.nms` and `torchvision.ops.batched_nms`.
+- `opencv-python` / `cv2`: video capture, RTSP handling, background subtraction, morphology, connected components, contour analysis, image saving, JPEG encoding/decoding, and fisheye geometry operations.
+- `numpy`: frame arrays, geometry, mask processing, vectorized hazard logic, and performance/statistics support.
 - `onnx`: declared dependency for model export/interchange.
-- `onnxruntime`: ONNX inference backend through `InferenceSession` with `CUDAExecutionProvider` and `CPUExecutionProvider`.
-- `tensorrt`: TensorRT engine build/load/inference, optimization profiles, FP16/INT8 configuration.
-- `supervision`: `ByteTrack`, `Detections`, `BoxAnnotator`, color palette for tracked outputs.
-- `trackers`: alternate tracker support via `SORTTracker`.
-- `fastapi`: backend API for starting/stopping inference and serving MJPEG preview streams.
-- `pydantic`: request schemas for FastAPI.
-- `streamlit`: web UI for selecting source/model/options and viewing the preview stream.
-- `requests`: Streamlit frontend -> FastAPI backend HTTP calls.
-- `paho-mqtt`: MQTT publisher/subscriber client.
-- `cbor2`: CBOR serialization for MQTT payloads containing JPEG crops and metadata.
-- `shapely`: ROI polygon representation and point-in-polygon checks.
-- `Pillow` / `PIL`: Streamlit logo/image handling.
-- `psutil`: RAM/process statistics and CPU monitoring.
-- `pynvml` / `nvidia-ml-py`: desktop NVIDIA GPU memory/utilization monitoring.
+- `onnxruntime`: ONNX backend execution through `InferenceSession`, preferring `CUDAExecutionProvider` and falling back to `CPUExecutionProvider`.
+- `tensorrt`: engine build/load/inference for TensorRT deployment, optimization-profile setup, FP16/INT8 configuration, and serialized engine handling.
+- `supervision`: tracking-oriented `Detections`, `ByteTrack`, annotators, and track-id-aware rendering support.
+- `trackers`: alternate `SORTTracker` support retained beside the default `ByteTrack` path.
+- `fastapi`: backend API for starting/stopping inference workers and serving MJPEG preview streams.
+- `pydantic`: request/response validation for FastAPI routes.
+- `streamlit`: browser UI for source/model selection and live preview control.
+- `requests`: Streamlit-to-FastAPI control-plane calls.
+- `paho-mqtt`: MQTT client for publishing detection or crop payloads.
+- `cbor2`: CBOR serialization for MQTT messages carrying JPEG crops and metadata.
+- `shapely`: ROI polygon representation and point-in-polygon region counting.
+- `Pillow` / `PIL`: image loading for the UI/static assets.
+- `psutil`: CPU/RAM/process monitoring for performance logging.
+- `pynvml` / `nvidia-ml-py`: desktop NVIDIA GPU monitoring.
 - `jtop` / `jetson-stats`: Jetson hardware monitoring.
-- `memory_profiler`: decorators on streaming methods.
-- `viztracer`: declared/per-README profiling support.
-- `matplotlib`: plotting support in repo scripts.
-- `pandas`: imported in plotting/benchmark scripts.
-- `tqdm`: progress support in scripts.
-- `yaml` / `PyYAML`: YAML conversion scripts.
+- `memory_profiler`: decorators for memory profiling around streaming paths.
+- `viztracer`: profiling support referenced by the repository.
+- `matplotlib`: plotting support in benchmarking and comparison scripts.
+- `pandas`: tabular analysis in performance/benchmark scripts.
+- `tqdm`: progress reporting in utility scripts.
+- `yaml` / `PyYAML`: dataset/config conversion utilities.
 
 ## Top-level pipeline entrypoints
-- `scripts/obs_pipeline.py`: CLI entrypoint; builds `PipelineConfig`, warns that changing the video source requires changing the background subtractor image, launches GUI mode or direct application mode.
-- `obs_system/application_module/dummy_application/dummy_app.py` -> `Application`: orchestrates source setup, model setup, logic setup, optional MQTT setup, stream execution, runtime statistics, cleanup.
-- `obs_system/application_module/dummy_application/pipeline_config.py` -> `PipelineConfig`: central runtime configuration for model, source, ROI, MQTT, TensorRT, GUI, preview, benchmarking, live-stream runtime cap.
+- `scripts/obs_pipeline.py`: primary CLI entrypoint; builds `PipelineConfig`, validates runtime options, and launches either direct pipeline execution or the GUI/API pair.
+- `obs_system/application_module/dummy_application/dummy_app.py` -> `Application`: top-level orchestrator that wires source selection, model/backend setup, logic modules, optional MQTT, execution mode, and cleanup.
+- `obs_system/application_module/dummy_application/pipeline_config.py` -> `PipelineConfig`: central runtime dataclass and CLI parser for model path, stream source, ROI, MQTT, preview, benchmarking, TensorRT mode, stream limit, lane recalibration, Jetson profile, and forced tiling.
 
 ## Application / UI / API components
-- `obs_system/application_module/dummy_application/backend.py`: FastAPI service; spawns separate worker processes for inference and stream examination, keeps MJPEG preview queues, exposes start/stop/status routes.
-- `obs_system/application_module/dummy_application/intermediary.py`: launches `uvicorn` for FastAPI and `streamlit run` for the UI, handles shutdown of both processes.
-- `obs_system/application_module/dummy_application/web_interface.py`: Streamlit UI; provides local-video/live-stream source selection, model selection, ROI/MQTT/TensorRT toggles, preview embedding, and stop controls.
-- `obs_system/application_module/dummy_application/stream_examiner.py`: lightweight RTSP/stream validator and previewer using OpenCV only; used to verify that a stream can open and produce frames before/without full inference.
-- `obs_system/application_module/dummy_application/camera_config.py`: hardcoded RTSP camera credentials, ports, and derived stream URLs.
+- `obs_system/application_module/dummy_application/backend.py`: FastAPI control service; starts/stops inference in worker processes, keeps bounded preview queues, and exposes lifecycle/status endpoints.
+- `obs_system/application_module/dummy_application/intermediary.py`: launches and coordinates `uvicorn` and `streamlit run`, including shutdown handling for both processes.
+- `obs_system/application_module/dummy_application/web_interface.py`: Streamlit UI for local-video/RTSP selection, model/backend choice, ROI/MQTT/TensorRT toggles, and embedded MJPEG preview.
+- `obs_system/application_module/dummy_application/stream_examiner.py`: lightweight stream validator that checks whether a stream opens and yields frames before full inference is started.
+- `obs_system/application_module/dummy_application/camera_config.py`: hardcoded RTSP camera definitions and derived stream URLs used by default configuration.
 
 ## Detection/model-loading components
-- `obs_system/detection_module/interface/model_registry.py`: model extension registry; resolves `.pt` -> PyTorch, `.onnx` -> ONNX or TensorRT mode, `.engine` -> TensorRT-only.
-- `obs_system/detection_module/interface/factory.py` -> `StreamerFactory`: builds the unified streamer after backend resolution.
-- `obs_system/detection_module/dummy_predictor/stream_unified.py` -> `UnifiedModelStreamer`: main current inference path; wraps PT/ONNX/TRT backends under one streamer and attaches optional tracking.
-- `_PtAdapter` in `stream_unified.py`: loads Ultralytics `YOLO`, runs `.predict()`, returns boxes/scores/classes tensors.
-- `_OnnxAdapter` in `stream_unified.py`: loads `CompressedYOLO`, returns ONNX detections.
-- `_TensorRTAdapter` in `stream_unified.py`: loads `TensorRTYOLO`, runs TensorRT FP16 inference.
-- `obs_system/detection_module/interface/streamer.py` -> `Streamer`: common inference framework for source setup, preview publication, hazard recording, save queue, MQTT publishing, runtime limit enforcement.
-- `obs_system/detection_module/interface/streaming_compressed.py` -> `OptimizedStreamer`: main batched/compressed inference implementation with ROI cropping, motion gating, optional tiling path, performance logging, postprocessing.
-- `obs_system/detection_module/interface/streaming_default.py` -> `YOLOStreamer`: older/default Ultralytics-style streamer path with ROI and subtractor integration.
+- `obs_system/detection_module/interface/model_registry.py` -> `ModelRegistry`: extension-to-backend registry. Current default mapping is `.pt -> pt`, `.onnx -> onnx` with optional TensorRT override, and `.engine -> trt` with TensorRT required.
+- `obs_system/detection_module/interface/factory.py` -> `StreamerFactory`: central builder that resolves the requested backend through the registry and returns a configured `UnifiedModelStreamer`.
+- `obs_system/detection_module/dummy_predictor/stream_unified.py` -> `UnifiedModelStreamer`: main current inference path. It unifies `.pt`, `.onnx`, and `.engine` execution behind one streamer and reuses the optimized batched pipeline.
+- `UnifiedModelStreamer` implementation details:
+- selects backend-specific adapters instead of branching throughout the pipeline.
+- keeps a single preprocessing path with backend-aware letterboxing rules.
+- attaches tracking only when `type=tracking`.
+- intentionally defaults to the non-tiled streaming route (`force_streaming_no_tiles = True`) unless the pipeline explicitly forces tiles elsewhere.
+- `_PtAdapter` in `stream_unified.py`: wraps Ultralytics `YOLO.predict`, converts `Results` into per-frame box/score/class tensors, and supports CUDA warmup.
+- `_OnnxAdapter` in `stream_unified.py`: wraps `CompressedYOLO`, returning raw detections from ONNX Runtime plus optional GPU warmup.
+- `_TensorRTAdapter` in `stream_unified.py`: wraps `TensorRTYOLO`, returning TensorRT detections and CUDA completion events.
+- `obs_system/detection_module/interface/streamer.py` -> `Streamer`: shared execution framework for source setup, runtime limits, preview publication, hazard recording, MQTT publication, output saving, scene-mask caching, and high-attention hazard state.
+- `Streamer` implementation details:
+- maintains async workers for saving, rendering/preview encoding, and I/O-heavy tasks such as MQTT publishing and hazard-event persistence.
+- caches lane/crosswalk masks and their integral images to avoid repeated per-frame preprocessing.
+- tracks run-level metrics such as dropped frames, first-frame time, preview emissions, and MQTT/save counters.
+- supports a live-stream runtime cap and clean early termination when that cap is reached.
+- `obs_system/detection_module/interface/streaming_compressed.py` -> `OptimizedStreamer`: main batched execution engine. It performs batch acquisition, motion gating, optional ROI crop, optional fisheye correction, batched inference, NMS, tracking, hazard analysis, benchmarking, and preview/output emission.
+- `OptimizedStreamer` implementation details:
+- stage A acquires frames, applies ROI crop and subtractor gating, and can skip batches for warmup or no-motion cases.
+- stage B preprocesses, runs backend inference, applies per-frame NMS, and maps boxes back to original coordinates.
+- stage C applies tracking, hazard logic, preview/output generation, MQTT publication, and performance logging.
+- uses `DetectionBatch`/`FrameDetections` to keep batched detections aligned with original frames and frame ids.
+- `obs_system/detection_module/interface/streaming_default.py` -> `YOLOStreamer`: older/default Ultralytics-style path retained as a legacy implementation.
 
 ## Legacy / alternate detection backends still present
-- `obs_system/detection_module/dummy_predictor/stream_yolov8.py`: older YOLOv8 streamer using `YOLO.track(..., tracker="bytetrack.yaml")`.
-- `obs_system/detection_module/dummy_predictor/stream_yolov5.py`: older YOLOv5 streamer; legacy `torch.hub` path for autoshape and tracking path through Ultralytics `YOLO`.
-- `obs_system/detection_module/dummy_predictor/stream_y8_onnx.py`: older ONNX streamer with tile reconstruction and NMS.
-- `obs_system/detection_module/dummy_predictor/stream_trt.py`: older TensorRT streamer with tiling and GPU event synchronization.
+- `obs_system/detection_module/dummy_predictor/stream_yolov8.py`: older YOLOv8 path based on `YOLO.track(..., tracker="bytetrack.yaml")`.
+- `obs_system/detection_module/dummy_predictor/stream_yolov5.py`: older YOLOv5-oriented path with legacy `torch.hub` loading.
+- `obs_system/detection_module/dummy_predictor/stream_y8_onnx.py`: older ONNX execution path with tile reconstruction and custom NMS.
+- `obs_system/detection_module/dummy_predictor/stream_trt.py`: older TensorRT path with explicit tiling and GPU event synchronization.
 
 ## Model/backend implementation components
-- `obs_system/compressed/interface/compressed_yolo.py` -> `CompressedYOLO`: ONNX Runtime YOLO wrapper; uses IO binding, per-image postprocessing, confidence filtering, multiclass NMS, optional CUDA warmup.
-- `obs_system/compressed/interface/tensor_yolo.py` -> `TensorRTYOLO`: TensorRT engine wrapper; can build an engine from ONNX, deserialize engines, bind buffers, run FP16/INT8 inference, and return CUDA completion events.
-- `obs_system/compressed/interface/convert_to_Results.py` -> `ConverterResults`: converts raw detection tensors into Ultralytics-like `Results`, stores COCO-style class-name vocabulary.
-- `obs_system/compressed/interface/utils.py`: lightweight NMS and multiclass NMS helpers used by compressed backends.
+- `obs_system/compressed/interface/compressed_yolo.py` -> `CompressedYOLO`: ONNX Runtime wrapper for YOLO-style models. It prepares inputs, runs ONNX Runtime with IO binding when possible, applies confidence filtering, multiclass NMS, and returns per-image boxes/scores/classes.
+- `CompressedYOLO` implementation details:
+- prefers zero-copy-ish GPU IO binding when the input tensor is CUDA-backed and contiguous.
+- falls back to `session.run()` if IO binding is unavailable or fails.
+- handles both tensor and numpy inference inputs.
+- exposes a dedicated warmup path for CUDA-backed sessions.
+- `obs_system/compressed/interface/tensor_yolo.py` -> `TensorRTYOLO`: TensorRT wrapper that can build an engine from ONNX, deserialize `.engine` files, bind CUDA buffers, execute inference, and return outputs synchronized with CUDA events.
+- `TensorRTYOLO` implementation details:
+- builds engines under `assets/compressed_models` when a matching engine is not already available.
+- uses a fixed optimization profile matching the configured batch/input shape.
+- supports FP16 as the main active optimization path and retains INT8 calibrator support in code.
+- stores its own CUDA stream, input/output bindings, and execution context.
+- `obs_system/compressed/interface/convert_to_Results.py` -> `ConverterResults`: converts backend outputs into Ultralytics-like `Results` objects and carries the class-name vocabulary used by the rest of the pipeline.
+- `obs_system/compressed/interface/utils.py`: helper utilities for lightweight NMS and multiclass NMS used by compressed backends.
+- `obs_system/detection_module/interface/detection_batch.py` -> `DetectionBatch` / `FrameDetections`: lightweight containers used by the batched pipeline to represent empty/non-empty detections per frame and preserve batch index, frame id, and original image alignment.
 
 ## Logic / scene-understanding components
-- `obs_system/logic_module/dummy_logic/subtractor.py` -> `Subtractor`: OpenCV MOG2 motion-gating + lane-mask calibration + non-ML crosswalk extraction.
-- `Subtractor` techniques/methods:
-- `cv2.createBackgroundSubtractorMOG2` for motion gating and separate calibration background model.
-- binary thresholding, morphological open/close, contour filtering, hysteresis, foreground-ratio scoring.
-- accumulated motion mask calibration to derive lane region.
-- non-ML crosswalk detection using grayscale masking, Gaussian blur, top-hat morphology, Otsu thresholding, contour heuristics, connected components.
-- `obs_system/logic_module/dummy_logic/region_setter.py` -> `RegionSetter`: ROI cropper using a rectangular `shapely.Polygon`; translates cropped-image detections back to full-frame coordinates.
-- `RegionSetter` techniques/methods:
-- ratio-based ROI scaling from `640x640` reference coordinates to actual frame size.
-- crop-only inference region.
-- point-in-polygon counting for tracked centroids.
-- `obs_system/logic_module/dummy_logic/obstacle_filtering.py` -> `analyze_lane_hazards`: rule-based hazard classification from detections + lane/crosswalk masks.
-- `Obstacle filtering` techniques/methods:
-- overlap-ratio tests against lane/crosswalk masks.
-- explicit class allowlists/denylists for vehicles, animals, debris.
-- risk estimation from vertical position in the lane mask.
-- size heuristics and lane-edge proximity heuristics.
-- `obs_system/logic_module/dummy_logic/tracker_sv.py` -> `TrackerHandler`: tracking wrapper; defaults to `supervision.ByteTrack`, keeps per-track history, emits Ultralytics `Results`.
-- `obs_system/logic_module/dummy_logic/fisheye.py` -> `FishEyeProjection`: geometry-aware fisheye handling with remap-view generation and back-projection of boxes to original fisheye coordinates.
-- `obs_system/logic_module/dummy_logic/overlap_detection.py`: auxiliary geometry/overlap logic placeholder.
-- `obs_system/logic_module/dummy_logic/homography.py`: homography-related placeholder module.
+- `obs_system/logic_module/dummy_logic/subtractor.py` -> `Subtractor`: current scene-mask module for motion gating, lane extraction, crosswalk extraction, startup warmup, and runtime lane recalibration.
+- `Subtractor` current behavior:
+- uses a single MOG2 background model both for per-frame motion gating and for calibration accumulation.
+- supports static-background warmup from an empty image for video or stream startup.
+- supports stream-specific startup warmup where inference is held until the calibration window has completed.
+- supports periodic runtime lane recalibration for long-running streams.
+- keeps motion scores per frame and exposes them to the streamer for logging/metrics.
+- `Subtractor` lane extraction updates:
+- now includes static lane detection for sparse-traffic videos through `detect_static_lanes()` in `obs_system/utils/common.py`.
+- samples a stabilized background image after a warmup window and extracts lane corridors from bright road markings.
+- treats the static-lane mask as the primary source when motion density is too low for reliable vehicle-path accumulation.
+- blends static geometry with accumulated motion masks when traffic is dense enough, yielding a hybrid lane mask.
+- `Subtractor` implementation components:
+- MOG2 foreground extraction with resolution-cached thresholds.
+- hysteresis/hold logic to avoid rapid motion-state flapping.
+- calibration accumulator that reuses raw MOG2 output instead of running a second subtractor.
+- hybrid lane-mask merge between motion accumulation and static-road-marking extraction.
+- crosswalk extraction from the calibrated lane region using classical image-processing heuristics.
+- scene-mask serving through `get_scene_masks()`, including optional dilation for high-attention mode.
+- `obs_system/utils/common.py` -> `detect_static_lanes`: static-lane helper that enhances bright road markings with CLAHE and top-hat morphology, dilates them into lane-width corridors, and filters components by area. This is the main recent addition for sparse-traffic scenes.
+- `obs_system/logic_module/dummy_logic/region_setter.py` -> `RegionSetter`: ROI module that defines a rectangular road-only region, crops frames before inference, translates detections back to full-frame coordinates, and counts tracked centroids inside the ROI.
+- `RegionSetter` implementation details:
+- scales hardcoded `640x640` reference coordinates to the actual frame size.
+- falls back to full-frame inference if the configured ROI is invalid for the current source.
+- handles both frame cropping and post-inference box translation.
+- `obs_system/logic_module/dummy_logic/obstacle_filtering.py` -> `analyze_lane_hazards`: rule-based hazard classifier operating on detections plus lane/crosswalk masks.
+- `Obstacle filtering` implementation details:
+- uses vectorized overlap tests with optional integral-image acceleration.
+- filters out allowed vehicles and allowed pedestrian-in-crosswalk cases.
+- classifies lane obstacles into categories such as `pedestrian_in_lane`, `animal_on_road`, `small_debris`, `edge_small_object`, `large_static_object`, and `unknown_obstruction`.
+- derives risk from vertical position inside the lane mask and from size/edge heuristics.
+- emits structured metadata used for preview overlays, CSV logging, and MQTT action hints.
+- `obs_system/logic_module/dummy_logic/tracker_sv.py` -> `TrackerHandler`: tracking wrapper currently defaulting to `supervision.ByteTrack`, with optional `SORTTracker` retained.
+- `TrackerHandler` implementation details:
+- converts raw detections into `supervision.Detections`.
+- updates tracked detections and returns Ultralytics-like `Results`.
+- stores recent per-track center history for visualization and trajectory persistence.
+- can increase or reduce history persistence dynamically when the streamer enters or leaves high-attention hazard mode.
+- `obs_system/logic_module/dummy_logic/fisheye.py` -> `FishEyeProjection`: fisheye-handling module for view remapping and box projection between corrected and original coordinates.
+- `obs_system/logic_module/dummy_logic/overlap_detection.py`: auxiliary overlap/geometry placeholder.
+- `obs_system/logic_module/dummy_logic/homography.py`: homography-related placeholder.
 
 ## Communication/output components
-- `obs_system/communication_module/mqtt_com/message_transmitter.py` -> `RealMQTT`: simple MQTT interface wrapper.
-- `obs_system/communication_module/mqtt_com/message_transmitter.py` -> `CBORMQTTCropClientCV2`: main MQTT crop publisher/subscriber; encodes JPEG crops with OpenCV, wraps them in CBOR, publishes/decodes batches.
-- `obs_system/communication_module/mqtt_com/config.py`: broker/topic/TLS/QoS/JPEG settings and asset paths.
-- `obs_system/detection_module/interface/streamer.py` save pipeline:
-- asynchronous save worker thread.
-- frame/video saving through OpenCV `VideoWriter`.
-- hazard-event frame/crop saving to `assets/hazard_events`.
-- hazard CSV append logic.
-- MJPEG browser preview publishing through bounded multiprocessing queues.
+- `obs_system/communication_module/mqtt_com/message_transmitter.py` -> `RealMQTT`: basic MQTT interface wrapper.
+- `obs_system/communication_module/mqtt_com/message_transmitter.py` -> `CBORMQTTCropClientCV2`: current MQTT crop publisher/subscriber path. It encodes crops with OpenCV, wraps them in CBOR, and publishes/decodes detection batches.
+- `obs_system/communication_module/mqtt_com/config.py`: broker, topic, TLS, QoS, JPEG, and asset-path configuration.
+- `obs_system/detection_module/interface/streamer.py` save/output pipeline:
+- asynchronous save worker for non-blocking disk output.
+- hazard frame and crop persistence under `assets/hazard_events`.
+- CSV event logging with timestamp, class, category, risk, overlaps, and saved artifact paths.
+- MJPEG preview publication through bounded multiprocessing queues.
+- dedicated async I/O path for MQTT results and no-detection messages.
 
 ## Benchmarking / profiling / monitoring components
-- `obs_system/utils/benchmarking/metrics/model_performance.py` -> `ModelPerf`: mAP, precision, recall, F1 benchmarking using IoU thresholds and optional COCO-style 101-point interpolation.
-- `obs_system/utils/benchmarking/metrics/pc_performance.py`: CSV/JSONL performance logging, sliding inference-rate counter, CPU/GPU monitors.
-- `obs_system/utils/appraisal.py`: step/performance context helpers used around setup/inference stages.
-- `obs_system/utils/common.py`: GPU existence check, model alias resolution, frame-id extraction, misc utility helpers.
-- `obs_system/utils/tiles.py`: tiling, padding, letterboxing, tile reconstruction metadata.
-- repo scripts for benchmarking/plots:
+- `obs_system/utils/benchmarking/metrics/model_performance.py` -> `ModelPerf`: detection benchmarking with precision, recall, F1, IoU thresholds, and optional COCO-style interpolation.
+- `obs_system/utils/benchmarking/metrics/pc_performance.py`: per-run and per-frame performance logging, sliding counters, CPU monitors, GPU monitors, and timeline logging.
+- `obs_system/utils/appraisal.py`: `StepContext` timing wrappers and utility helpers used to measure setup and stage durations.
+- `obs_system/utils/common.py`: shared helpers for GPU existence checks, model alias resolution, frame-id extraction, empty-result creation, static-lane detection, and general pipeline utilities.
+- `obs_system/utils/tiles.py`: tile construction, padding, reconstruction metadata, and letterboxing helpers for the tiled inference path.
+- repository scripts for benchmarking/plots:
+- `scripts/run_backend_comparison.py`: end-to-end comparison of `.pt`, `.onnx`, and `.engine` on the same source.
+- `scripts/test_backend_inference.py`: backend-only inference comparison without the full pipeline.
+- `scripts/bench_postprocess.py`: focused micro-benchmarks for hazard logic, scene-mask caching, and postprocess hot paths.
 - `scripts/plot_perf_extended.py`
 - `scripts/plot_perf_comparisons.py`
 - `scripts/fine_tuned_tester.py`
 - `scripts/sampler.py`
 
 ## Data-prep / conversion scripts apparent in repo
-- `scripts/convert_fisheye8k_to_yolo.py`: dataset conversion toward YOLO format.
-- `scripts/create_unified_yaml.py`: dataset/class YAML creation.
-- `scripts/convert_png_jpg_and_store.py`: image conversion utility.
-- `scripts/zone_cleaner.py`: annotation/zone-cleaning helper.
-- `scripts/test_fisheye.py`: fisheye testing utility.
+- `scripts/convert_fisheye8k_to_yolo.py`: converts fisheye-oriented datasets into YOLO format.
+- `scripts/create_unified_yaml.py`: dataset/class YAML generation utility.
+- `scripts/convert_png_jpg_and_store.py`: image conversion helper.
+- `scripts/zone_cleaner.py`: annotation/zone cleanup utility.
+- `scripts/test_fisheye.py`: fisheye-processing test helper.
 
 ## Models, trackers, and inference methods explicitly apparent
-- YOLOv8 pretrained models via Ultralytics.
-- YOLOv5 support still present in legacy streamers.
-- ONNX-compressed YOLO inference through ONNX Runtime.
-- TensorRT FP16 engine inference through custom wrapper.
-- optional TensorRT INT8 calibration class exists (`YOLOInt8Calibrator`) but main unified path uses FP16.
-- ByteTrack appears in two ways:
-- current unified tracker path: `supervision.ByteTrack`.
-- older Ultralytics path: `YOLO.track(..., tracker="bytetrack.yaml")`.
-- SORT tracker support exists as an alternative in `tracker_sv.py`.
-- MOG2 background subtraction is the motion gate and lane-calibration basis.
-- Lane and crosswalk reasoning are classical CV / heuristic methods, not learned segmentation models.
+- YOLOv8 `.pt` inference through Ultralytics.
+- YOLO-style `.onnx` inference through `CompressedYOLO` + ONNX Runtime.
+- TensorRT `.engine` inference through `TensorRTYOLO`.
+- `.onnx` models can also be routed through TensorRT when `use_TRT` is enabled.
+- ByteTrack is the current default tracker through `supervision.ByteTrack`.
+- SORT remains as an alternate tracker implementation.
+- MOG2 remains the motion gate and one source of lane-path accumulation.
+- lane and crosswalk reasoning remain classical CV / heuristic methods rather than learned segmentation.
+- static lane detection from a stabilized background image is now a first-class path for sparse-traffic scenes and is merged with motion-based calibration when useful.
 
 ## Hardcoded defaults, assumptions, and code admissions
-- The code explicitly warns: if the input video source changes, the background subtractor image should also change, otherwise frames may be classified incorrectly as “without movement”.
+- The system is designed around static roadside cameras; ROI coordinates, lane masks, and crosswalk heuristics are camera-view-specific.
 - `PipelineConfig.DEFAULT_MODEL` is `assets/compressed_models/yolov8s.engine`.
-- `PipelineConfig.DEFAULT_VIDEO_SOURCE` is the hardcoded `RECTILINEAR_RTSP` stream from `camera_config.py`.
-- RTSP capture is forced to TCP via `OPENCV_FFMPEG_CAPTURE_OPTIONS=rtsp_transport;tcp`.
-- `stream_limit_hours` defaults to `1.0` for live streams.
+- `PipelineConfig.DEFAULT_VIDEO_SOURCE` is `RECTILINEAR_RTSP` from `camera_config.py`.
+- RTSP capture is forced to TCP through `OPENCV_FFMPEG_CAPTURE_OPTIONS=rtsp_transport;tcp`.
+- `stream_limit_hours` defaults to `1.0` for live streams and `0` disables the limit.
 - preview defaults are `preview_max_width=960`, `preview_jpeg_quality=70`, `preview_fps=8.0`.
-- live-stream examination timeouts are hardcoded to `15s` for open and `20s` for first frame.
-- FastAPI preview queues are bounded to size `2`.
-- model validation assumes:
-- `.engine` models must be used with `--use_TRT`.
-- TensorRT mode is only allowed for `.onnx` or `.engine`.
-- default detection thresholds in `global_config.py` are `CONF_THR=0.25`, `NMS_IOU=0.45`, `CLASS_AGNOSTIC=True`.
+- `lane_recalibration_interval_frames` defaults to `0`, meaning runtime lane recalibration is disabled unless explicitly enabled.
+- Jetson profile support is present through `jetson_profile`, `jetson_hazard_scale`, and `jetson_cpu_threads`.
+- `force_tiles` exists in configuration, but the main unified streamer still defaults to the non-tiled route unless tile use is explicitly forced by execution logic.
+- model validation rules are explicit:
+- `.engine` requires TensorRT mode.
+- TensorRT mode is allowed only for `.onnx` or `.engine`.
+- default thresholds in `global_config.py` are `CONF_THR=0.25`, `NMS_IOU=0.45`, `CLASS_AGNOSTIC=True`.
 - batching defaults are `BATCH_SIZE=16` and `WARM_UP_SESSIONS=8`.
 - tiling defaults are `TILE_SIZE=640`, `TILE_OVERLAP=0.25`, `TILE_THR=3`.
-- the unified streamer currently sets `force_streaming_no_tiles = True`, so the tiled path exists but is intentionally bypassed in the main unified route.
 - ROI defaults are hardcoded from a `640x640` reference frame:
 - `ROI_X1=0`, `ROI_Y1=639`, `ROI_X2=430`, `ROI_Y2=300`.
-- the ROI code explicitly states that the region is camera-feed-specific and meant to cover the road network only.
-- if the ROI resolves to an invalid rectangle, the logic falls back to full-frame inference.
-- background subtraction defaults are:
+- invalid ROI bounds fall back to full-frame inference.
+- subtractor/motion defaults are still code-driven:
 - `TRIALS=10`
 - `HISTORY=300`
 - `VARTHRESHOLD=16`
@@ -158,74 +204,59 @@
 - `K_CONSECUTIVE=3`
 - `HOLD_FRAMES=10`
 - `MIN_OBJ_AREA=0.003`
-- `EMPTY_IMAGE_PATH="samples/highway_rescaled.png"`
-- the non-stream warmup path assumes a static empty-background image is available at `samples/highway_rescaled.png`.
-- live streams use subtractor startup warmup based on `accum_time=500` frames before inference is considered ready if no static background has been preloaded.
-- lane calibration uses:
-- accumulated motion masks.
-- connected-component minimum area `15000`.
-- Gaussian blur `(11,11)` and threshold `50` for final lane mask.
-- motion gating logic assumes motion if either:
-- foreground pixels exceed `threshold_ratio * frame_pixels`.
-- or the largest contour area exceeds `MIN_OBJ_AREA * frame_pixels`.
-- subtractor code explicitly notes an edge case: a single moving car may fail the motion test.
-- crosswalk detection is explicitly non-ML and assumes:
-- zebra-like bright stripes exist inside the calibrated lane mask.
-- top-hat kernel `(17,17)`.
-- contour aspect ratio must exceed `2.2`.
-- contour extent must exceed `0.30`.
-- at least `3` valid stripe blobs must be found.
-- crosswalk connected-component area must exceed `max(200, 0.0025 * lane_area)`.
-- hazard classification policy in code is explicit:
-- person in crosswalk is allowed.
-- person in lane outside crosswalk is a hazard.
-- allowed vehicles are ignored as hazards.
-- non-allowed objects in lane are hazards.
-- lane and crosswalk overlap thresholds are both `0.20`.
-- hazard risk is position-based:
-- lower in the lane image -> higher risk.
-- `y` position >= `70%` of lane span -> `high`.
-- `y` position >= `40%` of lane span -> `medium`.
-- otherwise `low`.
-- hazard size/placement heuristics are explicit:
-- debris with area ratio `< 0.01` -> `small_debris`.
-- near-lane-edge and area ratio `< 0.003` -> `edge_small_object`.
-- “near edge” means within `15%` of the left or right lane boundary.
-- high-attention mode assumptions are hardcoded:
+- the non-stream warmup path still assumes an empty-background image may be provided, commonly `samples/highway_rescaled.png`.
+- live streams can hold inference during startup warmup while the subtractor accumulates enough frames to produce a usable scene mask.
+- sparse-traffic handling now assumes a stable enough background image can reveal lane markings; static-lane extraction is based on bright painted markings rather than learned semantics.
+- static-lane extraction details currently include:
+- CLAHE enhancement of the background image.
+- top-hat morphology with a large rectangular kernel to isolate bright markings.
+- dilation/closing to expand markings into lane-width corridors.
+- connected-component filtering using a minimum area ratio.
+- hybrid lane fusion uses a rolling motion-density window:
+- low-density traffic keeps the static-lane mask as primary.
+- denser traffic merges motion accumulation with the static mask.
+- crosswalk extraction remains non-ML and assumes stripe-like bright blobs inside the lane mask.
+- hazard classification policy remains explicit:
+- persons in crosswalk are tolerated.
+- persons in lane outside crosswalk are hazards.
+- allowed vehicles are not lane hazards by default.
+- animals and debris-like objects are escalated according to overlap, size, and position heuristics.
+- high-attention hazard mode is hardcoded:
 - default countdown `18` frames.
-- bonus frames: `+10` for high risk, `+6` for medium, `+3` for low.
+- risk-based bonus frames `+10` high, `+6` medium, `+3` low.
 - lane dilation in high-attention mode is `14` pixels.
-- tracker history increases from `30` to `60`.
-- ONNX Runtime inference prefers providers in this order:
+- tracker history increases from `30` to `60` in high-attention mode, or to smaller capped values when Jetson profile is active.
+- ONNX Runtime provider preference is:
 - `CUDAExecutionProvider`
 - `CPUExecutionProvider`
-- TensorRT engine-building assumptions are hardcoded:
-- workspace memory pool limit is `1 << 30` bytes.
-- runtime input shape is fixed to `[16, 3, 640, 640]`.
-- engine filenames are auto-derived and stored under `assets/compressed_models`.
-- the MQTT setup assumes:
+- TensorRT engine-building assumptions are explicit:
+- workspace memory pool limit `1 << 30`.
+- runtime input shape `[16, 3, 640, 640]`.
+- auto-derived engine filenames stored under `assets/compressed_models`.
+- MQTT defaults currently assume:
 - broker `edgejet3vpn.edi.lv`
 - port `8884`
 - topic `reid-vehicle-detection`
 - QoS `1`
 - keepalive `60`
 - JPEG quality `75`
-- sender TLS certificates are expected under `assets/mqtt_credentials/...`.
+- sender TLS assets under `assets/mqtt_credentials/...`
 - `CREATE_SUBSCRIBER = False` by default.
-- the web UI hardcodes three model choices:
+- the web UI exposes three hardcoded model choices:
 - TensorRT engine: `assets/compressed_models/mixed_dataset_trained_yolov8s_mixed_batch_trt_fp16_noint8.engine`
 - YOLOv8 ONNX: `assets/compressed_models/mixed_dataset_trained_yolov8s.onnx`
 - YOLOv8 PT: `assets/compressed_models/yolov8s.pt`
-- `camera_config.py` contains hardcoded camera usernames, passwords, hosts, and ports.
-- `stream_y8_onnx.py` contains a hardcoded ONNX model path `obs_system/compressed/yolov8s_original.onnx`, independent of the passed model name/path.
-- the README explicitly states that a modified Ultralytics `loaders.py` may need to be copied into the environment for the intended crop/zoom behavior.
+- `camera_config.py` still contains hardcoded camera credentials, hosts, and ports.
+- `stream_y8_onnx.py` still contains a hardcoded ONNX path independent of the passed model argument.
+- the README still notes that a modified Ultralytics `loaders.py` may be required for the intended crop/zoom behavior.
 
 ## Output artifacts produced by the pipeline
-- `runs/det/...`: Ultralytics-style detection outputs.
-- `assets/background_check/`: optional subtractor debug images.
+- `runs/det/...`: Ultralytics-style rendered detection outputs.
+- `assets/background_check/`: subtractor and scene-mask debug images.
 - `assets/hazard_events/frames`: saved hazard frames.
 - `assets/hazard_events/crops`: saved hazard-object crops.
-- `assets/hazard_events/hazard_events.csv`: hazard event table.
+- `assets/hazard_events/hazard_events.csv`: persisted structured hazard log.
 - `assets/mqtt/saved_publishes.cbor`: archived outbound MQTT payloads.
 - `assets/mqtt/received_vehicle_crops`: decoded inbound MQTT JPEG crops.
-- `assets/perf_logs/*.csv` and `*.jsonl`: performance logs/timelines.
+- `assets/perf_logs/*.csv` and `*.jsonl`: performance logs, frame-level logs, and timeline traces.
+- `assets/trace_jsons/*.json`: optional profiler traces exported during verbose first-batch backend profiling.

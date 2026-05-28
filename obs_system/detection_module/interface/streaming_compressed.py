@@ -550,10 +550,18 @@ class OptimizedStreamer(Streamer):
                 self.logic_module['SUBTRACTOR'].warm_up(empty_image, trials=TRIALS)
                 self._sync_subtractor_warmup_state()
             
-            tile_flag = True if (self.orig_width // TILE_SIZE) > TILE_THR or (self.orig_height // TILE_SIZE) >= TILE_THR else False
-            force_no_tiles = bool(getattr(self, "force_streaming_no_tiles", False))
-            if tile_flag and not force_no_tiles:
-                Streamer.logger.info("Run Inference with Tiles")
+            # UI/CLI force_tiles takes highest priority; otherwise auto-detect from image size.
+            # A class-level force_streaming_no_tiles=True is overridden by the explicit flag.
+            force_tiles_flag = bool(getattr(self.args, "force_tiles", False))
+            force_no_tiles = bool(getattr(self, "force_streaming_no_tiles", False)) and not force_tiles_flag
+            auto_tile = (self.orig_width // TILE_SIZE) > TILE_THR or (self.orig_height // TILE_SIZE) >= TILE_THR
+            use_tiles = force_tiles_flag or (auto_tile and not force_no_tiles)
+
+            if use_tiles:
+                Streamer.logger.info(
+                    "Run Inference with Tiles (force=%s, auto=%s, %dx%d)",
+                    force_tiles_flag, auto_tile, self.orig_width, self.orig_height,
+                )
                 return self._stream_inference_impl_tiles(
                     model=model,
                     producer_flag=producer_flag,
@@ -563,7 +571,7 @@ class OptimizedStreamer(Streamer):
                     start_time=start_time,
                 )
 
-            Streamer.logger.info("Run Inference without Tiles")
+            Streamer.logger.info("Run Inference without Tiles (%dx%d)", self.orig_width, self.orig_height)
             return self._stream_inference_impl(
                 model=model,
                 producer_flag=producer_flag,
@@ -1034,10 +1042,552 @@ class OptimizedStreamer(Streamer):
         self.run_callbacks("on_predict_end")
 
 
-    @abstractmethod 
     @mem_profile
-    def _stream_inference_impl_tiles(self, **kwargs)->Generator[Optional[Any], None, None]: 
-        pass
+    def _stream_inference_impl_tiles(self, **kwargs) -> Generator[Optional[Any], None, None]:
+        """
+        Full tiled inference pipeline with feature parity to _stream_inference_impl.
+
+        Stage A  – reuses _stage_a_acquire_and_gate (ROI, MOG2, FEP).
+        Stage B  – splits each motion frame into tiles, runs microbatch inference,
+                   reconstructs tile-local boxes to frame coordinates, global NMS per frame.
+        Stages C/D – reuse _stage_c_tracking_and_hazard_logic and
+                     _stage_d_dispatch_optional_sinks unchanged.
+        Perf logging, MQTT, preview, benchmarking – identical to the no-tiles path.
+        """
+        FPS_WINDOW = 100
+        fps_times = collections.deque(maxlen=FPS_WINDOW)
+        fps = 0
+        stream_start = time.perf_counter()
+        last_fps_log = stream_start
+        total_frames = 0
+
+        perf_log_path = getattr(self.args, "perf_log", None) or "assets/perf_logs/perf_log.csv"
+        perf_flush_every = int(getattr(self.args, "perf_log_flush_every", 64) or 64)
+        frame_flush_every = int(getattr(self.args, "perf_frame_log_flush_every", 128) or 128)
+        timeline_flush_every = int(getattr(self.args, "perf_timeline_flush_every", 128) or 128)
+        perf_logger = PerfLogger(perf_log_path, flush_every=perf_flush_every)
+        frame_log_path = getattr(self.args, "perf_log_frames", None) or "assets/perf_logs/perf_frames.csv"
+        frame_logger = FramePerfLogger(frame_log_path, flush_every=frame_flush_every)
+        timeline_path = getattr(self.args, "perf_timeline", None) or "assets/perf_logs/perf_timeline.jsonl"
+        timeline_logger = TimelineLogger(timeline_path, flush_every=timeline_flush_every)
+
+        gpu_index = int(getattr(self.args, "gpu_index", 0))
+        gpu_mon = GPUMonitor(gpu_index=gpu_index)
+        cpu_mon = CPUMonitor()
+        infer_counter = SlidingCounter(window_s=1.0)
+        batch_idx = 0
+
+        model = kwargs["model"]
+        producer_flag = kwargs["producer_flag"]
+        preview_queue = kwargs["preview_queue"]
+        profilers = kwargs["profilers"]
+        activities = kwargs["activities"]
+        start_time = kwargs["start_time"]
+
+        if self.args.bench:
+            self.mp = ModelPerf(
+                class_ids=[i for i, _ in enumerate(self.converter.class_names)],
+                iou_thresholds=np.arange(0.50, 0.96, 0.05),
+                conf_threshold=CONF_THR,
+                use_101_point_interp=True,
+            )
+        else:
+            self.mp = None
+
+        micro = BATCH_SIZE
+        overlap_ratio = TILE_OVERLAP
+        tile_size = TILE_SIZE
+
+        self.run_callbacks("on_predict_start")
+        with StepContext(name="Warmup Session", catch=(Exception, RuntimeError), verbose=self.args.verbose):
+            if not self.model_warmup_done:
+                self.model.warmup(micro=micro, warmup_sessions=WARM_UP_SESSIONS)
+                self.model_warmup_done = True
+
+        # Async batch-loading thread — mirrors _stream_inference_impl
+        batch_queue = queue.Queue(maxsize=8)
+
+        def _tile_producer():
+            try:
+                dataset_iter = iter(self.dataset)
+                while True:
+                    t_read0 = time.perf_counter()
+                    try:
+                        batch = next(dataset_iter)
+                    except StopIteration:
+                        break
+                    read_ms = (time.perf_counter() - t_read0) * 1e3
+                    batch_queue.put((batch, read_ms))
+            except Exception as exc:
+                Streamer.logger.error("Error in tile-mode batch producer: %s", exc)
+            finally:
+                batch_queue.put(None)
+
+        producer_thread = threading.Thread(target=_tile_producer, daemon=True)
+        producer_thread.start()
+
+        while True:
+            t_batch_start = time.perf_counter()
+            gpu_stats = gpu_mon.sample()
+            cpu_stats = cpu_mon.sample()
+
+            frame_read_ms = 0.0
+            roi_ms = 0.0
+            mog2_ms = 0.0
+            defish_ms = 0.0
+            preprocess_ms = 0.0
+            inference_ms = 0.0
+            postprocess_ms = 0.0
+            nms_ms = 0.0
+
+            if self.runtime_limit_reached():
+                break
+
+            try:
+                self.batch = batch_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            if self.batch is None:
+                break
+
+            self.run_callbacks("on_predict_batch_start")
+
+            batch_payload, frame_read_ms = self.batch
+            self.batch = batch_payload
+
+            stage_a = self._stage_a_acquire_and_gate(
+                batch_payload, frame_read_ms, stream_start, timeline_logger, batch_idx
+            )
+
+            if stage_a.get("skip_reason") == "warmup":
+                continue
+
+            paths = stage_a["paths"]
+            im0s = stage_a["im0s"]
+            frame_ids = stage_a["frame_ids"]
+            original_images = stage_a["original_images"]
+            original_images_bgr = stage_a["original_images_bgr"]
+            roi_ms = stage_a["roi_ms"]
+            mog2_ms = stage_a["mog2_ms"]
+            defish_ms = stage_a["defish_ms"]
+            res_h = stage_a["res_h"]
+            res_w = stage_a["res_w"]
+            mfgs = stage_a["mfgs"]
+
+            # ── No-motion batch: identical path to _stream_inference_impl ──────────
+            if stage_a.get("skip_reason") == "no_motion":
+                Streamer.logger.debug("No motion detected in tile-mode batch – skipping inference")
+                empty_preds = return_no_motion_frames(im0s=im0s, batch_size=len(im0s))
+                if self.mp is not None and self.args.bench:
+                    for fid in frame_ids:
+                        gt_cls, gt_bbs = self._resolve_benchmark_gt(fid)
+                        empty_boxes, empty_scores, empty_cls = _empty_dets_numpy()
+                        self.mp.update(
+                            boxes_xyxy=empty_boxes,
+                            scores=empty_scores,
+                            classes=empty_cls,
+                            gt_boxes_xyxy=gt_bbs.astype(np.float32),
+                            gt_classes=gt_cls.astype(np.int64),
+                        )
+                self._note_emitted_result(len(empty_preds))
+                yield empty_preds
+                self._enqueue_async_sink(
+                    ("mqtt_no_detection", empty_preds, frame_ids),
+                    stage="mqtt_ms",
+                    frame_ids=frame_ids,
+                )
+                self._publish_no_motion_preview(original_images_bgr, preview_queue, producer_flag)
+                if self.args.plot_performance:
+                    t_now = time.perf_counter()
+                    scores = getattr(self.logic_module.get("SUBTRACTOR", None), "last_motion_scores", None)
+                    avg_motion_score = float(np.mean(scores)) if scores else 0.0
+                    fps_sliding = fps
+                    total_ms = (t_now - t_batch_start) * 1e3
+                    infer_calls_per_sec = infer_counter.rate(t_now)
+                    batch_stage_metrics = self._get_batch_stage_metrics()
+                    perf_logger.log({
+                        "t_wall": t_now, "batch_idx": batch_idx, "frames_in_batch": len(im0s),
+                        "res_w": res_w, "res_h": res_h, "motion_density": 0.0,
+                        "avg_motion_score": avg_motion_score, "inference_ran": 0,
+                        "frames_inferred": 0, "infer_calls_per_sec": infer_calls_per_sec,
+                        "gpu_util": gpu_stats.get("gpu_util", float("nan")),
+                        "gpu_mem_used_mb": gpu_stats.get("mem_used_mb", float("nan")),
+                        "gpu_mem_total_mb": gpu_stats.get("mem_total_mb", float("nan")),
+                        "cpu_util": cpu_stats.get("cpu_util", float("nan")),
+                        "frame_read_ms_per_frame": frame_read_ms / max(len(im0s), 1),
+                        "roi_ms_per_frame": roi_ms / max(len(im0s), 1),
+                        "mog2_ms_per_frame": mog2_ms / max(len(im0s), 1),
+                        "defish_ms_per_frame": defish_ms / max(len(im0s), 1),
+                        "preprocess_ms_per_frame": 0.0, "inference_ms_per_frame": 0.0,
+                        "postprocess_ms_per_frame": 0.0, "nms_ms_per_frame": 0.0,
+                        "tracking_ms_per_frame": 0.0, "hazard_logic_ms_per_frame": 0.0,
+                        "preview_encode_ms_per_frame": batch_stage_metrics.get("preview_encode_ms", 0.0) / max(len(im0s), 1),
+                        "mqtt_ms_per_frame": batch_stage_metrics.get("mqtt_ms", 0.0) / max(len(im0s), 1),
+                        "event_saving_ms_per_frame": 0.0,
+                        "total_ms_per_frame": total_ms / max(len(im0s), 1),
+                        "fps_sliding": fps_sliding,
+                    })
+                    timeline_logger.log_span(batch_idx, "batch_total", t_batch_start - stream_start, t_now - stream_start, {
+                        "inference_ran": 0, "frames_in_batch": int(len(im0s)),
+                    })
+                    batch_idx += 1
+                self.step_attention_state()
+                continue
+
+            # ── Blank no-motion frames before splitting into tiles ─────────────────
+            for i, keep_frame in enumerate(mfgs):
+                if not keep_frame:
+                    im0s[i] = empty_image(im0s[i])
+                    original_images[i] = empty_image(original_images[i])
+                    original_images_bgr[i] = empty_image(original_images_bgr[i])
+
+            if self.args.plot_performance:
+                _t0 = time.perf_counter()
+                _t0_rel = _t0 - stream_start
+
+            # ── Stage B (tiles): split → microbatch inference → reconstruct ────────
+            all_tiles_with_meta: list = []
+            overlap_px = max(0, int(round(tile_size * overlap_ratio)))
+            for bni_t, (keep_frame, img, fid) in enumerate(zip(mfgs, im0s, frame_ids)):
+                if not keep_frame:
+                    continue
+                try:
+                    fid_int = int(fid)
+                except (TypeError, ValueError):
+                    fid_int = hash(str(fid)) & 0x7FFFFFFF
+                for tile_img, meta in split_image_gen(img, fid_int, tile_size=tile_size, overlap=overlap_px):
+                    all_tiles_with_meta.append((tile_img, meta, bni_t))
+
+            # Per-frame accumulator: keyed by the integer frame-id used in tile metas
+            frame_tile_acc: dict = {}
+            n_microbatches = 0
+
+            for mb_start in range(0, max(1, len(all_tiles_with_meta)), micro):
+                mb = all_tiles_with_meta[mb_start: mb_start + micro]
+                if not mb:
+                    break
+                n_microbatches += 1
+
+                tile_imgs_raw = [item[0] for item in mb]
+                tile_metas = [item[1] for item in mb]
+
+                t_pre0 = time.perf_counter()
+                with profilers[0]:
+                    tile_tensors = self.preprocess(tile_imgs_raw)
+                preprocess_ms += (time.perf_counter() - t_pre0) * 1e3
+
+                t_inf0 = time.perf_counter()
+                with profilers[1]:
+                    if self.seen == 0 and n_microbatches == 1 and self.args.verbose:
+                        with profile(activities=activities) as prof:
+                            raw_out = self.model(tile_tensors, orig_imgs=None, debug=True)
+                        os.makedirs("assets/trace_jsons", exist_ok=True)
+                        model_tag = getattr(self, "model_tag", type(self.model).__name__)
+                        prof.export_chrome_trace(f"assets/trace_jsons/trace_{model_tag}_tiles.json")
+                    else:
+                        raw_out = self.model(tile_tensors, orig_imgs=None, debug=False)
+                inference_ms += (time.perf_counter() - t_inf0) * 1e3
+
+                if isinstance(raw_out, tuple) and len(raw_out) == 2 and isinstance(raw_out[0], tuple):
+                    (i_boxes, i_scores, i_classes), event = raw_out
+                else:
+                    i_boxes, i_scores, i_classes = raw_out
+                    event = None
+
+                if event is not None and torch.cuda.is_available():
+                    torch.cuda.current_stream().wait_event(event)
+
+                for meta, boxes, scores, classes in zip(tile_metas, i_boxes, i_scores, i_classes):
+                    fid_key = int(meta["frame_id"])
+                    boxes_t = boxes if torch.is_tensor(boxes) else torch.as_tensor(boxes, dtype=torch.float32)
+                    if boxes_t.numel() == 0:
+                        continue
+
+                    # Reconstruct tile-local boxes → frame-coordinate boxes (in-place)
+                    boxes_np = boxes_t.float().cpu().numpy().copy()
+                    boxes_np = reconstruct_tiles(
+                        boxes_np,
+                        tx=meta["left_x"],
+                        ty=meta["top_y"],
+                        orig_H=meta["f_wh"][0],
+                        orig_W=meta["f_wh"][1],
+                        gain=meta["gain"],
+                        pad=(meta["pad_x"], meta["pad_y"]),
+                    )
+
+                    scores_t = scores if torch.is_tensor(scores) else torch.as_tensor(scores, dtype=torch.float32)
+                    classes_t = classes if torch.is_tensor(classes) else torch.as_tensor(classes, dtype=torch.int64)
+
+                    entry = frame_tile_acc.setdefault(fid_key, {"boxes": [], "scores": [], "classes": []})
+                    entry["boxes"].append(boxes_np)
+                    entry["scores"].append(
+                        scores_t.float().cpu().numpy() if torch.is_tensor(scores_t) else np.asarray(scores_t, np.float32)
+                    )
+                    entry["classes"].append(
+                        classes_t.cpu().numpy() if torch.is_tensor(classes_t) else np.asarray(classes_t, np.int64)
+                    )
+
+            if self.args.plot_performance:
+                self._record_stage_time("preprocess_ms", preprocess_ms, frame_ids=frame_ids)
+                self._record_stage_time("inference_ms", inference_ms, frame_ids=frame_ids)
+                timeline_logger.log_span(
+                    batch_idx, "preprocess+inference_tiles", _t0_rel, time.perf_counter() - stream_start
+                )
+
+            # Assemble DetectionBatch: global NMS per frame, optional ROI back-projection
+            frames_dets: List[FrameDetections] = []
+            for bni_a, (fid, keep_frame) in enumerate(zip(frame_ids, mfgs)):
+                orig_img = original_images[bni_a]
+                try:
+                    fid_key = int(fid)
+                except (TypeError, ValueError):
+                    fid_key = hash(str(fid)) & 0x7FFFFFFF
+
+                if not keep_frame or fid_key not in frame_tile_acc:
+                    frames_dets.append(FrameDetections.empty(frame_id=fid, batch_index=bni_a, orig_img=orig_img))
+                    continue
+
+                accum = frame_tile_acc[fid_key]
+                if not accum["boxes"]:
+                    frames_dets.append(FrameDetections.empty(frame_id=fid, batch_index=bni_a, orig_img=orig_img))
+                    continue
+
+                all_boxes_np = np.concatenate(accum["boxes"], axis=0).astype(np.float32)
+                all_scores_np = np.concatenate(accum["scores"], axis=0).astype(np.float32)
+                all_classes_np = np.concatenate(accum["classes"], axis=0).astype(np.int64)
+
+                boxes_t_all = torch.as_tensor(all_boxes_np, dtype=torch.float32)
+                scores_t_all = torch.as_tensor(all_scores_np, dtype=torch.float32)
+                classes_t_all = torch.as_tensor(all_classes_np, dtype=torch.int64)
+
+                t_nms0 = time.perf_counter()
+                keep_idx = batched_nms(boxes_t_all, scores_t_all, classes_t_all.long(), iou_threshold=NMS_IOU)
+                nms_elapsed = (time.perf_counter() - t_nms0) * 1e3
+                nms_ms += nms_elapsed
+                self._record_stage_time("nms_ms", nms_elapsed, frame_id=fid)
+
+                boxes_t_all = boxes_t_all[keep_idx]
+                scores_t_all = scores_t_all[keep_idx]
+                classes_t_all = classes_t_all[keep_idx]
+
+                # Map from im0s (possibly ROI-cropped) space back to original full-frame space
+                if self.use_roi and boxes_t_all.numel() > 0:
+                    boxes_t_all = self.logic_module["ROI"].translate_bounding_boxes(
+                        results=boxes_t_all,
+                        orig_img_shape=self.original_imgsz,
+                    )
+
+                if boxes_t_all.numel() == 0:
+                    frames_dets.append(FrameDetections.empty(frame_id=fid, batch_index=bni_a, orig_img=orig_img))
+                    continue
+
+                frames_dets.append(FrameDetections(
+                    frame_id=fid,
+                    batch_index=bni_a,
+                    orig_img=orig_img,
+                    boxes=boxes_t_all,
+                    scores=scores_t_all,
+                    classes=classes_t_all,
+                ))
+
+            detection_batch = DetectionBatch(frames=frames_dets)
+            # ── End Stage B (tiles) ───────────────────────────────────────────────
+
+            postprocess_total_t0 = time.perf_counter()
+            if self.args.plot_performance:
+                _tpost = time.perf_counter()
+                _tpost_rel = _tpost - stream_start
+
+            frame_bundles, preds = self._stage_c_tracking_and_hazard_logic(
+                detection_batch, original_images_bgr, profilers
+            )
+            frame_log_rows = self._stage_d_dispatch_optional_sinks(
+                preds, frame_bundles, paths, original_images_bgr, preview_queue, producer_flag
+            )
+
+            per_frame_pre = preprocess_ms / max(n_microbatches, 1)
+            per_frame_inf = inference_ms / max(n_microbatches, 1)
+
+            for fb, r in zip(frame_bundles, preds):
+                r.speed = {
+                    "preprocess": per_frame_pre,
+                    "inference": per_frame_inf,
+                    "postprocess": profilers[2].dt * 1e3 / max(len(im0s), 1),
+                }
+                self.log_detection_snapshot(r)
+                fid = fb["frame_id"]
+                bni = fb["bni"]
+
+                if self.mp is not None and self.args.bench:
+                    gt_cls, gt_bbs = self._resolve_benchmark_gt(fid)
+                    if r.boxes is None or r.boxes.xyxy.numel() == 0:
+                        det_boxes, det_scores, det_classes = _empty_dets_numpy()
+                    else:
+                        detections = getattr(r, "sv_detections", None)
+                        if detections is not None:
+                            det_boxes = np.asarray(detections.xyxy, dtype=np.float32)
+                            det_scores = np.asarray(detections.confidence, dtype=np.float32)
+                            det_classes = np.asarray(detections.class_id, dtype=np.int64)
+                        else:
+                            det_boxes = r.boxes.xyxy.detach().cpu().numpy().astype(np.float32)
+                            det_scores = r.boxes.conf.detach().cpu().numpy().astype(np.float32)
+                            det_classes = r.boxes.cls.detach().cpu().numpy().astype(np.int64)
+                    self.mp.update(
+                        boxes_xyxy=det_boxes,
+                        scores=det_scores,
+                        classes=det_classes,
+                        gt_boxes_xyxy=gt_bbs.astype(np.float32),
+                        gt_classes=gt_cls.astype(np.int64),
+                    )
+
+                self._note_emitted_result()
+                yield r
+
+                if (self.args.only_FPS and not self.args.plot_performance) or self.args.plot_performance:
+                    now = time.perf_counter()
+                    fps_times.append(now)
+                    total_frames += 1
+                    if len(fps_times) > 1:
+                        fps = (len(fps_times) - 1) / (fps_times[-1] - fps_times[0])
+                    if now - last_fps_log >= 1.0:
+                        elapsed = now - stream_start
+                        avg_fps = total_frames / elapsed
+                        Streamer.logger.info(
+                            "[FPS][tiles] End-to-end: %.2f | Average: %.2f", fps, avg_fps
+                        )
+                        last_fps_log = now
+
+            self.run_callbacks("on_predict_postprocess_end")
+
+            if self.args.plot_performance:
+                t_now = time.perf_counter()
+                frames_in_batch = len(im0s)
+                frames_inferred = int(sum(bool(x) for x in mfgs))
+                motion_density = frames_inferred / frames_in_batch if frames_in_batch else 0.0
+                scores_sub = getattr(self.logic_module.get("SUBTRACTOR", None), "last_motion_scores", None)
+                avg_motion_score = float(np.mean(scores_sub)) if scores_sub else 0.0
+                inference_ran = 1 if frames_inferred > 0 else 0
+                if inference_ran:
+                    infer_counter.add(t_now, 1.0)
+                infer_calls_per_sec = infer_counter.rate(t_now)
+                total_ms = (t_now - t_batch_start) * 1e3
+                batch_stage_metrics = self._get_batch_stage_metrics()
+                postprocess_ms = max(
+                    0.0,
+                    ((t_now - postprocess_total_t0) * 1e3)
+                    - batch_stage_metrics.get("preview_encode_ms", 0.0)
+                    - batch_stage_metrics.get("mqtt_ms", 0.0),
+                )
+                timeline_logger.log_span(
+                    batch_idx, "postprocess", _tpost_rel, t_now - stream_start,
+                    {"frame_in_batch": int(bni)},
+                )
+                per_read = frame_read_ms / max(frames_in_batch, 1)
+                per_roi = roi_ms / max(frames_in_batch, 1)
+                per_mog2 = mog2_ms / max(frames_in_batch, 1)
+                per_defish = defish_ms / max(frames_in_batch, 1)
+                per_pre = preprocess_ms / max(frames_in_batch, 1)
+                per_inf = inference_ms / max(frames_in_batch, 1)
+                perf_logger.log({
+                    "t_wall": t_now, "batch_idx": batch_idx, "frames_in_batch": frames_in_batch,
+                    "res_w": res_w, "res_h": res_h, "motion_density": motion_density,
+                    "avg_motion_score": avg_motion_score, "inference_ran": inference_ran,
+                    "frames_inferred": frames_inferred, "infer_calls_per_sec": infer_calls_per_sec,
+                    "gpu_util": gpu_stats.get("gpu_util", float("nan")),
+                    "gpu_mem_used_mb": gpu_stats.get("mem_used_mb", float("nan")),
+                    "gpu_mem_total_mb": gpu_stats.get("mem_total_mb", float("nan")),
+                    "cpu_util": cpu_stats.get("cpu_util", float("nan")),
+                    "frame_read_ms_per_frame": per_read,
+                    "roi_ms_per_frame": per_roi,
+                    "mog2_ms_per_frame": per_mog2,
+                    "defish_ms_per_frame": per_defish,
+                    "preprocess_ms_per_frame": per_pre,
+                    "inference_ms_per_frame": per_inf,
+                    "postprocess_ms_per_frame": postprocess_ms / max(frames_in_batch, 1),
+                    "nms_ms_per_frame": batch_stage_metrics.get("nms_ms", 0.0) / max(frames_in_batch, 1),
+                    "tracking_ms_per_frame": batch_stage_metrics.get("tracking_ms", 0.0) / max(frames_in_batch, 1),
+                    "hazard_logic_ms_per_frame": batch_stage_metrics.get("hazard_logic_ms", 0.0) / max(frames_in_batch, 1),
+                    "preview_encode_ms_per_frame": batch_stage_metrics.get("preview_encode_ms", 0.0) / max(frames_in_batch, 1),
+                    "mqtt_ms_per_frame": batch_stage_metrics.get("mqtt_ms", 0.0) / max(frames_in_batch, 1),
+                    "event_saving_ms_per_frame": batch_stage_metrics.get("event_saving_ms", 0.0) / max(frames_in_batch, 1),
+                    "total_ms_per_frame": total_ms / max(frames_in_batch, 1),
+                    "fps_sliding": fps,
+                })
+                scores_list = getattr(self.logic_module.get("SUBTRACTOR", None), "last_motion_scores", None) or []
+                for row in frame_log_rows:
+                    fid_row = row["frame_id"]
+                    bni_row = row["bni"]
+                    frame_stage_metrics = self._get_frame_stage_metrics(fid_row)
+                    motion_score = float(scores_list[bni_row]) if bni_row < len(scores_list) else float("nan")
+                    frame_logger.log({
+                        "t_wall": t_now, "batch_idx": batch_idx,
+                        "frame_id": int(fid_row) if str(fid_row).isdigit() else fid_row,
+                        "res_w": res_w, "res_h": res_h,
+                        "motion_passed": row["motion_passed"],
+                        "motion_score": motion_score,
+                        "gpu_util": gpu_stats.get("gpu_util", float("nan")),
+                        "gpu_mem_used_mb": gpu_stats.get("mem_used_mb", float("nan")),
+                        "cpu_util": cpu_stats.get("cpu_util", float("nan")),
+                        "frame_read_ms": per_read, "roi_ms": per_roi,
+                        "mog2_ms": per_mog2, "defish_ms": per_defish,
+                        "preprocess_ms": per_pre, "inference_ms": per_inf,
+                        "postprocess_ms": postprocess_ms / max(frames_in_batch, 1),
+                        "nms_ms": frame_stage_metrics.get("nms_ms", 0.0),
+                        "tracking_ms": frame_stage_metrics.get("tracking_ms", 0.0),
+                        "hazard_logic_ms": frame_stage_metrics.get("hazard_logic_ms", 0.0),
+                        "preview_encode_ms": frame_stage_metrics.get("preview_encode_ms", 0.0),
+                        "mqtt_ms": frame_stage_metrics.get("mqtt_ms", 0.0),
+                        "event_saving_ms": frame_stage_metrics.get("event_saving_ms", 0.0),
+                        "total_ms": (
+                            per_read + per_roi + per_mog2 + per_defish + per_pre + per_inf
+                            + (postprocess_ms / max(frames_in_batch, 1))
+                            + frame_stage_metrics.get("preview_encode_ms", 0.0)
+                            + frame_stage_metrics.get("mqtt_ms", 0.0)
+                        ),
+                    })
+                timeline_logger.log_span(
+                    batch_idx, "batch_total", t_batch_start - stream_start, t_now - stream_start,
+                    {"inference_ran": int(inference_ran), "frames_in_batch": int(frames_in_batch)},
+                )
+                batch_idx += 1
+
+            self.run_callbacks("on_predict_batch_end")
+            self.step_attention_state()
+
+        if self.stop_reason != "stream_limit":
+            producer_thread.join()
+
+        if self.args.bench and self.mp is not None:
+            self.mp.finalize()
+            Streamer.logger.info(self.mp.results())
+
+        if self.args.save or self.args.save_txt or self.args.save_crop:
+            nl = len(list(self.save_dir.glob("labels/*.txt")))
+            s = f"\n{nl} label{'s' * (nl > 1)} saved to {self.save_dir / 'labels'}" if self.args.save_txt else ""
+
+        if self.args.verbose and self.seen:
+            t = tuple(x.t / self.seen * 1e3 for x in profilers)
+            Streamer.logger.info(
+                "[tiles] Speed: %.1fms preprocess, %.1fms inference, %.1fms postprocess per image at shape "
+                f"{(min(self.args.batch, self.seen), 3, tile_size, tile_size)}" % t
+            )
+
+        if (self.args.only_FPS and not self.args.plot_performance) or self.args.plot_performance:
+            total_time = time.perf_counter() - stream_start
+            if total_frames > 0:
+                print(f"[FPS][tiles] FINAL Average FPS: {total_frames / total_time:.2f}")
+
+        if self.args.plot_performance:
+            try:
+                perf_logger.close()
+                frame_logger.close()
+                timeline_logger.close()
+            except Exception:
+                pass
+
+        self.release_session_resources(preview_queue=preview_queue, producer_flag=producer_flag)
+        self.run_callbacks("on_predict_end")
 
 
     def _frames_to_tiles(self, frame_iter, tile_size:int, overlap_ratio:float): 

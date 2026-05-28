@@ -486,14 +486,67 @@ def empty_image(image):
     return np.zeros_like(image)
 
 
-def return_no_motion_frames(im0s, batch_size): 
+def return_no_motion_frames(im0s, batch_size):
     batch_size = min(int(batch_size), len(im0s))
     results = [
         _empty_results(
-            orig_image=im0s[i], 
-            frame_id=i, 
+            orig_image=im0s[i],
+            frame_id=i,
             device="cpu"
         ) for i in range(batch_size)
     ]
 
     return results
+
+
+def detect_static_lanes(
+    background: np.ndarray,
+    kernel15: Optional[np.ndarray] = None,
+    min_area_ratio: float = 0.005,
+) -> Optional[np.ndarray]:
+    """
+    Detect lane regions from a stabilised background image using road-marking geometry.
+    Enhances bright paint markings via top-hat morphology, then dilates them into
+    lane-width corridors. Returns a binary uint8 mask or None if no reliable
+    markings are found.
+
+    Intended as the primary lane-detection path for sparse-traffic scenes where
+    the motion accumulator lacks enough vehicle passes to build a reliable mask.
+    """
+    if background is None or background.size == 0:
+        return None
+
+    gray = cv2.cvtColor(background, cv2.COLOR_BGR2GRAY) if background.ndim == 3 else background.copy()
+    h, w = gray.shape
+    total = float(h * w)
+
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    gray = clahe.apply(gray)
+
+    # Isolate bright road markings (white/yellow) relative to darker asphalt
+    tophat_k = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 25))
+    enhanced = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, tophat_k)
+
+    _, marking_mask = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    k3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    marking_mask = cv2.morphologyEx(marking_mask, cv2.MORPH_OPEN, k3)
+
+    if cv2.countNonZero(marking_mask) < max(50, int(0.0005 * total)):
+        return None
+
+    # Dilate markings outward to form a lane-width corridor
+    k_dilate = kernel15 if kernel15 is not None else cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+    corridor = cv2.dilate(marking_mask, k_dilate, iterations=4)
+    corridor = cv2.morphologyEx(corridor, cv2.MORPH_CLOSE, k_dilate, iterations=2)
+
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(corridor, connectivity=8)
+    min_area = max(500, int(min_area_ratio * total))
+    out = np.zeros_like(corridor)
+    for i, stat in enumerate(stats):
+        if i == 0:
+            continue
+        if stat[cv2.CC_STAT_AREA] >= min_area:
+            out[labels == i] = 255
+
+    return out if cv2.countNonZero(out) > 0 else None

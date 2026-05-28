@@ -109,6 +109,7 @@ class Application:
         DEFAULT_CFG.jetson_profile = bool(config.jetson_profile)
         DEFAULT_CFG.jetson_hazard_scale = float(config.jetson_hazard_scale)
         DEFAULT_CFG.jetson_cpu_threads = int(config.jetson_cpu_threads)
+        DEFAULT_CFG.force_tiles = bool(config.force_tiles)
 
         tracemalloc.start()
 
