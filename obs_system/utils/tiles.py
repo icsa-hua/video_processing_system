@@ -169,14 +169,14 @@ def split_image(is_tensor, image,frame_id, tile_size=TILE_SIZE, show_rect=False 
 
     gain = 1 if tile_size == TILE_SIZE else int(min(H/tile_size, W/tile_size)) 
 
-    if pad_top !=0 or pad_left!=0: 
-        image = pad_image(image, padding=(overlap, overlap, overlap))
-        H, W = image.shape[:2] 
+    if pad_top !=0 or pad_left!=0:
+        image = pad_image(image, padding=(pad_top, 0, pad_left, 0))
+        H, W = image.shape[:2]
 
-    c = image.shape[2] if len(image.shape) == 3 else 1 
+    c = image.shape[2] if len(image.shape) == 3 else 1
 
-    tiles = [] 
-    xs, ys = tile_coords(W, H, tile_size=TILE_SIZE, overlap=overlap) 
+    tiles = []
+    xs, ys = tile_coords(W, H, tile_size=tile_size, overlap=overlap)
 
     for x0 in xs: 
         for y0 in ys: 
@@ -231,14 +231,14 @@ def split_image_t(image, frame_id, tile_size, show_rect, show_tiles, overlap):
 
     gain = 1 if tile_size == 640 else int(min(H/tile_size, W/tile_size)) 
 
-    if pad_top !=0 or pad_left!=0: 
-        image = pad_image(image, padding=(overlap, overlap, overlap))
-        H, W = image.shape[:2] 
+    if pad_top !=0 or pad_left!=0:
+        image = pad_image(image, padding=(pad_top, 0, pad_left, 0))
+        H, W = image.shape[:2]
 
-    c = image.shape[2] if len(image.shape) == 3 else 1 
+    c = image.shape[2] if len(image.shape) == 3 else 1
 
-    tiles = [] 
-    xs, ys = tile_coords(W, H, tile_size=640, overlap=overlap) 
+    tiles = []
+    xs, ys = tile_coords(W, H, tile_size=tile_size, overlap=overlap)
 
     for x0 in xs: 
         for y0 in ys: 
@@ -290,8 +290,8 @@ def split_image_gen(image:np.ndarray |torch.Tensor, frame_id:int, tile_size:int=
     pad_left = max(0, tile_size-W)
     gain = 1 if tile_size == 640 else int(min(H/tile_size, W/tile_size))
     
-    if pad_top !=0 or pad_left != 0: 
-        image = pad_image(image, padding=(overlap, overlap, overlap)) 
+    if pad_top !=0 or pad_left != 0:
+        image = pad_image(image, padding=(pad_top, 0, pad_left, 0))
         H, W = image.shape[:2]
     
     stride = tile_size - overlap 
