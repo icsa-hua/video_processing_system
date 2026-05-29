@@ -387,7 +387,7 @@ def _pick_codec_and_suffix():
         return [("mp4v", ".mp4"), ("MJPG", ".avi"), ("XVID", ".avi")] 
 
     else: 
-        return [("mpv4", ".mp4"), ("MJPG", ".avi")]
+        return [("mp4v", ".mp4"), ("MJPG", ".avi")]
 
 
 def open_writer(video_path: Path, fps:int, size_hw): 
