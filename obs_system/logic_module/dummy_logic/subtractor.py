@@ -7,6 +7,18 @@ from obs_system.utils.global_config import (
     K_CONSECUTIVE,
     HOLD_FRAMES,
     MIN_OBJ_AREA,
+    MIN_MOTION_COMPONENT_AREA_RATIO,
+    MAX_MOTION_COMPONENTS,
+    MOTION_MORPH_KERNEL,
+    MOTION_GATE_FILTERED_SCORE_THRESHOLD,
+    ENABLE_UNSTABLE_MOTION_MAP,
+    UNSTABLE_MOTION_THRESHOLD,
+    UNSTABLE_MOTION_SUPPRESSION_WEIGHT,
+    ENABLE_DRIVABLE_CONFIDENCE_MAP,
+    DRIVABLE_STATIC_WEIGHT,
+    DRIVABLE_DETECTION_WEIGHT,
+    DRIVABLE_TRACK_WEIGHT,
+    DRIVABLE_UNSTABLE_NEGATIVE_WEIGHT,
 )
 from obs_system.utils.logger import get_logger
 from obs_system.utils.common import detect_static_lanes
@@ -105,6 +117,29 @@ class Subtractor(EventExtractorInterface):
         self._motion_sparse_threshold: float = 0.001  # below → static mask is primary
         self._motion_dense_threshold: float = 0.006   # above → blend motion accumulation
 
+        # ── Step 1: motion-quality filtering ──────────────────────────────────
+        # Elliptic kernel used for the motion-gate morphology pass (larger than
+        # kernel3 to better connect coherent blobs before CC analysis).
+        self._motion_morph_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (MOTION_MORPH_KERNEL, MOTION_MORPH_KERNEL)
+        )
+
+        # ── Step 2: unstable-motion map ───────────────────────────────────────
+        # Accumulates raw MOG2 binary output during the calibration window.
+        # Finalised into _unstable_motion_map once calibration ends.
+        self._unstable_motion_accumulator: Optional[np.ndarray] = None
+        self._unstable_motion_frame_count: int = 0
+        # float32 at downscale resolution; high value = background that moves often
+        self._unstable_motion_map: Optional[np.ndarray] = None
+
+        # ── Step 3: drivable-area confidence map ─────────────────────────────
+        self._detection_heatmap: Optional[np.ndarray] = None   # vehicle bbox paint
+        self._track_heatmap: Optional[np.ndarray] = None       # track trail paint
+        self._drivable_confidence_map: Optional[np.ndarray] = None
+        self._drivable_rebuild_counter: int = 0
+        self._drivable_rebuild_interval: int = 5   # rebuild combined map every N updates
+        self._dc_call_count: int = 0               # used to throttle heatmap decay
+
 
     def configure_source_warmup(self, source_is_stream: bool) -> None:
         self._source_is_stream = bool(source_is_stream)
@@ -153,6 +188,217 @@ class Subtractor(EventExtractorInterface):
     def _has_nonempty_mask(self, mask: Optional[np.ndarray]) -> bool:
         return bool(mask is not None and mask.size > 0 and cv2.countNonZero(mask) > 0)
 
+    # ── Step 1 helpers ────────────────────────────────────────────────────────
+
+    def _filter_motion_components(self, binary_mask: np.ndarray) -> np.ndarray:
+        """Remove fragmented/thin blobs (vegetation, shadow flicker) from a binary motion mask.
+
+        Keeps only components that are:
+        - Large enough (area > MIN_MOTION_COMPONENT_AREA_RATIO × frame area)
+        - Sufficiently compact (fill ratio inside bounding box > 0.12)
+
+        If the number of remaining components exceeds MAX_MOTION_COMPONENTS the
+        whole mask is blanked — too many surviving blobs indicates scattered
+        vegetation-type motion, not coherent object motion.
+        """
+        if self._cached_total_pixels == 0 or cv2.countNonZero(binary_mask) == 0:
+            return binary_mask
+
+        min_area = MIN_MOTION_COMPONENT_AREA_RATIO * self._cached_total_pixels
+        n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary_mask, connectivity=8)
+
+        filtered = np.zeros_like(binary_mask)
+        n_valid = 0
+
+        for i in range(1, n_labels):
+            area = float(stats[i, cv2.CC_STAT_AREA])
+            if area < min_area:
+                continue
+            bw = float(max(stats[i, cv2.CC_STAT_WIDTH], 1))
+            bh = float(max(stats[i, cv2.CC_STAT_HEIGHT], 1))
+            # Discard needle-thin or highly scattered blobs typical of leaf motion
+            if area / (bw * bh) < 0.12:
+                continue
+            filtered[labels == i] = 255
+            n_valid += 1
+
+        # Many small-but-passing blobs = vegetation scatter field → suppress all
+        if n_valid > MAX_MOTION_COMPONENTS:
+            return np.zeros_like(binary_mask)
+
+        return filtered
+
+    def _compute_weighted_motion_score(self, filtered_mask: np.ndarray) -> float:
+        """Compute a motion score from the CC-filtered mask, downweighting pixels
+        that fall inside the unstable-motion map (Step 2).
+
+        Returns a value in [0, 1] (fraction of frame area, after weighting).
+        """
+        if self._cached_total_pixels == 0:
+            return 0.0
+
+        if not ENABLE_UNSTABLE_MOTION_MAP or self._unstable_motion_map is None:
+            return float(cv2.countNonZero(filtered_mask)) / self._cached_total_pixels
+
+        unstable = self._unstable_motion_map
+        if unstable.shape != filtered_mask.shape:
+            unstable = cv2.resize(
+                unstable,
+                (filtered_mask.shape[1], filtered_mask.shape[0]),
+                interpolation=cv2.INTER_LINEAR,
+            )
+
+        fg = (filtered_mask > 0).astype(np.float32)
+        # Stable pixels → weight 1.0; unstable pixels → weight SUPPRESSION_WEIGHT
+        weight_map = 1.0 - (1.0 - UNSTABLE_MOTION_SUPPRESSION_WEIGHT) * unstable
+        return float(np.sum(fg * weight_map)) / self._cached_total_pixels
+
+    # ── Step 3 helpers ────────────────────────────────────────────────────────
+
+    def update_drivable_confidence(
+        self,
+        boxes_xyxy,
+        classes,
+        class_names: list,
+        track_points: Optional[dict] = None,
+        orig_hw: Optional[tuple] = None,
+    ) -> None:
+        """Paint vehicle detections and track trails into heatmaps, then
+        rebuild the drivable-area confidence map every _drivable_rebuild_interval
+        calls.
+
+        boxes_xyxy : Tensor or ndarray (N×4) in original-image coordinates.
+        classes    : Tensor or ndarray (N,) of integer class ids.
+        orig_hw    : (H, W) of the original frame, used to scale boxes to
+                     downscale resolution.  Falls back to _last_frame_shape.
+        """
+        if not ENABLE_DRIVABLE_CONFIDENCE_MAP:
+            return
+
+        self._dc_call_count += 1
+        target_h, target_w = self.downscale
+
+        # ── initialise heatmaps on first call ────────────────────────────────
+        if self._detection_heatmap is None:
+            self._detection_heatmap = np.zeros((target_h, target_w), np.float32)
+        if self._track_heatmap is None:
+            self._track_heatmap = np.zeros((target_h, target_w), np.float32)
+
+        # ── slow heatmap decay (once per ~16 calls ≈ one batch) ──────────────
+        if self._dc_call_count % 16 == 0:
+            self._detection_heatmap *= 0.97
+            self._track_heatmap *= 0.97
+
+        # ── coordinate scale from original frame to downscale ─────────────────
+        frame_h, frame_w = orig_hw if orig_hw is not None else (
+            self._last_frame_shape if self._last_frame_shape is not None else self.downscale
+        )
+        sx = target_w / max(float(frame_w), 1.0)
+        sy = target_h / max(float(frame_h), 1.0)
+
+        # ── paint vehicle detection bboxes ───────────────────────────────────
+        _vehicle_names = {"car", "truck", "bus", "bike", "bicycle", "motorbike", "motorcycle"}
+        if boxes_xyxy is not None:
+            boxes_np = (
+                boxes_xyxy.detach().cpu().numpy()
+                if hasattr(boxes_xyxy, "detach")
+                else np.asarray(boxes_xyxy, dtype=np.float32)
+            )
+            classes_np = (
+                classes.detach().cpu().numpy()
+                if hasattr(classes, "detach")
+                else np.asarray(classes, dtype=np.int64)
+            ) if classes is not None else np.zeros(len(boxes_np), dtype=np.int64)
+
+            for box, cls_id in zip(boxes_np, classes_np):
+                cls_name = class_names[int(cls_id)] if 0 <= int(cls_id) < len(class_names) else ""
+                if cls_name.lower() not in _vehicle_names:
+                    continue
+                x1 = int(np.clip(box[0] * sx, 0, target_w - 1))
+                y1 = int(np.clip(box[1] * sy, 0, target_h - 1))
+                x2 = int(np.clip(box[2] * sx, 0, target_w))
+                y2 = int(np.clip(box[3] * sy, 0, target_h))
+                if x2 > x1 and y2 > y1:
+                    self._detection_heatmap[y1:y2, x1:x2] = np.minimum(
+                        self._detection_heatmap[y1:y2, x1:x2] + 0.5, 20.0
+                    )
+
+        # ── paint track centroid trails ───────────────────────────────────────
+        if track_points:
+            for pts in track_points.values():
+                if not isinstance(pts, np.ndarray) or pts.ndim < 2:
+                    continue
+                for pt in pts:
+                    if len(pt) >= 2:
+                        px = int(np.clip(float(pt[0]) * sx, 0, target_w - 1))
+                        py = int(np.clip(float(pt[1]) * sy, 0, target_h - 1))
+                        self._track_heatmap[py, px] = min(
+                            self._track_heatmap[py, px] + 0.3, 20.0
+                        )
+
+        # ── rebuild combined confidence map on schedule ───────────────────────
+        self._drivable_rebuild_counter += 1
+        if self._drivable_rebuild_counter >= self._drivable_rebuild_interval:
+            self._drivable_rebuild_counter = 0
+            self._rebuild_drivable_confidence()
+
+    def _rebuild_drivable_confidence(self) -> None:
+        """Combine all signals into a single float32 confidence map [0, 1]."""
+        if not ENABLE_DRIVABLE_CONFIDENCE_MAP:
+            return
+
+        target_h, target_w = self.downscale
+        conf = np.zeros((target_h, target_w), np.float32)
+
+        # 1. Static lane mask (strongest prior when available)
+        lane_src = self.lanes_mask if self.lanes_mask is not None else self._static_lanes_mask
+        if lane_src is not None:
+            lane = lane_src
+            if lane.shape[:2] != (target_h, target_w):
+                lane = cv2.resize(lane, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
+            conf += DRIVABLE_STATIC_WEIGHT * (lane > 0).astype(np.float32)
+
+        # 2. Vehicle detection heatmap
+        if self._detection_heatmap is not None:
+            det = np.clip(self._detection_heatmap, 0.0, 20.0) / 20.0
+            det_blurred = cv2.GaussianBlur(det, (15, 15), 0)
+            conf += DRIVABLE_DETECTION_WEIGHT * det_blurred
+
+        # 3. Track trail heatmap
+        if self._track_heatmap is not None:
+            trk = np.clip(self._track_heatmap, 0.0, 20.0) / 20.0
+            trk_blurred = cv2.GaussianBlur(trk, (11, 11), 0)
+            conf += DRIVABLE_TRACK_WEIGHT * trk_blurred
+
+        # 4. Negative: subtract unstable-motion regions (background clutter)
+        if self._unstable_motion_map is not None:
+            unstable = self._unstable_motion_map
+            if unstable.shape[:2] != (target_h, target_w):
+                unstable = cv2.resize(
+                    unstable, (target_w, target_h), interpolation=cv2.INTER_NEAREST
+                )
+            conf -= DRIVABLE_UNSTABLE_NEGATIVE_WEIGHT * unstable
+
+        self._drivable_confidence_map = np.clip(conf, 0.0, 1.0)
+
+    def get_drivable_confidence_map(
+        self, target_hw: Optional[tuple] = None
+    ) -> Optional[np.ndarray]:
+        """Return the drivable-area confidence map at an optional target resolution.
+
+        Returns None if the map has not yet been built (calibration not finished
+        and no detections received).
+        """
+        if not ENABLE_DRIVABLE_CONFIDENCE_MAP or self._drivable_confidence_map is None:
+            return None
+        if target_hw is None:
+            return self._drivable_confidence_map
+        th, tw = target_hw
+        if self._drivable_confidence_map.shape[:2] == (th, tw):
+            return self._drivable_confidence_map
+        return cv2.resize(
+            self._drivable_confidence_map, (tw, th), interpolation=cv2.INTER_LINEAR
+        )
 
     def _begin_runtime_recalibration(self) -> None:
         if not self._recalibration_enabled or self.recalibration_accum_time <= 0:
@@ -309,37 +555,49 @@ class Subtractor(EventExtractorInterface):
             self._cached_total_pixels = float(dh * dw)
             self._cached_threshold = int(self.threshold_ratio * dh * dw)
 
-        motion_pixels = cv2.countNonZero(subtractor_mask)
-        self._last_motion_score = motion_pixels / self._cached_total_pixels
+        # Raw pixel count used in the hold-active fast path (cheap, no filtering)
+        raw_motion_pixels = cv2.countNonZero(subtractor_mask)
+        self._last_motion_score = raw_motion_pixels / self._cached_total_pixels
 
-        # Early exit: hysteresis hold is active — skip morph + contour work
+        # Early exit: hysteresis hold is active — skip morph + CC work
         if self._hold > 0:
             self._hold -= 1
-            # Use pixel-count gate to track actual motion state in _recent
-            self._recent.append(motion_pixels > self._cached_threshold)
+            self._recent.append(raw_motion_pixels > self._cached_threshold)
             if save_dir is not None and save_img and save_idx is not None:
                 s = cv2.morphologyEx(subtractor_mask, cv2.MORPH_OPEN, self.kernel3)
                 s = cv2.morphologyEx(s, cv2.MORPH_CLOSE, self.kernel3)
                 self.__save_subtractor(frame, s, save_dir, save_idx)
             return True
 
-        subtractor_mask = cv2.morphologyEx(subtractor_mask, cv2.MORPH_OPEN, self.kernel3)
-        subtractor_mask = cv2.morphologyEx(subtractor_mask, cv2.MORPH_CLOSE, self.kernel3)
+        # ── Step 1: morphology cleanup with the configurable kernel ──────────
+        subtractor_mask = cv2.morphologyEx(subtractor_mask, cv2.MORPH_OPEN, self._motion_morph_kernel)
+        subtractor_mask = cv2.morphologyEx(subtractor_mask, cv2.MORPH_CLOSE, self._motion_morph_kernel)
 
-        contours, _ = cv2.findContours(subtractor_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # ── Step 1: connected-component quality filter ────────────────────────
+        # Removes small/thin/fragmented blobs that resemble vegetation noise.
+        filtered_mask = self._filter_motion_components(subtractor_mask)
+
+        # ── Step 2: weighted motion score (unstable-region suppression) ───────
+        filtered_score = self._compute_weighted_motion_score(filtered_mask)
+        self._last_motion_score = filtered_score
+
+        contours, _ = cv2.findContours(filtered_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         flag = False
         if contours:
             max_obj_area = max((cv2.contourArea(c) for c in contours), default=0)
             min_obj_area = MIN_OBJ_AREA * self._cached_total_pixels
-            flag = (motion_pixels > self._cached_threshold) and (max_obj_area > min_obj_area)
+            flag = (
+                filtered_score > MOTION_GATE_FILTERED_SCORE_THRESHOLD
+                and max_obj_area > min_obj_area
+            )
 
         self._recent.append(flag)
         if len(self._recent) == self._recent.maxlen and all(self._recent):
             self._hold = self.hold_frames
 
         if save_dir is not None and save_img and save_idx is not None:
-            self.__save_subtractor(frame, subtractor_mask, save_dir, save_idx)
+            self.__save_subtractor(frame, filtered_mask, save_dir, save_idx)
 
         return flag
 
@@ -364,6 +622,16 @@ class Subtractor(EventExtractorInterface):
         # giving denser accumulation than the motion-gate mask (threshold 254).
         _, fg = cv2.threshold(self._last_fg_mask, 127, 255, cv2.THRESH_BINARY)
         fg_clean = cv2.morphologyEx(fg, cv2.MORPH_OPEN, self.kernel3)
+
+        # ── Step 2: accumulate unstable-motion map at downscale resolution ────
+        # fg_clean is already at downscale size (frame was resized before this call).
+        if ENABLE_UNSTABLE_MOTION_MAP:
+            fg_bin = (fg_clean > 0).astype(np.float32)
+            if self._unstable_motion_accumulator is None:
+                self._unstable_motion_accumulator = np.zeros_like(fg_bin, dtype=np.float32)
+                self._unstable_motion_frame_count = 0
+            self._unstable_motion_accumulator += fg_bin
+            self._unstable_motion_frame_count += 1
 
         mask_resized = cv2.resize(fg_clean.astype(np.float32), (w, h))
         # Conservative EWA blend: raw single-frame mask is noisier than the old
@@ -406,6 +674,21 @@ class Subtractor(EventExtractorInterface):
         lanes_smooth = cv2.GaussianBlur(lanes_clean, (11, 11), 0)
         _, candidate_lanes = cv2.threshold(lanes_smooth, 50, 255, cv2.THRESH_BINARY)
 
+        # ── Step 2: finalise unstable-motion map ─────────────────────────────
+        if (
+            ENABLE_UNSTABLE_MOTION_MAP
+            and self._unstable_motion_accumulator is not None
+            and self._unstable_motion_frame_count > 0
+            and self._unstable_motion_map is None   # build only once (first calibration)
+        ):
+            norm = self._unstable_motion_accumulator / float(self._unstable_motion_frame_count)
+            self._unstable_motion_map = (norm > UNSTABLE_MOTION_THRESHOLD).astype(np.float32)
+            logger.info(
+                "Unstable motion map built: %d unstable pixels (%.1f%% of downscale area)",
+                int(self._unstable_motion_map.sum()),
+                100.0 * float(self._unstable_motion_map.sum()) / max(float(self._unstable_motion_map.size), 1.0),
+            )
+
         # Hybrid merge: blend motion accumulation result with static geometry baseline
         candidate_lanes = self._merge_with_static(candidate_lanes)
 
@@ -423,7 +706,10 @@ class Subtractor(EventExtractorInterface):
             lanes_final = previous_lanes
             self.crosswalk_mask = previous_crosswalk
             logger.info("Runtime lane recalibration produced an empty mask; keeping previous lane mask")
-        
+
+        # ── Step 3: seed drivable confidence map with static lane signal ──────
+        self._rebuild_drivable_confidence()
+
         if save_img and self.save_path and lanes_final is not None:
             self.__save_calibration(
                 frame=frame,
@@ -489,39 +775,41 @@ class Subtractor(EventExtractorInterface):
 
     def get_scene_masks(self, expand_px: int = 0) -> dict:
         """
-        Returns lane and crosswalk masks in current frame coordinates.
-        `expand_px` dilates regions to increase tolerance (high-attention mode).
+        Returns lane, crosswalk, and drivable-confidence masks in current frame
+        coordinates.  `expand_px` dilates binary regions to increase tolerance
+        (high-attention mode).
 
         When expand_px == 0 the stored masks are returned by reference
         (no copy). Callers must not mutate the returned arrays.
+        The drivable_confidence_map is always returned by reference (float, read-only).
         """
+        drivable = self._drivable_confidence_map  # Step 3: always attach, may be None
+
         if self.lanes_mask is None:
-            # Calibration hasn't finalised yet; if static detection already ran,
-            # serve that as a provisional mask rather than returning empty.
             if self._static_lanes_mask is not None:
                 return {
                     "lane_mask": self._static_lanes_mask,
                     "crosswalk_mask": np.zeros_like(self._static_lanes_mask, dtype=np.uint8),
+                    "drivable_confidence_map": drivable,
                 }
             if self._last_frame_shape is None:
-                return {"lane_mask": None, "crosswalk_mask": None}
+                return {"lane_mask": None, "crosswalk_mask": None, "drivable_confidence_map": drivable}
             h, w = self._last_frame_shape
             return {
                 "lane_mask": np.zeros((h, w), dtype=np.uint8),
                 "crosswalk_mask": np.zeros((h, w), dtype=np.uint8),
+                "drivable_confidence_map": drivable,
             }
 
         if expand_px <= 0:
-            # Fast path: return references – avoids copying large mask arrays
-            # on every postprocess() call (once per frame in a batch).
             cw = self.crosswalk_mask
             if cw is None:
                 if not hasattr(self, "_zeros_crosswalk") or self._zeros_crosswalk.shape != self.lanes_mask.shape:
                     self._zeros_crosswalk = np.zeros_like(self.lanes_mask, dtype=np.uint8)
                 cw = self._zeros_crosswalk
-            return {"lane_mask": self.lanes_mask, "crosswalk_mask": cw}
+            return {"lane_mask": self.lanes_mask, "crosswalk_mask": cw, "drivable_confidence_map": drivable}
 
-        # Dilation path (high-attention mode) – copies are required here
+        # Dilation path (high-attention mode) – copies are required for binary masks
         lane = self.lanes_mask.copy()
         crosswalk = None if self.crosswalk_mask is None else self.crosswalk_mask.copy()
         k = max(3, int(expand_px) * 2 + 1)
@@ -532,7 +820,7 @@ class Subtractor(EventExtractorInterface):
             crosswalk = cv2.bitwise_and(crosswalk, lane)
         if crosswalk is None:
             crosswalk = np.zeros_like(lane, dtype=np.uint8)
-        return {"lane_mask": lane, "crosswalk_mask": crosswalk}
+        return {"lane_mask": lane, "crosswalk_mask": crosswalk, "drivable_confidence_map": drivable}
 
     def __detect_crosswalks(self, last_frame: Optional[np.ndarray], lanes_mask: Optional[np.ndarray]) -> np.ndarray:
         """
