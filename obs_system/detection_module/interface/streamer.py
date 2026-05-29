@@ -347,8 +347,21 @@ class Streamer(ABC):
                         out[y0 : y0 + h, x0 : x0 + w] = mask[:h, :w]
                     return out
 
+                def _embed_float(mask: Optional[np.ndarray]) -> Optional[np.ndarray]:
+                    if mask is None:
+                        return None
+                    out = np.zeros((full_h, full_w), dtype=np.float32)
+                    y0, y1 = int(roi.y_start), int(roi.y_end)
+                    x0, x1 = int(roi.x_start), int(roi.x_end)
+                    h = max(0, min(y1 - y0, mask.shape[0]))
+                    w = max(0, min(x1 - x0, mask.shape[1]))
+                    if h > 0 and w > 0:
+                        out[y0 : y0 + h, x0 : x0 + w] = mask[:h, :w]
+                    return out
+
                 scene_masks["lane_mask"] = _embed(scene_masks.get("lane_mask"))
                 scene_masks["crosswalk_mask"] = _embed(scene_masks.get("crosswalk_mask"))
+                scene_masks["drivable_confidence_map"] = _embed_float(scene_masks.get("drivable_confidence_map"))
 
         self.last_scene_masks = scene_masks
         return scene_masks
@@ -524,6 +537,22 @@ class Streamer(ABC):
         self.current_hazards = hazards
         preds.hazard_events = hazards
         preds.hazard_mode = "high_attention" if self.high_attention_countdown > 0 else "normal"
+
+        # ── Step 3: feed detections into the drivable-confidence map ─────────
+        _sub = None
+        if self.logic_module is not None:
+            _sub = self.logic_module.get("SUBTRACTOR")
+        if _sub is not None and hasattr(_sub, "update_drivable_confidence"):
+            _boxes = preds.boxes.xyxy if preds.boxes is not None and preds.boxes.xyxy.numel() > 0 else None
+            _cls = preds.boxes.cls if _boxes is not None else None
+            _orig_hw = tuple(preds.orig_shape) if hasattr(preds, "orig_shape") else None
+            _sub.update_drivable_confidence(
+                boxes_xyxy=_boxes,
+                classes=_cls,
+                class_names=self.converter.class_names,
+                track_points=preds.track_points,
+                orig_hw=_orig_hw,
+            )
 
         return preds
 

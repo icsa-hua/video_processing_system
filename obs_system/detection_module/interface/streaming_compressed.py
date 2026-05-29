@@ -1362,7 +1362,7 @@ class OptimizedStreamer(Streamer):
                 classes_t_all = torch.as_tensor(all_classes_np, dtype=torch.int64)
 
                 t_nms0 = time.perf_counter()
-                keep_idx = batched_nms(boxes_t_all, scores_t_all, classes_t_all.long(), iou_threshold=NMS_IOU)
+                keep_idx = batched_nms(boxes_t_all, scores_t_all, classes_t_all.long(), iou_threshold=TILE_NMS_IOU)
                 nms_elapsed = (time.perf_counter() - t_nms0) * 1e3
                 nms_ms += nms_elapsed
                 self._record_stage_time("nms_ms", nms_elapsed, frame_id=fid)
