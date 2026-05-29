@@ -1592,8 +1592,7 @@ class OptimizedStreamer(Streamer):
 
     def _frames_to_tiles(self, frame_iter, tile_size:int, overlap_ratio:float): 
         overlap_px = max(0, int(round(tile_size * overlap_ratio)))
-        for f_id, img in frame_iter: 
-            self.frame_images[f_id] = img
+        for f_id, img in frame_iter:
             for t, m in split_image_gen(img, f_id, tile_size=tile_size, overlap=overlap_px):
                 yield t, m
 
