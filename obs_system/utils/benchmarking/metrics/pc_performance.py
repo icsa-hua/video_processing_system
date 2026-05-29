@@ -4,20 +4,24 @@ import csv
 import json
 import subprocess
 import collections
-import numpy as np 
+import numpy as np
 
+from collections import deque
 from pathlib import Path
-from typing import Dict, Tuple, Optional, List, Any 
+from typing import Dict, Tuple, Optional, List, Any
 
+_STAGE_MAXLEN = 3000
 
-class ComputationalPerf(BenchMark): 
-    """PlaceHolder""" 
+class ComputationalPerf(BenchMark):
+    """PlaceHolder"""
     def __init__(self) -> None:
-        self._stages: Dict[str, List[float]] = {}
+        self._stages: Dict[str, deque] = {}
         self._results: Dict[str, float] = {}
 
     def tick(self, stage: str, ms: float) -> None:
-        self._stages.setdefault(stage, []).append(float(ms))
+        if stage not in self._stages:
+            self._stages[stage] = deque(maxlen=_STAGE_MAXLEN)
+        self._stages[stage].append(float(ms))
 
     def update(self, *args, **kwargs) -> None:
         # Could accept a dict of stage->ms per frame
