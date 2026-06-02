@@ -153,6 +153,16 @@ with st.sidebar:
              "Improves detection on wide/panoramic streams regardless of resolution. "
              "Enabled automatically for very large frames; this toggle forces it for any size.",
     )
+    panorama = st.checkbox(
+        "Panorama / Equirectangular Input",
+        value=False,
+        help="Enable when the source is an equirectangular panorama already "
+             "unwrapped from a fisheye camera (e.g. a 1920×600 road-region crop). "
+             "Generates 2–4 overlapping perspective views, runs YOLO on each, and "
+             "back-projects detections to panorama coordinates with cross-view NMS. "
+             "Takes priority over tiled inference. "
+             "Do not combine with 'Enable FishEye Projection' — they address different geometry regimes.",
+    )
     lane_recalibration_interval_frames = st.number_input(
         "Lane recalibration interval (frames)",
         min_value=0,
@@ -248,6 +258,7 @@ with tab1:
                 "only_FPS": only_fps,
                 "lane_recalibration_interval_frames": int(lane_recalibration_interval_frames),
                 "force_tiles": force_tiles,
+                "panorama": panorama,
             }
             logger.debug("UI payload: %s", payload)
 
