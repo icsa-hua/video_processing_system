@@ -481,8 +481,9 @@ class Subtractor(EventExtractorInterface):
             self.prev_mask = np.zeros((h,w), np.float32)
             self.__calibration_started = True 
 
-        motion_flags = [] 
+        motion_flags = []
         motion_scores = []
+        self._last_batch_fg_masks: list = []  # binary downscale masks, one per frame
         lanes_final = None
         last_frame = batch[-1]
         startup_skip_batch = self._startup_warmup_active and not self._ready_for_inference
@@ -496,6 +497,11 @@ class Subtractor(EventExtractorInterface):
 
             motion_flags.append(motion_flag)
             motion_scores.append(self._last_motion_score)
+            if self._last_fg_mask is not None:
+                _, _bin = cv2.threshold(self._last_fg_mask, 127, 255, cv2.THRESH_BINARY)
+                self._last_batch_fg_masks.append(_bin.copy())
+            else:
+                self._last_batch_fg_masks.append(None)
 
             if save_img and save_idx is not None: 
                 save_idx += 1 

@@ -53,3 +53,4 @@ obs_system/compressed/compressed_models/*
 train_freeze_unified_dataset_512
 AGENTS.md 
 PLAN.md 
+Progress.md

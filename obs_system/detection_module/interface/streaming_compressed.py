@@ -183,7 +183,8 @@ class OptimizedStreamer(Streamer):
             if self.args.plot_performance:
                 _t0 = time.perf_counter()
                 _t0_rel = _t0 - stream_start
-            mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=True)
+            subtractor_inst = self.logic_module["SUBTRACTOR"]
+            mfgs, lanes_final = subtractor_inst.detect(im0s, save_img=True)
             if self.args.plot_performance:
                 mog2_ms = (time.perf_counter() - _t0) * 1e3
                 self._record_stage_time("mog2_ms", mog2_ms, frame_ids=frame_ids)
@@ -210,6 +211,8 @@ class OptimizedStreamer(Streamer):
                 defish_ms = (time.perf_counter() - t_defish0) * 1e3
                 self._record_stage_time("defish_ms", defish_ms, frame_ids=frame_ids)
 
+        fg_masks = getattr(subtractor_inst, "_last_batch_fg_masks", None) or []
+
         return {
             "paths": paths,
             "im0s": im0s,
@@ -219,12 +222,175 @@ class OptimizedStreamer(Streamer):
             "original_images_bgr": original_images_bgr,
             "cropped_original_images": cropped_original_images,
             "mfgs": mfgs,
+            "fg_masks": fg_masks,
             "roi_ms": roi_ms,
             "mog2_ms": mog2_ms,
             "defish_ms": defish_ms,
             "res_h": res_h,
             "res_w": res_w,
             "skip_reason": "no_motion" if not any(mfgs) else None,
+        }
+
+    def _get_road_filter_mask(self, classes_t: "torch.Tensor") -> "torch.Tensor":
+        """Return a boolean keep-mask that removes impossible road-scene classes."""
+        class_names = getattr(getattr(self, "converter", None), "class_names", [])
+        impossible_ids = {
+            i for i, name in enumerate(class_names)
+            if name.lower() in ROAD_IMPOSSIBLE_CLASSES
+        }
+        if not impossible_ids:
+            return torch.ones(len(classes_t), dtype=torch.bool, device=classes_t.device)
+        keep = torch.tensor(
+            [int(c) not in impossible_ids for c in classes_t.tolist()],
+            dtype=torch.bool,
+            device=classes_t.device,
+        )
+        return keep
+
+    def _stage_b_panorama_inference(self, stage_a, model, profilers, activities, stream_start, timeline_logger, batch_idx):
+        """
+        Panorama-mode stage B: generates perspective views from each motion-passed
+        panorama frame, runs YOLO on the active views, applies the road-class filter,
+        back-projects detections to panorama pixel space, and runs cross-view NMS.
+
+        Motion gating is performed at the panorama level (coarse, via the background
+        subtractor) and then used to decide which perspective views to activate.
+        Even though per-view motion gating would be more accurate, it would
+        significantly increase overhead — this approach is intentionally coarse.
+        """
+        im0s = stage_a["im0s"]               # cropped panorama BGR frames
+        original_images = stage_a["original_images"]
+        mfgs = stage_a["mfgs"]
+        frame_ids = stage_a["frame_ids"]
+        fg_masks = stage_a.get("fg_masks") or []
+
+        reprojector = self.logic_module.get("PANORAMA")
+
+        frames: List[FrameDetections] = []
+        total_preprocess_ms = 0.0
+        total_inference_ms = 0.0
+        total_nms_ms = 0.0
+
+        for bni, (keep_frame, panorama_bgr, fid) in enumerate(zip(mfgs, im0s, frame_ids)):
+            orig_img = original_images[bni]
+
+            if not keep_frame or reprojector is None:
+                frames.append(FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img))
+                continue
+
+            fg_mask = fg_masks[bni] if bni < len(fg_masks) else None
+
+            views_info = reprojector.get_views(panorama_bgr, fg_mask_small=fg_mask)
+            active = [(img, vid) for img, vid, has_motion in views_info if has_motion]
+
+            if not active:
+                frames.append(FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img))
+                continue
+
+            view_imgs = [v[0] for v in active]
+            view_ids = [v[1] for v in active]
+
+            t_pre0 = time.perf_counter()
+            with profilers[0]:
+                view_tensors = self.preprocess(view_imgs)
+            total_preprocess_ms += (time.perf_counter() - t_pre0) * 1e3
+
+            t_inf0 = time.perf_counter()
+            with profilers[1]:
+                raw_out = self.model(view_tensors, orig_imgs=None, debug=False)
+            total_inference_ms += (time.perf_counter() - t_inf0) * 1e3
+
+            if isinstance(raw_out, tuple) and len(raw_out) == 2 and isinstance(raw_out[0], tuple):
+                (i_boxes, i_scores, i_classes), event = raw_out
+            else:
+                i_boxes, i_scores, i_classes = raw_out
+                event = None
+
+            if event is not None and torch.cuda.is_available():
+                torch.cuda.current_stream().wait_event(event)
+
+            all_boxes_pano: List[np.ndarray] = []
+            all_scores_list: List[np.ndarray] = []
+            all_classes_list: List[np.ndarray] = []
+
+            for v_id, boxes, scores, classes in zip(view_ids, i_boxes, i_scores, i_classes):
+                boxes_t = boxes if torch.is_tensor(boxes) else torch.as_tensor(boxes, dtype=torch.float32)
+                if boxes_t.numel() == 0:
+                    continue
+
+                scores_t = scores if torch.is_tensor(scores) else torch.as_tensor(scores, dtype=torch.float32)
+                classes_t = classes if torch.is_tensor(classes) else torch.as_tensor(classes, dtype=torch.int64)
+                scores_t = scores_t.to(dtype=torch.float32)
+                classes_t = classes_t.to(dtype=torch.int64)
+
+                road_mask = self._get_road_filter_mask(classes_t)
+                if not road_mask.any():
+                    continue
+                boxes_t = boxes_t[road_mask]
+                scores_t = scores_t[road_mask]
+                classes_t = classes_t[road_mask]
+
+                boxes_np = boxes_t.cpu().numpy().astype(np.float32)
+                boxes_pano = reprojector.backproject_boxes(boxes_np, v_id)
+
+                valid = (boxes_pano[:, 2] > boxes_pano[:, 0]) & (boxes_pano[:, 3] > boxes_pano[:, 1])
+                if not valid.any():
+                    continue
+
+                all_boxes_pano.append(boxes_pano[valid])
+                all_scores_list.append(
+                    scores_t.cpu().numpy()[valid] if torch.is_tensor(scores_t)
+                    else np.asarray(scores_t, dtype=np.float32)[valid]
+                )
+                all_classes_list.append(
+                    classes_t.cpu().numpy()[valid] if torch.is_tensor(classes_t)
+                    else np.asarray(classes_t, dtype=np.int64)[valid]
+                )
+
+            if not all_boxes_pano:
+                frames.append(FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img))
+                continue
+
+            all_boxes_cat = np.concatenate(all_boxes_pano, axis=0).astype(np.float32)
+            all_scores_cat = np.concatenate(all_scores_list, axis=0).astype(np.float32)
+            all_classes_cat = np.concatenate(all_classes_list, axis=0).astype(np.int64)
+
+            boxes_t_all = torch.as_tensor(all_boxes_cat, dtype=torch.float32)
+            scores_t_all = torch.as_tensor(all_scores_cat, dtype=torch.float32)
+            classes_t_all = torch.as_tensor(all_classes_cat, dtype=torch.int64)
+
+            t_nms0 = time.perf_counter()
+            keep_idx = batched_nms(boxes_t_all, scores_t_all, classes_t_all.long(), iou_threshold=PANORAMA_NMS_IOU)
+            total_nms_ms += (time.perf_counter() - t_nms0) * 1e3
+
+            boxes_t_all = boxes_t_all[keep_idx]
+            scores_t_all = scores_t_all[keep_idx]
+            classes_t_all = classes_t_all[keep_idx]
+
+            if self.use_roi and boxes_t_all.numel() > 0:
+                boxes_t_all = self.logic_module["ROI"].translate_bounding_boxes(
+                    results=boxes_t_all,
+                    orig_img_shape=self.original_imgsz,
+                )
+
+            if boxes_t_all.numel() == 0:
+                frames.append(FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img))
+                continue
+
+            frames.append(FrameDetections(
+                frame_id=fid,
+                batch_index=bni,
+                orig_img=orig_img,
+                boxes=boxes_t_all,
+                scores=scores_t_all,
+                classes=classes_t_all,
+            ))
+
+        return {
+            "detections": DetectionBatch(frames=frames),
+            "preprocess_ms": total_preprocess_ms,
+            "inference_ms": total_inference_ms,
+            "nms_ms": total_nms_ms,
         }
 
     def _stage_b_inference_and_nms(self, stage_a, model, profilers, activities, stream_start, timeline_logger, batch_idx):
@@ -309,6 +475,15 @@ class OptimizedStreamer(Streamer):
             scores_t = scores_t.to(dtype=torch.float32)
             classes_t = classes_t.to(dtype=torch.int64)
             boxes_t = boxes_t.to(dtype=torch.float32)
+
+            road_mask = self._get_road_filter_mask(classes_t)
+            boxes_t = boxes_t[road_mask]
+            scores_t = scores_t[road_mask]
+            classes_t = classes_t[road_mask]
+
+            if boxes_t.numel() == 0:
+                frames.append(FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img))
+                continue
 
             t_nms0 = time.perf_counter()
             keep = batched_nms(boxes_t, scores_t, classes_t.long(), iou_threshold=NMS_IOU)
@@ -550,12 +725,34 @@ class OptimizedStreamer(Streamer):
                 self.logic_module['SUBTRACTOR'].warm_up(empty_image, trials=TRIALS)
                 self._sync_subtractor_warmup_state()
             
+            # Panorama mode overrides tiling: views are generated internally.
+            use_panorama = (
+                bool(getattr(self.args, "panorama", False))
+                and self.logic_module is not None
+                and self.logic_module.get("PANORAMA") is not None
+            )
+
             # UI/CLI force_tiles takes highest priority; otherwise auto-detect from image size.
             # A class-level force_streaming_no_tiles=True is overridden by the explicit flag.
             force_tiles_flag = bool(getattr(self.args, "force_tiles", False))
             force_no_tiles = bool(getattr(self, "force_streaming_no_tiles", False)) and not force_tiles_flag
             auto_tile = (self.orig_width // TILE_SIZE) > TILE_THR or (self.orig_height // TILE_SIZE) >= TILE_THR
-            use_tiles = force_tiles_flag or (auto_tile and not force_no_tiles)
+            use_tiles = (not use_panorama) and (force_tiles_flag or (auto_tile and not force_no_tiles))
+
+            if use_panorama:
+                Streamer.logger.info(
+                    "Run Inference in Panorama Mode (%dx%d, %d views)",
+                    self.orig_width, self.orig_height,
+                    self.logic_module["PANORAMA"].n_views,
+                )
+                return self._stream_inference_impl(
+                    model=model,
+                    producer_flag=producer_flag,
+                    preview_queue=preview_queue,
+                    profilers=profilers,
+                    activities=activities,
+                    start_time=start_time,
+                )
 
             if use_tiles:
                 Streamer.logger.info(
@@ -816,7 +1013,15 @@ class OptimizedStreamer(Streamer):
                 self.step_attention_state()
                 continue
 
-            stage_b = self._stage_b_inference_and_nms(stage_a, model, profilers, activities, stream_start, timeline_logger, batch_idx)
+            _use_panorama = (
+                bool(getattr(self.args, "panorama", False))
+                and self.logic_module is not None
+                and self.logic_module.get("PANORAMA") is not None
+            )
+            if _use_panorama:
+                stage_b = self._stage_b_panorama_inference(stage_a, model, profilers, activities, stream_start, timeline_logger, batch_idx)
+            else:
+                stage_b = self._stage_b_inference_and_nms(stage_a, model, profilers, activities, stream_start, timeline_logger, batch_idx)
             preprocess_ms = stage_b["preprocess_ms"]
             inference_ms = stage_b["inference_ms"]
             nms_ms = stage_b["nms_ms"]
@@ -1304,6 +1509,18 @@ class OptimizedStreamer(Streamer):
                     if boxes_t.numel() == 0:
                         continue
 
+                    scores_t = scores if torch.is_tensor(scores) else torch.as_tensor(scores, dtype=torch.float32)
+                    classes_t = classes if torch.is_tensor(classes) else torch.as_tensor(classes, dtype=torch.int64)
+                    scores_t = scores_t.to(dtype=torch.float32)
+                    classes_t = classes_t.to(dtype=torch.int64)
+
+                    road_mask = self._get_road_filter_mask(classes_t)
+                    boxes_t = boxes_t[road_mask]
+                    scores_t = scores_t[road_mask]
+                    classes_t = classes_t[road_mask]
+                    if boxes_t.numel() == 0:
+                        continue
+
                     # Reconstruct tile-local boxes → frame-coordinate boxes (in-place)
                     boxes_np = boxes_t.float().cpu().numpy().copy()
                     boxes_np = reconstruct_tiles(
@@ -1315,9 +1532,6 @@ class OptimizedStreamer(Streamer):
                         gain=meta["gain"],
                         pad=(meta["pad_x"], meta["pad_y"]),
                     )
-
-                    scores_t = scores if torch.is_tensor(scores) else torch.as_tensor(scores, dtype=torch.float32)
-                    classes_t = classes if torch.is_tensor(classes) else torch.as_tensor(classes, dtype=torch.int64)
 
                     entry = frame_tile_acc.setdefault(fid_key, {"boxes": [], "scores": [], "classes": []})
                     entry["boxes"].append(boxes_np)
