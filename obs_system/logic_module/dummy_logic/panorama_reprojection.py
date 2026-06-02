@@ -79,8 +79,10 @@ class PanoramaReprojector:
         # Lazily built when the first frame arrives (need panorama W, H)
         self._pano_w: int = 0
         self._pano_h: int = 0
-        self._map_x: List[np.ndarray] = []   # [n_views] × (view_h, view_w) float32
+        self._map_x: List[np.ndarray] = []   # [n_views] × (view_h, view_w) float32 — for backprojection
         self._map_y: List[np.ndarray] = []
+        self._map1_int: List[np.ndarray] = []  # CV_16SC2 fixed-point maps for fast cv2.remap
+        self._map2_int: List[np.ndarray] = []
         self._yaw_rads: List[float] = []      # view centre yaw in radians
 
     # ── Rotation helpers ──────────────────────────────────────────────────────
@@ -114,6 +116,8 @@ class PanoramaReprojector:
         self._pano_h = pano_h
         self._map_x.clear()
         self._map_y.clear()
+        self._map1_int.clear()
+        self._map2_int.clear()
         self._yaw_rads.clear()
 
         hfov_rad = np.deg2rad(self.panorama_hfov_deg)
@@ -151,9 +155,11 @@ class PanoramaReprojector:
             ry = (vv - cy_v) / fy
             rz = np.ones_like(rx)
 
-            # Rotate to world frame: stack into (H*W, 3), apply R^T
+            # Rotate to world frame: R maps view→world, so d_world = R @ d_view.
+            # Using R^T here would invert the rotation (mirror the yaw), causing
+            # every box to back-project to the wrong side of the panorama.
             rays_flat = np.stack([rx.ravel(), ry.ravel(), rz.ravel()], axis=0)  # (3, N)
-            world_flat = R.T @ rays_flat                                          # (3, N)
+            world_flat = R @ rays_flat                                            # (3, N)
 
             wx = world_flat[0].reshape(self.view_h, self.view_w)
             wy = world_flat[1].reshape(self.view_h, self.view_w)
@@ -167,8 +173,14 @@ class PanoramaReprojector:
             px = (lon / hfov_rad + 0.5) * pano_w
             py = (0.5 - lat / vfov_rad) * pano_h
 
-            self._map_x.append(px.astype(np.float32))
-            self._map_y.append(py.astype(np.float32))
+            map_x_f = px.astype(np.float32)
+            map_y_f = py.astype(np.float32)
+            self._map_x.append(map_x_f)
+            self._map_y.append(map_y_f)
+            # Fixed-point maps are ~2-4× faster for cv2.remap on CPU / Jetson.
+            m1, m2 = cv2.convertMaps(map_x_f, map_y_f, cv2.CV_16SC2)
+            self._map1_int.append(m1)
+            self._map2_int.append(m2)
 
         logger.info(
             "PanoramaReprojector: %d views built (%dx%d px, FOV=%.0f°, pitch=%.1f°, yaws=%s)",
@@ -238,8 +250,8 @@ class PanoramaReprojector:
         for v_id in range(self.n_views):
             view = cv2.remap(
                 panorama,
-                self._map_x[v_id],
-                self._map_y[v_id],
+                self._map1_int[v_id],
+                self._map2_int[v_id],
                 interpolation=cv2.INTER_LINEAR,
                 borderMode=cv2.BORDER_REPLICATE,
             )

@@ -249,16 +249,18 @@ class OptimizedStreamer(Streamer):
 
     def _stage_b_panorama_inference(self, stage_a, model, profilers, activities, stream_start, timeline_logger, batch_idx):
         """
-        Panorama-mode stage B: generates perspective views from each motion-passed
-        panorama frame, runs YOLO on the active views, applies the road-class filter,
-        back-projects detections to panorama pixel space, and runs cross-view NMS.
+        Panorama-mode stage B.
 
-        Motion gating is performed at the panorama level (coarse, via the background
-        subtractor) and then used to decide which perspective views to activate.
-        Even though per-view motion gating would be more accurate, it would
-        significantly increase overhead — this approach is intentionally coarse.
+        Generates perspective views from every motion-passed frame, collects ALL
+        active views from ALL frames into a single flat list, then runs YOLO in
+        microbatches across that list (same structure as the tile path).  This
+        keeps the number of TensorRT/model calls equal to ceil(total_views/BATCH_SIZE)
+        regardless of how many frames are in the batch, recovering the performance
+        that was lost when each frame triggered its own model call.
+
+        Back-projection and cross-view NMS are applied per frame after inference.
         """
-        im0s = stage_a["im0s"]               # cropped panorama BGR frames
+        im0s = stage_a["im0s"]
         original_images = stage_a["original_images"]
         mfgs = stage_a["mfgs"]
         frame_ids = stage_a["frame_ids"]
@@ -266,33 +268,37 @@ class OptimizedStreamer(Streamer):
 
         reprojector = self.logic_module.get("PANORAMA")
 
-        frames: List[FrameDetections] = []
+        # ── Pass 1: generate all active views across the whole batch ─────────
+        # all_view_items: flat list of (view_bgr, bni, v_id)
+        all_view_items: List = []
+        for bni, (keep_frame, panorama_bgr) in enumerate(zip(mfgs, im0s)):
+            if not keep_frame or reprojector is None:
+                continue
+            fg_mask = fg_masks[bni] if bni < len(fg_masks) else None
+            for view_img, v_id, has_motion in reprojector.get_views(panorama_bgr, fg_mask_small=fg_mask):
+                if has_motion:
+                    all_view_items.append((view_img, bni, v_id))
+
+        # Per-frame accumulator: bni → {"boxes": [], "scores": [], "classes": []}
+        frame_acc: dict = {}
         total_preprocess_ms = 0.0
         total_inference_ms = 0.0
         total_nms_ms = 0.0
 
-        for bni, (keep_frame, panorama_bgr, fid) in enumerate(zip(mfgs, im0s, frame_ids)):
-            orig_img = original_images[bni]
+        # ── Pass 2: microbatch inference across all views ────────────────────
+        micro = BATCH_SIZE
+        for mb_start in range(0, max(1, len(all_view_items)), micro):
+            mb = all_view_items[mb_start: mb_start + micro]
+            if not mb:
+                break
 
-            if not keep_frame or reprojector is None:
-                frames.append(FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img))
-                continue
-
-            fg_mask = fg_masks[bni] if bni < len(fg_masks) else None
-
-            views_info = reprojector.get_views(panorama_bgr, fg_mask_small=fg_mask)
-            active = [(img, vid) for img, vid, has_motion in views_info if has_motion]
-
-            if not active:
-                frames.append(FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img))
-                continue
-
-            view_imgs = [v[0] for v in active]
-            view_ids = [v[1] for v in active]
+            view_imgs_mb = [item[0] for item in mb]
+            bni_mb = [item[1] for item in mb]
+            vid_mb = [item[2] for item in mb]
 
             t_pre0 = time.perf_counter()
             with profilers[0]:
-                view_tensors = self.preprocess(view_imgs)
+                view_tensors = self.preprocess(view_imgs_mb)
             total_preprocess_ms += (time.perf_counter() - t_pre0) * 1e3
 
             t_inf0 = time.perf_counter()
@@ -309,19 +315,14 @@ class OptimizedStreamer(Streamer):
             if event is not None and torch.cuda.is_available():
                 torch.cuda.current_stream().wait_event(event)
 
-            all_boxes_pano: List[np.ndarray] = []
-            all_scores_list: List[np.ndarray] = []
-            all_classes_list: List[np.ndarray] = []
-
-            for v_id, boxes, scores, classes in zip(view_ids, i_boxes, i_scores, i_classes):
+            for bni, v_id, boxes, scores, classes in zip(bni_mb, vid_mb, i_boxes, i_scores, i_classes):
                 boxes_t = boxes if torch.is_tensor(boxes) else torch.as_tensor(boxes, dtype=torch.float32)
                 if boxes_t.numel() == 0:
                     continue
 
-                scores_t = scores if torch.is_tensor(scores) else torch.as_tensor(scores, dtype=torch.float32)
-                classes_t = classes if torch.is_tensor(classes) else torch.as_tensor(classes, dtype=torch.int64)
-                scores_t = scores_t.to(dtype=torch.float32)
-                classes_t = classes_t.to(dtype=torch.int64)
+                scores_t = (scores if torch.is_tensor(scores) else torch.as_tensor(scores)).to(torch.float32)
+                classes_t = (classes if torch.is_tensor(classes) else torch.as_tensor(classes)).to(torch.int64)
+                boxes_t = boxes_t.to(torch.float32)
 
                 road_mask = self._get_road_filter_mask(classes_t)
                 if not road_mask.any():
@@ -337,27 +338,28 @@ class OptimizedStreamer(Streamer):
                 if not valid.any():
                     continue
 
-                all_boxes_pano.append(boxes_pano[valid])
-                all_scores_list.append(
-                    scores_t.cpu().numpy()[valid] if torch.is_tensor(scores_t)
-                    else np.asarray(scores_t, dtype=np.float32)[valid]
-                )
-                all_classes_list.append(
-                    classes_t.cpu().numpy()[valid] if torch.is_tensor(classes_t)
-                    else np.asarray(classes_t, dtype=np.int64)[valid]
-                )
+                entry = frame_acc.setdefault(bni, {"boxes": [], "scores": [], "classes": []})
+                entry["boxes"].append(boxes_pano[valid])
+                entry["scores"].append(scores_t.cpu().numpy()[valid])
+                entry["classes"].append(classes_t.cpu().numpy()[valid])
 
-            if not all_boxes_pano:
+        # ── Pass 3: per-frame NMS + ROI back-translation ─────────────────────
+        frames: List[FrameDetections] = []
+        for bni, (keep_frame, fid) in enumerate(zip(mfgs, frame_ids)):
+            orig_img = original_images[bni]
+
+            if not keep_frame or bni not in frame_acc or not frame_acc[bni]["boxes"]:
                 frames.append(FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img))
                 continue
 
-            all_boxes_cat = np.concatenate(all_boxes_pano, axis=0).astype(np.float32)
-            all_scores_cat = np.concatenate(all_scores_list, axis=0).astype(np.float32)
-            all_classes_cat = np.concatenate(all_classes_list, axis=0).astype(np.int64)
+            accum = frame_acc[bni]
+            all_boxes = np.concatenate(accum["boxes"], axis=0).astype(np.float32)
+            all_scores = np.concatenate(accum["scores"], axis=0).astype(np.float32)
+            all_classes = np.concatenate(accum["classes"], axis=0).astype(np.int64)
 
-            boxes_t_all = torch.as_tensor(all_boxes_cat, dtype=torch.float32)
-            scores_t_all = torch.as_tensor(all_scores_cat, dtype=torch.float32)
-            classes_t_all = torch.as_tensor(all_classes_cat, dtype=torch.int64)
+            boxes_t_all = torch.as_tensor(all_boxes, dtype=torch.float32)
+            scores_t_all = torch.as_tensor(all_scores, dtype=torch.float32)
+            classes_t_all = torch.as_tensor(all_classes, dtype=torch.int64)
 
             t_nms0 = time.perf_counter()
             keep_idx = batched_nms(boxes_t_all, scores_t_all, classes_t_all.long(), iou_threshold=PANORAMA_NMS_IOU)
