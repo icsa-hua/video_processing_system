@@ -82,3 +82,31 @@ DRIVABLE_TRACK_WEIGHT = 0.15
 DRIVABLE_UNSTABLE_NEGATIVE_WEIGHT = 0.10
 # Pixels below this confidence are treated as "not reliably drivable"
 DRIVABLE_CONFIDENCE_THRESHOLD = 0.25
+
+
+#--------- Panorama Perspective Reprojection ----------
+# Number of tangent/pinhole views to generate from an equirectangular panorama
+PANORAMA_N_VIEWS = 3
+# Output size (width, height) for each perspective view fed to YOLO
+PANORAMA_VIEW_SIZE = (640, 640)
+# Horizontal FOV in degrees for each perspective view (pinhole tangent-plane view)
+PANORAMA_VIEW_FOV_DEG = 80.0
+# Pitch offset for all views in degrees (negative = tilt down toward road)
+PANORAMA_PITCH_DEG = 0.0
+# Assumed total horizontal angular span of the panorama image in degrees
+PANORAMA_HFOV_DEG = 180.0
+# Assumed total vertical angular span of the panorama image in degrees
+PANORAMA_VFOV_DEG = 60.0
+# Fraction of a view's panorama coverage that must contain motion to activate the view
+PANORAMA_MIN_MOTION_FRACTION = 0.005
+# Cross-view NMS IoU threshold (applied after back-projecting all view detections to panorama space)
+PANORAMA_NMS_IOU = 0.35
+
+#--------- Road-Scene Class Filter ----------
+# Classes that cannot appear in a road traffic scene — removed from all detections.
+# Applied in both panorama and standard inference paths to reduce impossible-class FPs.
+ROAD_IMPOSSIBLE_CLASSES = frozenset({
+    "boat", "ship", "surfboard", "snowboard", "skis",
+    "train", "airplane", "aeroplane", "helicopter",
+    "submarine", "kite",
+})

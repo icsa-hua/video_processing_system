@@ -7,6 +7,7 @@ from obs_system.detection_module.interface.model_registry import build_default_m
 from obs_system.logic_module.dummy_logic.region_setter import RegionSetter
 from obs_system.logic_module.dummy_logic.subtractor import Subtractor
 from obs_system.logic_module.dummy_logic.fisheye import FishEyeProjection
+from obs_system.logic_module.dummy_logic.panorama_reprojection import PanoramaReprojector
 from obs_system.utils.common import check_nvidia_existence
 from obs_system.utils.logger import get_logger
 from obs_system.utils.appraisal import perf, frame_list, StepContext
@@ -110,6 +111,7 @@ class Application:
         DEFAULT_CFG.jetson_hazard_scale = float(config.jetson_hazard_scale)
         DEFAULT_CFG.jetson_cpu_threads = int(config.jetson_cpu_threads)
         DEFAULT_CFG.force_tiles = bool(config.force_tiles)
+        DEFAULT_CFG.panorama = bool(config.panorama)
 
         tracemalloc.start()
 
@@ -158,6 +160,11 @@ class Application:
             self.logic_module["FEP"] = FishEyeProjection(crop=0.00)
         else:
             self.logic_module["FEP"] = None
+
+        if config.panorama:
+            self.logic_module["PANORAMA"] = PanoramaReprojector()
+        else:
+            self.logic_module["PANORAMA"] = None
 
 
     def run_app(self, producer_flag=None, preview_queue=None):
