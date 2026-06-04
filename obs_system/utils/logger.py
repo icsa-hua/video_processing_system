@@ -56,10 +56,10 @@ def setup_logging(level=logging.INFO, log_dir="assets/logs"):
 
     jupyter_handler = jupyter_logger(level=level)
 
-    if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler) for h in root.handlers):
+    if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler) for h      in root.handlers):
         root.addHandler(jupyter_handler) 
 
-    root.propagate = True
+    root.propagate = False
 
 
 def get_logger(name=None):
