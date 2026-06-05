@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 import time
 
 from contextlib import ExitStack, contextmanager
@@ -9,7 +10,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import MethodType
 from typing import Any, Callable, Iterator
+from urllib.parse import urlparse
 
+import cv2
 import numpy as np
 
 from obs_system.application_module.dummy_application.dummy_app import Application
@@ -42,6 +45,8 @@ DEFAULT_MODEL = "assets/compressed_models/edi_jetson_model.engine"
 DEFAULT_OUTPUT_DIR = "experiment_results"
 MQTT_ARCHIVE_PATH = Path("assets/mqtt/saved_publishes.cbor")
 HAZARD_CSV_PATH = Path("assets/hazard_events/hazard_events.csv")
+ABLATION_MAX_FRAMES = 1500
+ABLATION_MAX_VIDEO_SECONDS = 60.0
 STAGE_LATENCY_KEYS = [
     "frame_read_ms",
     "roi_ms",
@@ -122,6 +127,103 @@ ABLATION_SPECS: list[AblationSpec] = [
         config_updates={"panorama": False},
     ),
 ]
+
+
+def _video_source_slug(video_source: str) -> str:
+    source = (video_source or "").strip()
+    if not source:
+        return "video_source"
+
+    parsed = urlparse(source)
+    if parsed.scheme and parsed.netloc:
+        host = parsed.hostname or parsed.netloc.split("@")[-1] or "stream"
+        path_stem = Path(parsed.path).stem or "stream"
+        raw_slug = f"{host}_{path_stem}"
+    else:
+        raw_slug = Path(source).stem or Path(source).name or "video_source"
+
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", raw_slug).strip("._-")
+    return slug or "video_source"
+
+
+def _estimate_video_frame_budget(video_source: str) -> int:
+    frame_budget = int(ABLATION_MAX_FRAMES)
+    source = (video_source or "").strip()
+    if not source or "://" in source:
+        return frame_budget
+
+    source_path = Path(source)
+    resolved = source_path if source_path.is_absolute() else Path.cwd() / source_path
+
+    cap = cv2.VideoCapture(str(resolved))
+    try:
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+    finally:
+        cap.release()
+
+    if fps > 0.0 and np.isfinite(fps):
+        time_budget_frames = max(1, int(ABLATION_MAX_VIDEO_SECONDS * fps))
+        return max(1, min(frame_budget, time_budget_frames))
+
+    return frame_budget
+
+
+def _normalize_batch_items(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
+
+
+def _truncate_batch_payload(batch_payload: Any, keep_count: int) -> tuple[list[Any], list[Any], list[Any]]:
+    paths, im0s, labels = batch_payload
+    return (
+        _normalize_batch_items(paths)[:keep_count],
+        _normalize_batch_items(im0s)[:keep_count],
+        _normalize_batch_items(labels)[:keep_count],
+    )
+
+
+class _FrameBudgetDataset:
+    def __init__(self, dataset: Any, max_frames: int) -> None:
+        object.__setattr__(self, "_dataset", dataset)
+        object.__setattr__(self, "_max_frames", max(1, int(max_frames)))
+        object.__setattr__(self, "_iterator", None)
+        object.__setattr__(self, "_remaining", max(1, int(max_frames)))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._dataset, name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in {"_dataset", "_max_frames", "_iterator", "_remaining"}:
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._dataset, name, value)
+
+    def __iter__(self) -> "_FrameBudgetDataset":
+        object.__setattr__(self, "_iterator", iter(self._dataset))
+        object.__setattr__(self, "_remaining", self._max_frames)
+        return self
+
+    def __next__(self) -> tuple[list[Any], list[Any], list[Any]]:
+        if self._remaining <= 0:
+            raise StopIteration
+
+        if self._iterator is None:
+            object.__setattr__(self, "_iterator", iter(self._dataset))
+
+        batch_payload = next(self._iterator)
+        batch_count = len(_normalize_batch_items(batch_payload[1]))
+        if batch_count <= self._remaining:
+            object.__setattr__(self, "_remaining", self._remaining - batch_count)
+            return batch_payload
+
+        truncated = _truncate_batch_payload(batch_payload, self._remaining)
+        object.__setattr__(self, "_remaining", 0)
+        return truncated
 
 
 def _build_streamer(model_name: str, model_path: Path, use_tensorrt: bool):
@@ -349,12 +451,27 @@ def _apply_variant_runtime_overrides(
     return exit_stack
 
 
+def _apply_ablation_video_cap(exit_stack: ExitStack, streamer: Any, config: PipelineConfig) -> int:
+    frame_budget = _estimate_video_frame_budget(config.video_source)
+    original_setup_source = streamer.setup_source
+
+    def setup_source_with_budget(self, source: str) -> None:
+        original_setup_source(source)
+        self.dataset = _FrameBudgetDataset(self.dataset, max_frames=frame_budget)
+        self.run_metrics["ablation_frame_cap"] = int(frame_budget)
+        self.run_metrics["ablation_video_seconds_cap"] = float(ABLATION_MAX_VIDEO_SECONDS)
+
+    exit_stack.enter_context(_temporary_method(streamer, "setup_source", setup_source_with_budget))
+    return frame_budget
+
+
 def _run_variant(
     spec: AblationSpec,
     base_config: PipelineConfig,
     args: argparse.Namespace,
     output_dir: Path,
 ) -> dict[str, Any]:
+    source_slug = _video_source_slug(base_config.video_source)
     skip_reason = _skip_reason(spec, base_config)
     if skip_reason is not None:
         return {
@@ -366,7 +483,7 @@ def _run_variant(
         }
 
     config = base_config.with_updates(**spec.config_updates).validate()
-    run_dir = output_dir / spec.key
+    run_dir = output_dir / source_slug / spec.key
     run_dir.mkdir(parents=True, exist_ok=True)
 
     perf.reset()
@@ -398,7 +515,9 @@ def _run_variant(
         hazard_rows_before = count_data_rows(HAZARD_CSV_PATH)
         mqtt_rows_before = len(read_cbor_lines(MQTT_ARCHIVE_PATH))
 
-        with _apply_variant_runtime_overrides(spec, app, streamer, config):
+        with ExitStack() as run_exit_stack:
+            _apply_ablation_video_cap(run_exit_stack, streamer, config)
+            run_exit_stack.enter_context(_apply_variant_runtime_overrides(spec, app, streamer, config))
             jetson_sampler.start()
             t0 = time.perf_counter()
             streamer(
@@ -468,6 +587,8 @@ def _run_variant(
             "jetson_profile": bool(config.jetson_profile),
             "force_tiles": bool(getattr(streamer.args, "force_tiles", False)),
             "panorama": bool(getattr(streamer.args, "panorama", False)),
+            "ablation_frame_cap": int(streamer_metrics.get("ablation_frame_cap", ABLATION_MAX_FRAMES)),
+            "ablation_video_seconds_cap": float(streamer_metrics.get("ablation_video_seconds_cap", ABLATION_MAX_VIDEO_SECONDS)),
         },
         "metrics": {
             "fps": float(fps),
@@ -538,6 +659,7 @@ def _write_markdown_summary(path: Path, base_config: PipelineConfig, results: li
         "",
         f"- Video source: `{base_config.video_source}`",
         f"- Model: `{base_config.model_name}`",
+        f"- Evaluation cap: up to `{ABLATION_MAX_FRAMES}` frames or `{int(ABLATION_MAX_VIDEO_SECONDS)}` seconds of source video, whichever is smaller.",
         "- Positive percentages mean the variant is faster than the full pipeline based on average `total_ms`.",
         "- `No DeepLab / lane segmentation` disables this repo's classical lane/crosswalk scene-mask path because there is no DeepLab module in the current codebase.",
         "",
@@ -593,6 +715,8 @@ def _write_csv_summary(path: Path, base_config: PipelineConfig, results: list[di
         "jetson_profile",
         "force_tiles",
         "panorama",
+        "ablation_frame_cap",
+        "ablation_video_seconds_cap",
         "saved_event_count",
         "mqtt_crop_batch_count",
         "avg_crop_jpeg_bytes",
@@ -634,6 +758,8 @@ def _write_csv_summary(path: Path, base_config: PipelineConfig, results: list[di
                     "jetson_profile": config.get("jetson_profile"),
                     "force_tiles": config.get("force_tiles"),
                     "panorama": config.get("panorama"),
+                    "ablation_frame_cap": config.get("ablation_frame_cap"),
+                    "ablation_video_seconds_cap": config.get("ablation_video_seconds_cap"),
                     "saved_event_count": output_load.get("saved_event_count"),
                     "mqtt_crop_batch_count": output_load.get("mqtt_crop_batch_count"),
                     "avg_crop_jpeg_bytes": output_load.get("avg_crop_jpeg_bytes"),
@@ -720,6 +846,7 @@ def main() -> None:
     base_config = _build_base_config(args)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    source_slug = _video_source_slug(base_config.video_source)
 
     results: list[dict[str, Any]] = []
     for spec in ABLATION_SPECS:
@@ -741,9 +868,9 @@ def main() -> None:
 
     _compute_deltas(results)
 
-    summary_json = output_dir / "ablation_summary.json"
-    summary_md = output_dir / "ablation_summary.md"
-    summary_csv = output_dir / "ablation_summary.csv"
+    summary_json = output_dir / f"ablation_summary_{source_slug}.json"
+    summary_md = output_dir / f"ablation_summary_{source_slug}.md"
+    summary_csv = output_dir / f"ablation_summary_{source_slug}.csv"
     dump_json(summary_json, results)
     _write_markdown_summary(summary_md, base_config, results)
     _write_csv_summary(summary_csv, base_config, results)
