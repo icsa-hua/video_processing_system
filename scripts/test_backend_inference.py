@@ -36,6 +36,8 @@ from ultralytics.utils.checks import check_imgsz
 DEFAULT_PT_MODEL = "assets/compressed_models/yolov8s.pt"
 DEFAULT_ONNX_MODEL = "assets/compressed_models/yolov8s.onnx"
 DEFAULT_ENGINE_MODEL = "assets/compressed_models/yolov8s.engine"
+DEFAULT_FRAME_CAP = 1500
+DEFAULT_VIDEO_SECONDS_CAP = 60.0
 
 
 def _build_streamer(model_path: Path, batch_size: int, device: str, verbose: bool):
@@ -62,6 +64,34 @@ def _build_streamer(model_path: Path, batch_size: int, device: str, verbose: boo
     streamer.args.half = False
     streamer.imgsz = check_imgsz(streamer.args.imgsz, stride=streamer.stride, min_dim=2)
     return streamer
+
+
+def _estimate_video_frame_cap(video_source: str) -> int:
+    frame_cap = int(DEFAULT_FRAME_CAP)
+    source = (video_source or "").strip()
+    if not source:
+        return frame_cap
+
+    cap = cv2.VideoCapture(source)
+    try:
+        if not cap.isOpened():
+            return frame_cap
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+    finally:
+        cap.release()
+
+    if fps > 0.0:
+        time_budget_frames = max(1, int(DEFAULT_VIDEO_SECONDS_CAP * fps))
+        return max(1, min(frame_cap, time_budget_frames))
+
+    return frame_cap
+
+
+def _effective_frame_cap(video_source: str, requested_max_frames: int) -> int:
+    hard_cap = _estimate_video_frame_cap(video_source)
+    if int(requested_max_frames) > 0:
+        return max(1, min(hard_cap, int(requested_max_frames)))
+    return hard_cap
 
 
 def _iter_video_batches(video_source: str, batch_size: int, max_frames: int = 0) -> Generator[list[Any], None, None]:
@@ -112,6 +142,7 @@ def _write_markdown_summary(path: Path, summaries: list[dict[str, Any]]) -> None
     lines = [
         "# Backend Inference Comparison",
         "",
+        f"- Evaluation cap: up to `{DEFAULT_FRAME_CAP}` frames or `{int(DEFAULT_VIDEO_SECONDS_CAP)}` seconds of source video, whichever is smaller.",
         "| Model | FPS | Avg Latency ms | P50 ms | P95 ms | CPU % | GPU % | GPU Mem MB | Temp C | Power W | Power Mode | EMC MHz | Frames | Batches |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |",
     ]
@@ -168,6 +199,7 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
     batches_processed = 0
     inference_runtime_s = 0.0
     benchmark_wall_start = time.perf_counter()
+    effective_max_frames = _effective_frame_cap(args.video_source, args.max_frames)
 
     try:
         streamer.model.warmup(
@@ -179,7 +211,7 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
         for frames in _iter_video_batches(
             video_source=args.video_source,
             batch_size=args.batch_size,
-            max_frames=args.max_frames,
+            max_frames=effective_max_frames,
         ):
             batch_size = len(frames)
             images = streamer.preprocess(frames)
@@ -291,6 +323,8 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
         "model_kind": resolved_model_path.suffix.lower().lstrip("."),
         "run_dir": str(run_dir),
         "batch_size": int(args.batch_size),
+        "frame_cap": int(effective_max_frames),
+        "video_seconds_cap": float(DEFAULT_VIDEO_SECONDS_CAP),
         "confidence_threshold": CONF_THR,
         "nms_iou": NMS_IOU,
         "runtime_seconds": inference_runtime_s,
@@ -311,7 +345,8 @@ def main() -> None:
         description=(
             "Run inference-only PT/ONNX/ENGINE backend comparison on the same video. "
             "On WSL / non-Jetson hosts the .engine backend is automatically skipped "
-            "when TensorRT is not installed; missing model files are also skipped."
+            "when TensorRT is not installed; missing model files are also skipped. "
+            "Recorded videos are capped to the first standardized evaluation window."
         )
     )
     parser.add_argument("--video-source", required=True, help="Input video path or stream URL.")
@@ -320,7 +355,7 @@ def main() -> None:
     parser.add_argument("--onnx-model", default=DEFAULT_ONNX_MODEL, help="Path to the ONNX model.")
     parser.add_argument("--engine-model", default=DEFAULT_ENGINE_MODEL, help="Path to the TensorRT engine.")
     parser.add_argument("--batch-size", type=int, default=16, help="Frames per inference batch.")
-    parser.add_argument("--max-frames", type=int, default=0, help="Optional frame cap. Use 0 to process the full video.")
+    parser.add_argument("--max-frames", type=int, default=0, help="Optional stricter frame cap. Effective limit is min(this value, standardized 1500-frame/60-second cap). Use 0 to rely only on the standardized cap.")
     parser.add_argument("--device", default="", help="Torch device override, e.g. 'cuda:0' or 'cpu'.")
     parser.add_argument("--gpu-index", type=int, default=0, help="GPU index for utilization sampling.")
     parser.add_argument("--warmup-sessions", type=int, default=8, help="Warmup iterations before timing.")
