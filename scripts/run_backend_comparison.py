@@ -3,9 +3,12 @@ from __future__ import annotations
 import argparse
 import time
 
+import cv2
 import numpy as np
 
+from contextlib import ExitStack
 from pathlib import Path
+from types import MethodType
 from typing import Any
 
 from obs_system.application_module.dummy_application.dummy_app import Application
@@ -36,6 +39,8 @@ DEFAULT_ONNX_MODEL = "assets/compressed_models/yolov8s.onnx"
 DEFAULT_ENGINE_MODEL = "assets/compressed_models/yolov8s.engine"
 MQTT_ARCHIVE_PATH = Path("assets/mqtt/saved_publishes.cbor")
 HAZARD_CSV_PATH = Path("assets/hazard_events/hazard_events.csv")
+DEFAULT_FRAME_CAP = 1500
+DEFAULT_VIDEO_SECONDS_CAP = 60.0
 STAGE_LATENCY_KEYS = [
     "frame_read_ms",
     "roi_ms",
@@ -52,6 +57,54 @@ STAGE_LATENCY_KEYS = [
     "event_saving_ms",
     "total_ms",
 ]
+
+
+class _FrameBudgetDataset:
+    def __init__(self, dataset: Any, max_frames: int) -> None:
+        object.__setattr__(self, "_dataset", dataset)
+        object.__setattr__(self, "_max_frames", max(1, int(max_frames)))
+        object.__setattr__(self, "_iterator", None)
+        object.__setattr__(self, "_remaining", max(1, int(max_frames)))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._dataset, name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in {"_dataset", "_max_frames", "_iterator", "_remaining"}:
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._dataset, name, value)
+
+    def __iter__(self) -> "_FrameBudgetDataset":
+        object.__setattr__(self, "_iterator", iter(self._dataset))
+        object.__setattr__(self, "_remaining", self._max_frames)
+        return self
+
+    def __next__(self) -> tuple[list[Any], list[Any], list[Any]]:
+        if self._remaining <= 0:
+            raise StopIteration
+
+        if self._iterator is None:
+            object.__setattr__(self, "_iterator", iter(self._dataset))
+
+        batch_payload = next(self._iterator)
+        paths, im0s, labels = batch_payload
+        paths = list(paths) if isinstance(paths, (list, tuple)) else [paths]
+        im0s = list(im0s) if isinstance(im0s, (list, tuple)) else [im0s]
+        labels = list(labels) if isinstance(labels, (list, tuple)) else [labels]
+
+        batch_count = len(im0s)
+        if batch_count <= self._remaining:
+            object.__setattr__(self, "_remaining", self._remaining - batch_count)
+            return batch_payload
+
+        truncated = (
+            paths[:self._remaining],
+            im0s[:self._remaining],
+            labels[:self._remaining],
+        )
+        object.__setattr__(self, "_remaining", 0)
+        return truncated
 
 
 def _build_streamer(model_name: str, model_path: Path, use_tensorrt: bool):
@@ -88,6 +141,42 @@ def _configure_streamer_args(streamer: Any, config: PipelineConfig, run_dir: Pat
     streamer.args.jetson_profile = bool(config.jetson_profile)
     streamer.args.jetson_hazard_scale = float(config.jetson_hazard_scale)
     streamer.args.jetson_cpu_threads = int(config.jetson_cpu_threads)
+
+def _estimate_video_frame_cap(video_source: str) -> int:
+    frame_cap = int(DEFAULT_FRAME_CAP)
+    source = (video_source or "").strip()
+    if not source:
+        return frame_cap
+
+    cap = cv2.VideoCapture(source)
+    try:
+        if not cap.isOpened():
+            return frame_cap
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+    finally:
+        cap.release()
+
+    if fps > 0.0:
+        time_budget_frames = max(1, int(DEFAULT_VIDEO_SECONDS_CAP * fps))
+        return max(1, min(frame_cap, time_budget_frames))
+
+    return frame_cap
+
+
+def _apply_video_cap(exit_stack: ExitStack, streamer: Any, video_source: str) -> int:
+    frame_cap = _estimate_video_frame_cap(video_source)
+    original_setup_source = streamer.setup_source
+
+    def setup_source_with_budget(self, source: str) -> None:
+        original_setup_source(source)
+        self.dataset = _FrameBudgetDataset(self.dataset, max_frames=frame_cap)
+        self.run_metrics["frame_cap"] = int(frame_cap)
+        self.run_metrics["video_seconds_cap"] = float(DEFAULT_VIDEO_SECONDS_CAP)
+
+    original = getattr(streamer, "setup_source")
+    setattr(streamer, "setup_source", MethodType(setup_source_with_budget, streamer))
+    exit_stack.callback(lambda: setattr(streamer, "setup_source", original))
+    return frame_cap
 
 
 def _summarize_output_load(
@@ -186,17 +275,19 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
     elapsed_s = 0.0
 
     try:
-        jetson_sampler.start()
-        t0 = time.perf_counter()
-        streamer(
-            source=app.source,
-            model=app.model,
-            logic_module=app.logic_module,
-            mqtt_broker=app.mqtt_publisher,
-            producer_flag=None,
-            preview_queue=None,
-        )
-        elapsed_s = time.perf_counter() - t0
+        with ExitStack() as run_exit_stack:
+            _apply_video_cap(run_exit_stack, streamer, config.video_source)
+            jetson_sampler.start()
+            t0 = time.perf_counter()
+            streamer(
+                source=app.source,
+                model=app.model,
+                logic_module=app.logic_module,
+                mqtt_broker=app.mqtt_publisher,
+                producer_flag=None,
+                preview_queue=None,
+            )
+            elapsed_s = time.perf_counter() - t0
     finally:
         jetson_sampler.stop()
         try:
@@ -234,6 +325,8 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
         "run_dir": str(run_dir),
         "confidence_threshold": CONF_THR,
         "nms_iou": NMS_IOU,
+        "frame_cap": int(streamer_metrics.get("frame_cap", DEFAULT_FRAME_CAP)),
+        "video_seconds_cap": float(streamer_metrics.get("video_seconds_cap", DEFAULT_VIDEO_SECONDS_CAP)),
         "runtime_seconds": elapsed_s,
         "fps": fps,
         **latency,
@@ -269,6 +362,7 @@ def _write_markdown_summary(path: Path, summaries: list[dict[str, Any]]) -> None
     lines = [
         "# Backend Comparison",
         "",
+        f"- Evaluation cap: up to `{DEFAULT_FRAME_CAP}` frames or `{int(DEFAULT_VIDEO_SECONDS_CAP)}` seconds of source video, whichever is smaller.",
         "| Model | FPS | Avg Latency ms | P50 ms | P95 ms | CPU % | GPU % | GPU Mem MB | Temp C | Power W | Power Mode | EMC MHz | Dropped | Stream Open s | First Frame s | mAP | Precision | Recall | F1 | Saved Events | MQTT Batches | Avg Crop JPEG B |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
@@ -311,7 +405,8 @@ def main() -> None:
         description=(
             "Run PT/ONNX/ENGINE backend comparison on the same video source. "
             "On WSL / non-Jetson hosts the .engine backend is automatically skipped "
-            "when TensorRT is not installed; missing model files are also skipped."
+            "when TensorRT is not installed; missing model files are also skipped. "
+            "Recorded videos are capped to the first standardized evaluation window."
         )
     )
     parser.add_argument("--video-source", required=True, help="Input video path or stream URL.")
