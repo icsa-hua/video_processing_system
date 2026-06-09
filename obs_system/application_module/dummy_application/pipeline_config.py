@@ -45,7 +45,7 @@ class PipelineConfig:
     preview_jpeg_quality: int = 70
     preview_fps: float = 8.0
     stream_limit_hours: float = DEFAULT_STREAM_LIMIT_HOURS
-    lane_recalibration_interval_frames: int = 0
+    lane_recalibration_interval_frames: int = 20
     jetson_profile: bool = False
     jetson_hazard_scale: float = 1.0
     jetson_cpu_threads: int = 0
