@@ -9,6 +9,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MethodType
+from textwrap import wrap
 from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
 
@@ -72,6 +73,17 @@ class AblationSpec:
     purpose: str
     config_updates: dict[str, Any] = field(default_factory=dict)
     notes: str = ""
+
+
+@dataclass
+class QualitativeCaptureState:
+    enabled: bool = False
+    target_variant: str = "full_pipeline"
+    output_path: Path | None = None
+    exported: bool = False
+    best_score: int = -1
+    best_figure_bgr: np.ndarray | None = None
+    pending: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 ABLATION_SPECS: list[AblationSpec] = [
@@ -224,6 +236,256 @@ class _FrameBudgetDataset:
         truncated = _truncate_batch_payload(batch_payload, self._remaining)
         object.__setattr__(self, "_remaining", 0)
         return truncated
+
+
+def _copy_image(image: Any) -> np.ndarray | None:
+    if image is None:
+        return None
+    return np.asarray(image).copy()
+
+
+def _copy_mask(mask: Any) -> np.ndarray | None:
+    if mask is None:
+        return None
+    return np.asarray(mask).copy()
+
+
+def _panel_title(image: np.ndarray, title: str) -> np.ndarray:
+    out = image.copy()
+    cv2.rectangle(out, (0, 0), (out.shape[1], 34), (18, 18, 18), thickness=-1)
+    cv2.putText(out, title, (12, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (240, 240, 240), 2, cv2.LINE_AA)
+    return out
+
+
+def _draw_multiline_text(
+    image: np.ndarray,
+    text: str,
+    *,
+    origin: tuple[int, int] = (18, 60),
+    color: tuple[int, int, int] = (245, 245, 245),
+    scale: float = 0.62,
+    thickness: int = 2,
+    max_width_chars: int = 34,
+) -> np.ndarray:
+    out = image.copy()
+    x0, y0 = origin
+    for idx, line in enumerate(wrap(text, width=max_width_chars) or [""]):
+        y = y0 + idx * 26
+        cv2.putText(out, line, (x0, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness, cv2.LINE_AA)
+    return out
+
+
+def _resize_pad(image: np.ndarray | None, width: int, height: int, fill: tuple[int, int, int] = (28, 28, 28)) -> np.ndarray:
+    canvas = np.full((height, width, 3), fill, dtype=np.uint8)
+    if image is None or getattr(image, "size", 0) == 0:
+        return canvas
+
+    if image.ndim == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+
+    h, w = image.shape[:2]
+    if h <= 0 or w <= 0:
+        return canvas
+
+    scale = min(width / float(w), height / float(h))
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR)
+    x0 = (width - new_w) // 2
+    y0 = (height - new_h) // 2
+    canvas[y0:y0 + new_h, x0:x0 + new_w] = resized
+    return canvas
+
+
+def _stack_horizontal(images: list[np.ndarray], *, gap: int = 10, fill: tuple[int, int, int] = (28, 28, 28)) -> np.ndarray:
+    valid = [img for img in images if img is not None and getattr(img, "size", 0) > 0]
+    if not valid:
+        return np.full((360, 640, 3), fill, dtype=np.uint8)
+
+    height = max(img.shape[0] for img in valid)
+    padded = []
+    for img in valid:
+        if img.ndim == 2:
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        if img.shape[0] < height:
+            canvas = np.full((height, img.shape[1], 3), fill, dtype=np.uint8)
+            y0 = (height - img.shape[0]) // 2
+            canvas[y0:y0 + img.shape[0], :img.shape[1]] = img
+            padded.append(canvas)
+        else:
+            padded.append(img)
+
+    gap_col = np.full((height, gap, 3), fill, dtype=np.uint8)
+    row = padded[0]
+    for img in padded[1:]:
+        row = np.hstack([row, gap_col, img])
+    return row
+
+
+def _make_text_panel(title: str, body: str, *, width: int = 640, height: int = 360) -> np.ndarray:
+    panel = np.full((height, width, 3), (32, 32, 32), dtype=np.uint8)
+    panel = _panel_title(panel, title)
+    return _draw_multiline_text(panel, body, origin=(18, 70), max_width_chars=40)
+
+
+def _compose_panel_grid(panels: list[np.ndarray], *, panel_width: int = 640, panel_height: int = 360, cols: int = 3) -> np.ndarray:
+    prepared = [_resize_pad(panel, panel_width, panel_height) for panel in panels]
+    rows: list[np.ndarray] = []
+    gap = np.full((panel_height, 12, 3), (20, 20, 20), dtype=np.uint8)
+    for start in range(0, len(prepared), cols):
+        row_imgs = prepared[start:start + cols]
+        while len(row_imgs) < cols:
+            row_imgs.append(np.full((panel_height, panel_width, 3), (20, 20, 20), dtype=np.uint8))
+        row = row_imgs[0]
+        for img in row_imgs[1:]:
+            row = np.hstack([row, gap, img])
+        rows.append(row)
+
+    gap_row = np.full((12, rows[0].shape[1], 3), (20, 20, 20), dtype=np.uint8)
+    grid = rows[0]
+    for row in rows[1:]:
+        grid = np.vstack([grid, gap_row, row])
+    return grid
+
+
+def _build_roi_panel(streamer: Any, original_bgr: np.ndarray | None, roi_bgr: np.ndarray | None, roi_enabled: bool) -> np.ndarray:
+    if original_bgr is None:
+        return _make_text_panel("A. ROI Cropping", "No source frame available.")
+    if not roi_enabled or streamer.logic_module is None or streamer.logic_module.get("ROI") is None:
+        return _make_text_panel("A. ROI Cropping", "ROI cropping is disabled for this run.")
+
+    full_view = original_bgr.copy()
+    streamer.logic_module["ROI"]._show_regions(full_view)
+    crop_view = roi_bgr if roi_bgr is not None else original_bgr
+    combined = _stack_horizontal([full_view, crop_view])
+    return _panel_title(combined, "A. ROI Cropping")
+
+
+def _build_motion_mask_panel(original_bgr: np.ndarray | None, fg_mask: np.ndarray | None) -> np.ndarray:
+    if fg_mask is None or original_bgr is None:
+        return _make_text_panel("B. MOG2 Motion Mask", "No MOG2 mask was available for the selected frame.")
+    mask_bin = fg_mask
+    if mask_bin.ndim == 3:
+        mask_bin = mask_bin[..., 0]
+    mask_vis = cv2.resize(mask_bin.astype(np.uint8), (original_bgr.shape[1], original_bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
+    mask_vis = cv2.cvtColor(mask_vis, cv2.COLOR_GRAY2BGR)
+    return _panel_title(mask_vis, "B. MOG2 Motion Mask")
+
+
+def _build_lane_panel(streamer: Any, original_bgr: np.ndarray | None, scene_masks: dict[str, Any]) -> np.ndarray:
+    if original_bgr is None:
+        return _make_text_panel("C. Lane / Road Mask", "No source frame available.")
+    lane_mask = scene_masks.get("lane_mask")
+    crosswalk_mask = scene_masks.get("crosswalk_mask")
+    if lane_mask is None and crosswalk_mask is None:
+        return _make_text_panel("C. Lane / Road Mask", "No lane or road mask was available for the selected frame.")
+
+    with _temporary_attr(streamer, "last_scene_masks", scene_masks):
+        panel = streamer._draw_scene_regions(original_bgr.copy())
+    return _panel_title(panel, "C. Lane / Road Mask")
+
+
+def _render_detection_tracking_panel(streamer: Any, preds: Any) -> np.ndarray:
+    plotted = preds.plot(
+        line_width=getattr(streamer.args, "line_width", None),
+        boxes=getattr(streamer.args, "show_boxes", True),
+        conf=getattr(streamer.args, "show_conf", True),
+        labels=getattr(streamer.args, "show_labels", True),
+    )
+    panel = cv2.cvtColor(plotted, cv2.COLOR_RGB2BGR)
+    points = getattr(preds, "track_points", {}) or {}
+    for _cls_id, polyline in points.items():
+        cv2.polylines(panel, [polyline], isClosed=False, color=(0, 255, 255), thickness=2)
+    return panel
+
+
+def _build_detection_panel(streamer: Any, preds: Any) -> np.ndarray:
+    panel = _render_detection_tracking_panel(streamer, preds)
+    return _panel_title(panel, "D. Detections + Tracking")
+
+
+def _build_hazard_panel(streamer: Any, preds: Any) -> np.ndarray:
+    panel = cv2.cvtColor(preds.plot(
+        line_width=getattr(streamer.args, "line_width", None),
+        boxes=getattr(streamer.args, "show_boxes", True),
+        conf=getattr(streamer.args, "show_conf", True),
+        labels=getattr(streamer.args, "show_labels", True),
+    ), cv2.COLOR_RGB2BGR)
+    hazards = getattr(preds, "hazard_events", None) or []
+    if hazards:
+        panel = streamer._draw_hazard_boxes(panel, hazards)
+        panel = _draw_multiline_text(panel, f"Triggered hazards: {len(hazards)}", origin=(18, 62), max_width_chars=28)
+    else:
+        panel = _draw_multiline_text(panel, "No hazard triggered on the selected frame.", origin=(18, 62), max_width_chars=32)
+    return _panel_title(panel, "E. Hazard Event Trigger")
+
+
+def _build_limitation_panel(
+    streamer: Any,
+    original_bgr: np.ndarray | None,
+    processed_bgr: np.ndarray | None,
+    roi_bgr: np.ndarray | None,
+    fg_mask: np.ndarray | None,
+    config: PipelineConfig,
+) -> np.ndarray:
+    if config.panorama and streamer.logic_module is not None and streamer.logic_module.get("PANORAMA") is not None and processed_bgr is not None:
+        reprojector = streamer.logic_module["PANORAMA"]
+        views = [view for view, _vid, _has_motion in reprojector.get_views(processed_bgr, fg_mask_small=fg_mask)[:3]]
+        raw_panel = processed_bgr.copy()
+        raw_panel = _draw_multiline_text(raw_panel, "Raw panorama geometry before reprojection", origin=(18, 62), max_width_chars=24)
+        montage = _stack_horizontal([raw_panel] + views)
+        return _panel_title(montage, "F. Panorama Limitation / Reprojection")
+
+    if config.fep and streamer.logic_module is not None and streamer.logic_module.get("FEP") is not None and processed_bgr is not None:
+        source_view = roi_bgr if roi_bgr is not None else original_bgr
+        if source_view is None:
+            source_view = processed_bgr
+        raw_panel = _draw_multiline_text(source_view.copy(), "Pre-correction view", origin=(18, 62), max_width_chars=22)
+        corrected_panel = _draw_multiline_text(processed_bgr.copy(), "Defished inference input", origin=(18, 62), max_width_chars=22)
+        return _panel_title(_stack_horizontal([raw_panel, corrected_panel]), "F. Fisheye Limitation / Correction")
+
+    return _make_text_panel(
+        "F. Panorama / Fisheye Limitation",
+        "Panorama reprojection and fisheye correction were not enabled for this run. Use --panorama or --fep to capture this diagnostic panel.",
+    )
+
+
+def _build_qualitative_figure(
+    streamer: Any,
+    preds: Any,
+    artifacts: dict[str, Any],
+    config: PipelineConfig,
+) -> np.ndarray:
+    scene_masks = artifacts.get("scene_masks", {})
+    panels = [
+        _build_roi_panel(streamer, artifacts.get("original_bgr"), artifacts.get("roi_bgr"), bool(config.roi)),
+        _build_motion_mask_panel(artifacts.get("original_bgr"), artifacts.get("fg_mask")),
+        _build_lane_panel(streamer, artifacts.get("original_bgr"), scene_masks),
+        _build_detection_panel(streamer, preds),
+        _build_hazard_panel(streamer, preds),
+        _build_limitation_panel(
+            streamer,
+            artifacts.get("original_bgr"),
+            artifacts.get("processed_bgr"),
+            artifacts.get("roi_bgr"),
+            artifacts.get("fg_mask"),
+            config,
+        ),
+    ]
+    grid = _compose_panel_grid(panels)
+    header = np.full((58, grid.shape[1], 3), (14, 14, 14), dtype=np.uint8)
+    cv2.putText(header, "Qualitative Pipeline Panels", (16, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (245, 245, 245), 2, cv2.LINE_AA)
+    frame_id = str(artifacts.get("frame_id", "unknown"))
+    cv2.putText(header, f"frame={frame_id} | variant={artifacts.get('variant_key', 'unknown')}", (16, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (210, 210, 210), 2, cv2.LINE_AA)
+    return np.vstack([header, grid])
+
+
+def _export_qualitative_figure(path: Path | None, figure_bgr: np.ndarray | None) -> str:
+    if path is None or figure_bgr is None or getattr(figure_bgr, "size", 0) == 0:
+        return ""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(path), figure_bgr)
+    return str(path)
 
 
 def _build_streamer(model_name: str, model_path: Path, use_tensorrt: bool):
@@ -465,6 +727,92 @@ def _apply_ablation_video_cap(exit_stack: ExitStack, streamer: Any, config: Pipe
     return frame_budget
 
 
+def _install_qualitative_capture(
+    exit_stack: ExitStack,
+    *,
+    state: QualitativeCaptureState,
+    spec: AblationSpec,
+    streamer: Any,
+    config: PipelineConfig,
+    run_dir: Path,
+) -> None:
+    if not state.enabled or spec.key != state.target_variant:
+        return
+
+    state.output_path = run_dir / "qualitative_panels.png"
+
+    tracker = getattr(streamer, "tracker_model", None)
+    if tracker is not None and hasattr(tracker, "update_tracker_history"):
+        original_update_tracker_history = tracker.update_tracker_history
+
+        def update_tracker_history_with_points(self, results, logic_module, build_points: bool = True):
+            return original_update_tracker_history(results, logic_module, build_points=True)
+
+        exit_stack.enter_context(
+            _temporary_method(tracker, "update_tracker_history", update_tracker_history_with_points)
+        )
+
+    original_stage_a = streamer._stage_a_acquire_and_gate
+
+    def stage_a_with_capture(self, batch_payload, frame_read_ms, stream_start, timeline_logger, batch_idx):
+        stage = original_stage_a(batch_payload, frame_read_ms, stream_start, timeline_logger, batch_idx)
+        if stage.get("skip_reason") == "warmup":
+            return stage
+
+        frame_ids = stage.get("frame_ids", [])
+        originals = stage.get("original_images_bgr", [])
+        cropped_rgb = stage.get("cropped_original_images", [])
+        processed = stage.get("im0s", [])
+        fg_masks = stage.get("fg_masks", []) or []
+
+        for idx, fid in enumerate(frame_ids):
+            state.pending[str(fid)] = {
+                "frame_id": fid,
+                "variant_key": spec.key,
+                "original_bgr": _copy_image(originals[idx]) if idx < len(originals) else None,
+                "roi_bgr": cv2.cvtColor(cropped_rgb[idx], cv2.COLOR_RGB2BGR) if idx < len(cropped_rgb) else None,
+                "processed_bgr": _copy_image(processed[idx]) if idx < len(processed) else None,
+                "fg_mask": _copy_mask(fg_masks[idx]) if idx < len(fg_masks) else None,
+            }
+        return stage
+
+    exit_stack.enter_context(_temporary_method(streamer, "_stage_a_acquire_and_gate", stage_a_with_capture))
+
+    original_postprocess = streamer.postprocess
+
+    def postprocess_with_capture(self, preds, orig_image):
+        out = original_postprocess(preds, orig_image)
+        if state.exported:
+            return out
+
+        frame_id = str(self._extract_frame_id(out))
+        artifacts = state.pending.pop(frame_id, None)
+        if artifacts is None:
+            return out
+
+        scene_masks = {}
+        for key in ("lane_mask", "crosswalk_mask", "drivable_confidence_map"):
+            scene_masks[key] = _copy_mask(self.last_scene_masks.get(key))
+        artifacts["scene_masks"] = scene_masks
+
+        has_boxes = bool(getattr(getattr(out, "boxes", None), "xyxy", None) is not None and out.boxes.xyxy.numel() > 0)
+        has_hazard = bool(getattr(out, "hazard_events", None))
+        score = 2 if has_hazard else 1 if has_boxes else 0
+
+        figure_bgr = _build_qualitative_figure(self, out, artifacts, config)
+        if score >= state.best_score:
+            state.best_score = score
+            state.best_figure_bgr = figure_bgr
+
+        if has_hazard:
+            _export_qualitative_figure(state.output_path, figure_bgr)
+            state.exported = True
+
+        return out
+
+    exit_stack.enter_context(_temporary_method(streamer, "postprocess", postprocess_with_capture))
+
+
 def _run_variant(
     spec: AblationSpec,
     base_config: PipelineConfig,
@@ -493,6 +841,11 @@ def _run_variant(
     streamer = None
     jetson_sampler = JetsonSampler(interval_s=float(args.jetson_interval))
     elapsed_s = 0.0
+    qualitative_path = ""
+    qualitative_state = QualitativeCaptureState(
+        enabled=bool(args.save_qualitative_figure),
+        target_variant=str(args.qualitative_variant),
+    )
 
     try:
         app.setup_process(config)
@@ -518,6 +871,14 @@ def _run_variant(
         with ExitStack() as run_exit_stack:
             _apply_ablation_video_cap(run_exit_stack, streamer, config)
             run_exit_stack.enter_context(_apply_variant_runtime_overrides(spec, app, streamer, config))
+            _install_qualitative_capture(
+                run_exit_stack,
+                state=qualitative_state,
+                spec=spec,
+                streamer=streamer,
+                config=config,
+                run_dir=run_dir,
+            )
             jetson_sampler.start()
             t0 = time.perf_counter()
             streamer(
@@ -529,6 +890,14 @@ def _run_variant(
                 preview_queue=None,
             )
             elapsed_s = time.perf_counter() - t0
+            if qualitative_state.enabled and spec.key == qualitative_state.target_variant and qualitative_state.exported:
+                qualitative_path = str(qualitative_state.output_path or "")
+            if qualitative_state.enabled and spec.key == qualitative_state.target_variant and not qualitative_state.exported:
+                qualitative_path = _export_qualitative_figure(
+                    qualitative_state.output_path,
+                    qualitative_state.best_figure_bgr,
+                )
+                qualitative_state.exported = bool(qualitative_path)
     finally:
         jetson_sampler.stop()
         try:
@@ -589,6 +958,7 @@ def _run_variant(
             "panorama": bool(getattr(streamer.args, "panorama", False)),
             "ablation_frame_cap": int(streamer_metrics.get("ablation_frame_cap", ABLATION_MAX_FRAMES)),
             "ablation_video_seconds_cap": float(streamer_metrics.get("ablation_video_seconds_cap", ABLATION_MAX_VIDEO_SECONDS)),
+            "qualitative_figure_path": qualitative_path,
         },
         "metrics": {
             "fps": float(fps),
@@ -717,6 +1087,7 @@ def _write_csv_summary(path: Path, base_config: PipelineConfig, results: list[di
         "panorama",
         "ablation_frame_cap",
         "ablation_video_seconds_cap",
+        "qualitative_figure_path",
         "saved_event_count",
         "mqtt_crop_batch_count",
         "avg_crop_jpeg_bytes",
@@ -760,6 +1131,7 @@ def _write_csv_summary(path: Path, base_config: PipelineConfig, results: list[di
                     "panorama": config.get("panorama"),
                     "ablation_frame_cap": config.get("ablation_frame_cap"),
                     "ablation_video_seconds_cap": config.get("ablation_video_seconds_cap"),
+                    "qualitative_figure_path": config.get("qualitative_figure_path"),
                     "saved_event_count": output_load.get("saved_event_count"),
                     "mqtt_crop_batch_count": output_load.get("mqtt_crop_batch_count"),
                     "avg_crop_jpeg_bytes": output_load.get("avg_crop_jpeg_bytes"),
@@ -830,6 +1202,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--jetson-profile", action=argparse.BooleanOptionalAction, default=True, help="Enable the Jetson-optimized execution branch.")
     parser.add_argument("--jetson-hazard-scale", type=float, default=1.0, help="Scale factor for Jetson hazard-mask processing.")
     parser.add_argument("--jetson-cpu-threads", type=int, default=0, help="CPU thread cap for the Jetson execution branch. Use 0 for runtime defaults.")
+    parser.add_argument("--save-qualitative-figure", action=argparse.BooleanOptionalAction, default=False, help="Save a 2x3 qualitative figure for one ablation variant.")
+    parser.add_argument("--qualitative-variant", default="full_pipeline", choices=[spec.key for spec in ABLATION_SPECS], help="Which ablation variant should emit the qualitative figure.")
     return parser.parse_args()
 
 
