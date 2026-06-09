@@ -29,7 +29,7 @@ import os
 
 from collections import deque
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 logger = get_logger("obs_system"+__name__)
 
@@ -45,6 +45,7 @@ class Subtractor(EventExtractorInterface):
                  save_path:str="assets/background_check/lane_image.jpg",
                  recalibration_interval_frames:int=0,
                  recalibration_accum_time:Optional[int]=None,
+                 save_scene_overlays: bool = True,
     ):
         self.downscale = downscale
         self.threshold_ratio = float(threshold_ratio)
@@ -56,6 +57,8 @@ class Subtractor(EventExtractorInterface):
             int(recalibration_accum_time if recalibration_accum_time is not None else self.initial_accum_time),
             0,
         )
+        # self.save_scene_overlays = bool(save_scene_overlays)
+        self.save_scene_overlays = False
         
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
                     history=history, 
@@ -115,7 +118,8 @@ class Subtractor(EventExtractorInterface):
         self._motion_score_window: deque = deque(maxlen=60)
         self._frames_processed: int = 0
         self._motion_sparse_threshold: float = 0.001  # below → static mask is primary
-        self._motion_dense_threshold: float = 0.006   # above → blend motion accumulation
+        self._motion_dense_threshold: float = 0.006   # above → prefer motion-derived lanes
+        self._static_lane_max_fill_ratio: float = 0.65
 
         # ── Step 1: motion-quality filtering ──────────────────────────────────
         # Elliptic kernel used for the motion-gate morphology pass (larger than
@@ -450,7 +454,7 @@ class Subtractor(EventExtractorInterface):
             self._ready_for_inference = True
 
 
-    def detect(self, batch, save_img:bool=False): 
+    def detect(self, batch, save_img:bool=True): 
 
         if not batch: return []
 
@@ -458,7 +462,7 @@ class Subtractor(EventExtractorInterface):
         save_idx = None
         if save_img: 
             parent = os.getcwd()
-            save_dir = f"{parent}/assets/background_check/"
+            save_dir = f"{parent}/assets/jetson_background_check/"
             os.makedirs(save_dir, exist_ok=True)
             logger.debug(f"Background Images saved in {save_dir}")
             save_idx = 0 
@@ -744,6 +748,12 @@ class Subtractor(EventExtractorInterface):
             logger.debug("Static lane detection: no reliable road markings found")
 
 
+    def _mask_fill_ratio(self, mask: Optional[np.ndarray]) -> float:
+        if mask is None or mask.size == 0:
+            return 0.0
+        return float(cv2.countNonZero(mask)) / max(float(mask.size), 1.0)
+
+
     def _merge_with_static(self, motion_mask: np.ndarray) -> np.ndarray:
         """
         Merge the motion-accumulation lane candidate with the static geometry baseline.
@@ -751,8 +761,9 @@ class Subtractor(EventExtractorInterface):
         - No static mask available → return motion_mask unchanged.
         - Sparse traffic (low mean density) → static mask is primary; motion
           accumulation did not observe enough vehicles to be trustworthy.
-        - Dense-enough traffic → union of both: static captures geometry,
-          motion confirms and extends to actual vehicle paths.
+        - Mid-density traffic → keep motion lanes and add only nearby static support.
+        - Dense traffic → prefer motion-derived lanes so static geometry cannot
+          flood the whole ROI.
         """
         if self._static_lanes_mask is None:
             return motion_mask
@@ -768,13 +779,64 @@ class Subtractor(EventExtractorInterface):
             float(np.mean(list(self._motion_score_window)))
             if self._motion_score_window else 0.0
         )
+        static_fill_ratio = self._mask_fill_ratio(static)
 
-        if self._has_nonempty_mask(motion_mask) and mean_density >= self._motion_sparse_threshold:
-            merged = cv2.bitwise_or(motion_mask, static)
-            logger.debug("Lane mask: hybrid (motion + static), density=%.4f", mean_density)
-        else:
+        if not self._has_nonempty_mask(motion_mask):
             merged = static.copy()
-            logger.debug("Lane mask: static primary, density=%.4f", mean_density)
+            logger.debug(
+                "Lane mask: static primary, empty motion candidate, density=%.4f static_fill=%.3f",
+                mean_density,
+                static_fill_ratio,
+            )
+            return merged
+
+        motion_support = cv2.dilate(motion_mask, self.kernel15, iterations=2)
+        static_supported = cv2.bitwise_and(static, motion_support)
+
+        if mean_density < self._motion_sparse_threshold:
+            merged = static.copy()
+            logger.debug(
+                "Lane mask: static primary, sparse motion, density=%.4f static_fill=%.3f",
+                mean_density,
+                static_fill_ratio,
+            )
+        elif mean_density >= self._motion_dense_threshold:
+            if static_fill_ratio >= self._static_lane_max_fill_ratio:
+                merged = motion_mask.copy()
+                logger.info(
+                    "Lane mask: motion primary, suppressing overgrown static lane mask in dense traffic "
+                    "(density=%.4f static_fill=%.3f)",
+                    mean_density,
+                    static_fill_ratio,
+                )
+            elif self._has_nonempty_mask(static_supported):
+                merged = cv2.bitwise_or(motion_mask, static_supported)
+                logger.debug(
+                    "Lane mask: motion primary with local static support, density=%.4f static_fill=%.3f",
+                    mean_density,
+                    static_fill_ratio,
+                )
+            else:
+                merged = motion_mask.copy()
+                logger.debug(
+                    "Lane mask: motion primary, dense traffic, density=%.4f static_fill=%.3f",
+                    mean_density,
+                    static_fill_ratio,
+                )
+        elif self._has_nonempty_mask(static_supported):
+            merged = cv2.bitwise_or(motion_mask, static_supported)
+            logger.debug(
+                "Lane mask: constrained hybrid, density=%.4f static_fill=%.3f",
+                mean_density,
+                static_fill_ratio,
+            )
+        else:
+            merged = motion_mask.copy()
+            logger.debug(
+                "Lane mask: motion fallback, no nearby static support, density=%.4f static_fill=%.3f",
+                mean_density,
+                static_fill_ratio,
+            )
 
         return merged
 
@@ -1025,6 +1087,30 @@ class Subtractor(EventExtractorInterface):
 
         return cv2.addWeighted(overlay, 0.22, out, 0.78, 0.0)
 
+    def _resolve_output_path(self, save_path: Optional[Union[str, Path]] = None) -> Path:
+        output_path = Path(save_path or self.save_path).expanduser()
+        if not output_path.is_absolute():
+            output_path = Path.cwd() / output_path
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        return output_path
+
+    def save_lane_mask_only(
+        self,
+        save_path: Optional[Union[str, Path]] = None,
+        lane_mask: Optional[np.ndarray] = None,
+    ) -> Optional[Path]:
+        mask = lane_mask
+        if mask is None:
+            mask = self.lanes_mask if self._has_nonempty_mask(self.lanes_mask) else self._static_lanes_mask
+        if not self._has_nonempty_mask(mask):
+            logger.warning("Lane mask save requested, but no lane mask is available yet")
+            return None
+
+        output_path = self._resolve_output_path(save_path)
+        cv2.imwrite(str(output_path), mask)
+        logger.info("Saved lane-only mask to %s", output_path)
+        return output_path
+
     def __save_calibration(
         self,
         frame: np.ndarray,
@@ -1034,17 +1120,15 @@ class Subtractor(EventExtractorInterface):
         if frame is None:
             return
 
-        save_path = Path(self.save_path).expanduser()
-        if not save_path.is_absolute():
-            save_path = Path.cwd() / save_path
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-
-        cv2.imwrite(str(save_path), lanes_final)
+        save_path = self._resolve_output_path()
+        self.save_lane_mask_only(save_path=save_path, lane_mask=lanes_final)
 
         save_stem = save_path.stem or "lanes_final"
         save_suffix = save_path.suffix or ".png"
 
         if (
+            self.save_scene_overlays
+            and
             self._saved_lane_extractions < self._max_saved_scene_extractions
             and lanes_final is not None
             and lanes_final.size > 0
@@ -1057,6 +1141,8 @@ class Subtractor(EventExtractorInterface):
                 self._saved_lane_extractions += 1
 
         if (
+            self.save_scene_overlays
+            and
             self._saved_crosswalk_extractions < self._max_saved_scene_extractions
             and crosswalk_final is not None
             and crosswalk_final.size > 0
