@@ -5,11 +5,13 @@ import time
 
 import cv2
 import torch
+from torchvision.ops import batched_nms
 
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
+from obs_system.detection_module.interface.detection_batch import FrameDetections
 from obs_system.detection_module.interface.factory import StreamerFactory
 from obs_system.utils.global_config import CONF_THR, NMS_IOU
 from obs_system.utils.benchmarking.backend_benchmark import (
@@ -122,6 +124,16 @@ def _iter_video_batches(video_source: str, batch_size: int, max_frames: int = 0)
         cap.release()
 
 
+def _video_source_fps(video_source: str) -> float:
+    cap = cv2.VideoCapture(video_source)
+    try:
+        if not cap.isOpened():
+            return 0.0
+        return float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+    finally:
+        cap.release()
+
+
 def _synchronize_device(device: Any) -> None:
     if not torch.cuda.is_available():
         return
@@ -136,6 +148,77 @@ def _synchronize_device(device: Any) -> None:
         torch.cuda.synchronize()
     except Exception:
         pass
+
+
+def _normalize_backend_outputs(
+    streamer: Any,
+    infer_outputs: Any,
+    frames_bgr: list[Any],
+    frame_start_idx: int,
+) -> list[FrameDetections]:
+    event = infer_outputs[1] if isinstance(infer_outputs, tuple) and len(infer_outputs) == 2 else None
+    raw_outputs = infer_outputs[0] if event is not None else infer_outputs
+    i_boxes, i_scores, i_classes = raw_outputs
+
+    if event is not None and torch.cuda.is_available():
+        torch.cuda.current_stream(device=streamer.device).wait_event(event)
+        _synchronize_device(streamer.device)
+
+    detections: list[FrameDetections] = []
+    for batch_idx, frame_bgr in enumerate(frames_bgr):
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        frame_id = frame_start_idx + batch_idx
+
+        boxes = i_boxes[batch_idx]
+        scores = i_scores[batch_idx]
+        classes = i_classes[batch_idx]
+        if boxes is None or len(boxes) == 0:
+            detections.append(FrameDetections.empty(frame_id=frame_id, batch_index=batch_idx, orig_img=frame_rgb))
+            continue
+
+        boxes_t = boxes if torch.is_tensor(boxes) else torch.as_tensor(boxes)
+        scores_t = scores if torch.is_tensor(scores) else torch.as_tensor(scores)
+        classes_t = classes if torch.is_tensor(classes) else torch.as_tensor(classes)
+
+        boxes_t = boxes_t.to(dtype=torch.float32)
+        scores_t = scores_t.to(dtype=torch.float32)
+        classes_t = classes_t.to(dtype=torch.int64)
+
+        road_mask = streamer._get_road_filter_mask(classes_t)
+        boxes_t = boxes_t[road_mask]
+        scores_t = scores_t[road_mask]
+        classes_t = classes_t[road_mask]
+
+        if boxes_t.numel() == 0:
+            detections.append(FrameDetections.empty(frame_id=frame_id, batch_index=batch_idx, orig_img=frame_rgb))
+            continue
+
+        keep = batched_nms(boxes_t, scores_t, classes_t.long(), iou_threshold=NMS_IOU)
+        boxes_t = boxes_t[keep]
+        scores_t = scores_t[keep]
+        classes_t = classes_t[keep]
+
+        if boxes_t.numel() == 0:
+            detections.append(FrameDetections.empty(frame_id=frame_id, batch_index=batch_idx, orig_img=frame_rgb))
+            continue
+
+        detections.append(
+            FrameDetections(
+                frame_id=frame_id,
+                batch_index=batch_idx,
+                orig_img=frame_rgb,
+                boxes=boxes_t,
+                scores=scores_t,
+                classes=classes_t,
+            )
+        )
+
+    return detections
+
+
+def _render_detection_frame(streamer: Any, detection: FrameDetections) -> Any:
+    results = detection.to_results(streamer.converter.class_names)
+    return streamer._render_prediction_frame(results)
 
 
 def _write_markdown_summary(path: Path, summaries: list[dict[str, Any]]) -> None:
@@ -194,6 +277,9 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
     jetson_sampler = JetsonSampler(interval_s=args.jetson_interval)
     infer_counter = SlidingCounter(window_s=1.0)
     fps_counter = SlidingCounter(window_s=1.0)
+    video_writer = None
+    rendered_video_path = run_dir / "detections.mp4" if args.save_video else None
+    video_fps = _video_source_fps(args.video_source)
 
     frames_processed = 0
     batches_processed = 0
@@ -217,13 +303,11 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
             images = streamer.preprocess(frames)
             gpu_stats = gpu_mon.sample()
             cpu_stats = cpu_mon.sample()
+            batch_frame_start = frames_processed
 
             _synchronize_device(streamer.device)
             t0 = time.perf_counter()
             infer_outputs = streamer.model(images, orig_imgs=frames, debug=bool(args.verbose))
-            event = infer_outputs[1] if isinstance(infer_outputs, tuple) and len(infer_outputs) == 2 else None
-            if event is not None and torch.cuda.is_available():
-                torch.cuda.current_stream(device=streamer.device).wait_event(event)
             _synchronize_device(streamer.device)
             t1 = time.perf_counter()
 
@@ -264,6 +348,27 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
                 }
             )
 
+            if args.save_video:
+                detections = _normalize_backend_outputs(
+                    streamer=streamer,
+                    infer_outputs=infer_outputs,
+                    frames_bgr=frames,
+                    frame_start_idx=batch_frame_start,
+                )
+                for detection in detections:
+                    rendered_rgb = _render_detection_frame(streamer, detection)
+                    if rendered_rgb is None:
+                        continue
+                    rendered_bgr = cv2.cvtColor(rendered_rgb, cv2.COLOR_RGB2BGR)
+                    if video_writer is None:
+                        fps = video_fps if video_fps > 0.0 else 30.0
+                        h, w = rendered_bgr.shape[:2]
+                        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                        video_writer = cv2.VideoWriter(str(rendered_video_path), fourcc, fps, (w, h))
+                        if not video_writer.isOpened():
+                            raise RuntimeError(f"Failed to open detection video writer: {rendered_video_path}")
+                    video_writer.write(rendered_bgr)
+
             for offset in range(batch_size):
                 frame_logger.log(
                     {
@@ -301,6 +406,8 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
         perf_logger.close()
         frame_logger.close()
         timeline_logger.close()
+        if video_writer is not None:
+            video_writer.release()
         try:
             streamer.stop_save_worker()
             streamer.release_video_writers()
@@ -325,6 +432,7 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
         "batch_size": int(args.batch_size),
         "frame_cap": int(effective_max_frames),
         "video_seconds_cap": float(DEFAULT_VIDEO_SECONDS_CAP),
+        "annotated_video_path": str(rendered_video_path) if args.save_video and rendered_video_path is not None else "",
         "confidence_threshold": CONF_THR,
         "nms_iou": NMS_IOU,
         "runtime_seconds": inference_runtime_s,
@@ -360,6 +468,7 @@ def main() -> None:
     parser.add_argument("--gpu-index", type=int, default=0, help="GPU index for utilization sampling.")
     parser.add_argument("--warmup-sessions", type=int, default=8, help="Warmup iterations before timing.")
     parser.add_argument("--jetson-interval", type=float, default=1.0, help="Sampling interval for Jetson telemetry in seconds.")
+    parser.add_argument("--save-video", action=argparse.BooleanOptionalAction, default=False, help="Save an annotated detection video per backend run for qualitative review.")
     parser.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=False, help="Verbose backend logging.")
     args = parser.parse_args()
 
