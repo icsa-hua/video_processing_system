@@ -713,9 +713,10 @@ class OptimizedStreamer(Streamer):
                 self.done_warmup = True
 
             if subtractor is not None and hasattr(subtractor, "configure_runtime_recalibration"):
+                recalibration_interval = getattr(self.args, "lane_recalibration_interval_frames", None)
                 subtractor.configure_runtime_recalibration(
-                    enabled=bool(getattr(self.source_type, "stream", False)),
-                    interval_frames=getattr(self.args, "lane_recalibration_interval_frames", None),
+                    enabled=bool(recalibration_interval and int(recalibration_interval) > 0),
+                    interval_frames=recalibration_interval,
                 )
 
             if not getattr(self.source_type, "stream", False):

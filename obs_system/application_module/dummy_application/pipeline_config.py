@@ -139,7 +139,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     argparser.add_argument("--plot_perf", metavar="TRT", action=argparse.BooleanOptionalAction, help="Plot performance diagrams")
     argparser.add_argument("--only_FPS", metavar="TRT", action=argparse.BooleanOptionalAction, help="Measure average FPS regardless of plotting.")
     argparser.add_argument( "--stream_limit_hours", metavar="SL", type=float, default=DEFAULT_STREAM_LIMIT_HOURS, help="Maximum runtime in hours for live streams only. Set to 0 to disable the limit.")
-    argparser.add_argument("--lane_recalibration_interval_frames", metavar="LR", type=int, default=0, help="For live streams, rerun lane calibration after this many frames. Set to 0 to disable.")
+    argparser.add_argument("--lane_recalibration_interval_frames", metavar="LR", type=int, default=0, help="Rerun lane calibration after this many frames for both local videos and live streams. Set to 0 to disable.")
     argparser.add_argument("--jetson_profile", metavar="JP", action=argparse.BooleanOptionalAction, help="Enable the Jetson-optimized execution branch.")
     argparser.add_argument("--jetson_hazard_scale", metavar="JHS", type=float, default=1.0, help="Scale factor for Jetson hazard-mask processing. Use values below 1.0 to downscale the hazard masks.")
     argparser.add_argument("--jetson_cpu_threads", metavar="JCT", type=int, default=0, help="CPU thread cap for the Jetson-optimized execution branch. Use 0 to keep the runtime default.")
