@@ -77,6 +77,7 @@ class Application:
     def setup_process(self, config: PipelineConfig):
         # Check for GPU (NVIDIA) to allow the program to run GPU statistics
         self.gpu_enabled = check_nvidia_existence()
+        workspace_runs_dir = (Path(self.parent_path) / "runs").resolve()
 
         if self.gpu_enabled:
             pynvml.nvmlInit()
@@ -112,6 +113,10 @@ class Application:
         DEFAULT_CFG.jetson_cpu_threads = int(config.jetson_cpu_threads)
         DEFAULT_CFG.force_tiles = bool(config.force_tiles)
         DEFAULT_CFG.panorama = bool(config.panorama)
+        DEFAULT_CFG.project = str(workspace_runs_dir)
+        DEFAULT_CFG.name = "obs_pipeline"
+
+        logger.info("Pipeline save root: %s", workspace_runs_dir / "obs_pipeline")
 
         tracemalloc.start()
 
