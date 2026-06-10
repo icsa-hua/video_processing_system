@@ -34,6 +34,10 @@ from datetime import datetime, timezone
 class Streamer(ABC): 
     
     logger = get_logger("obs_system"+__name__)
+    SAVE_QUEUE_MAXSIZE = 128
+    ASYNC_SINK_QUEUE_MAXSIZE = 128
+    IO_SINK_QUEUE_MAXSIZE = 64
+    WORKER_DRAIN_TIMEOUT_S = 15.0
 
     STREAM_WARNING = """
     WARNING ⚠️ Infefrence results will accumulate in RAM unless `stream=True` is passed, causing potential out-of-memory
@@ -56,15 +60,15 @@ class Streamer(ABC):
         self.done_warmup = True
         self.model_warmup_done = False
         
-        self.save_queue = queue.Queue(maxsize=10)
+        self.save_queue = queue.Queue(maxsize=self.SAVE_QUEUE_MAXSIZE)
         self.save_thread = threading.Thread(target=self._save_worker, daemon=True)
         self.save_thread.start()
         # Render worker: result_outputs, preview_frame (CPU-bound plot/encode)
-        self.async_sink_queue = queue.Queue(maxsize=32)
+        self.async_sink_queue = queue.Queue(maxsize=self.ASYNC_SINK_QUEUE_MAXSIZE)
         self.async_sink_thread = threading.Thread(target=self._async_sink_worker, daemon=True)
         self.async_sink_thread.start()
         # IO worker: hazard_event, mqtt_results, mqtt_no_detection (I/O-bound, releases GIL)
-        self._io_sink_queue: queue.Queue = queue.Queue(maxsize=32)
+        self._io_sink_queue: queue.Queue = queue.Queue(maxsize=self.IO_SINK_QUEUE_MAXSIZE)
         self._io_sink_thread = threading.Thread(target=self._io_sink_worker, daemon=True)
         self._io_sink_thread.start()
         
@@ -653,46 +657,56 @@ class Streamer(ABC):
             return
 
         self._save_worker_stopped = True
+        self._wait_for_queue_drain(self.save_queue, "save")
         try:
             self.save_queue.put_nowait(None)
         except queue.Full:
-            try:
-                self.save_queue.get_nowait()
-            except queue.Empty:
-                pass
-            try:
-                self.save_queue.put_nowait(None)
-            except queue.Full:
-                pass
+            Streamer.logger.warning("Save queue full during shutdown; forcing save worker stop.")
+            return
 
         if self.save_thread.is_alive():
-            self.save_thread.join(timeout=2)
+            self.save_thread.join(timeout=self.WORKER_DRAIN_TIMEOUT_S)
 
     def stop_async_sink_worker(self) -> None:
         if self._async_sink_worker_stopped:
             return
 
         self._async_sink_worker_stopped = True
+        self._wait_for_queue_drain(self.async_sink_queue, "async sink")
         try:
             self.async_sink_queue.put_nowait(None)
         except queue.Full:
-            Streamer.logger.warning("Async sink queue full during shutdown; pending sink tasks may be dropped.")
+            Streamer.logger.warning("Async sink queue full during shutdown; forcing async sink worker stop.")
+            return
 
         if self.async_sink_thread.is_alive():
-            self.async_sink_thread.join(timeout=2)
+            self.async_sink_thread.join(timeout=self.WORKER_DRAIN_TIMEOUT_S)
 
     def stop_io_sink_worker(self) -> None:
         if self._io_sink_worker_stopped:
             return
 
         self._io_sink_worker_stopped = True
+        self._wait_for_queue_drain(self._io_sink_queue, "io sink")
         try:
             self._io_sink_queue.put_nowait(None)
         except queue.Full:
-            Streamer.logger.warning("IO sink queue full during shutdown; pending IO tasks may be dropped.")
+            Streamer.logger.warning("IO sink queue full during shutdown; forcing IO sink worker stop.")
+            return
 
         if self._io_sink_thread.is_alive():
-            self._io_sink_thread.join(timeout=2)
+            self._io_sink_thread.join(timeout=self.WORKER_DRAIN_TIMEOUT_S)
+
+    def _wait_for_queue_drain(self, work_queue: queue.Queue, queue_name: str) -> None:
+        deadline = time.perf_counter() + self.WORKER_DRAIN_TIMEOUT_S
+        while work_queue.unfinished_tasks > 0 and time.perf_counter() < deadline:
+            time.sleep(0.05)
+        if work_queue.unfinished_tasks > 0:
+            Streamer.logger.warning(
+                "%s queue still has %d pending task(s) at shutdown timeout.",
+                queue_name,
+                work_queue.unfinished_tasks,
+            )
 
 
     def release_dataset_resources(self) -> None:
@@ -801,12 +815,14 @@ class Streamer(ABC):
     def _save_worker(self):
         while True:
             task = self.save_queue.get()
-            if task is None:
-                break
             try: 
+                if task is None:
+                    return
                 self._do_save(task)
             except Exception: 
                 Streamer.logger.exception("Save worker task failed: %s", task[0] if task else task)
+            finally:
+                self.save_queue.task_done()
 
 
     def _do_save(self, task):
@@ -839,23 +855,27 @@ class Streamer(ABC):
         """Render worker: handles CPU-bound plot/encode tasks (result_outputs, preview_frame)."""
         while True:
             task = self.async_sink_queue.get()
-            if task is None:
-                break
             try:
+                if task is None:
+                    return
                 self._do_async_sink(task)
             except Exception:
                 Streamer.logger.exception("Async sink task failed: %s", task[0] if task else task)
+            finally:
+                self.async_sink_queue.task_done()
 
     def _io_sink_worker(self) -> None:
         """IO worker: handles I/O-bound tasks (hazard_event, mqtt_results, mqtt_no_detection)."""
         while True:
             task = self._io_sink_queue.get()
-            if task is None:
-                break
             try:
+                if task is None:
+                    return
                 self._do_io_sink(task)
             except Exception:
                 Streamer.logger.exception("IO sink task failed: %s", task[0] if task else task)
+            finally:
+                self._io_sink_queue.task_done()
 
     def _do_async_sink(self, task) -> None:
         task_type = task[0]
@@ -911,7 +931,7 @@ class Streamer(ABC):
             if drop_if_full:
                 target_q.put_nowait(task)
             else:
-                target_q.put(task, timeout=0.01)
+                target_q.put(task)
             queued = True
         except queue.Full:
             Streamer.logger.debug("Sink queue full; dropping task %s", task[0] if task else None)
