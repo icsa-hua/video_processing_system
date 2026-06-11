@@ -64,9 +64,19 @@ class Subtractor(EventExtractorInterface):
         self.max_motion_components = int(motion_config["max_components"])
         
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
-                    history=history, 
+                    history=history,
                     varThreshold=self.var_threshold,
                     detectShadows=detect_shadows)
+
+        # Dedicated slow-learning background subtractor for the calibration
+        # accumulator. learningRate=0.01 in apply() means persistent motion
+        # (trees, flags) is gradually absorbed into the background model and
+        # disappears from the foreground, while transient vehicle passes remain.
+        # No shadow detection — cleaner binary foreground for accumulation.
+        self.fgbg = cv2.createBackgroundSubtractorMOG2(
+                    history=history,
+                    varThreshold=self.var_threshold,
+                    detectShadows=False)
 
 
         self.kernel3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
@@ -465,19 +475,22 @@ class Subtractor(EventExtractorInterface):
         h, w = self._last_frame_shape if self._last_frame_shape is not None else self.downscale
 
         for bni in confirmed_batch_indices:
-            fg_masks = getattr(self, "_last_batch_fg_masks", [])
-            if bni >= len(fg_masks):
+            frames_list = getattr(self, "_last_batch_frames", [])
+            if bni >= len(frames_list):
                 continue
-            fg_mask = fg_masks[bni]
-            if fg_mask is None:
+            frame = frames_list[bni]
+            if frame is None:
                 continue
 
-            # fg_mask is already thresholded at 127 (shadows included); apply
-            # the same CC quality filter used by the motion gate so large
-            # connected vegetation blobs don't survive via vehicle confirmation.
-            fg_clean = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, self.kernel3)
-            if self._cached_total_pixels > 0:
-                fg_clean = self._filter_motion_components(fg_clean)
+            # Run the dedicated slow-learning subtractor on the downscaled frame.
+            # learningRate=0.01 means persistent motion (trees, flags) is gradually
+            # absorbed as background and vanishes from the foreground; only transient
+            # vehicle passes remain. Threshold at 180 (not 127) to exclude shadows;
+            # kernel5 with 2 iterations for clean, well-merged vehicle blobs.
+            fg_raw = self.fgbg.apply(frame, learningRate=0.01)
+            _, fg_thresh = cv2.threshold(fg_raw, 180, 255, cv2.THRESH_BINARY)
+            fg_clean = cv2.morphologyEx(fg_thresh, cv2.MORPH_OPEN, self.kernel5, iterations=2)
+            fg_clean = cv2.morphologyEx(fg_clean, cv2.MORPH_CLOSE, self.kernel5, iterations=2)
 
             if ENABLE_UNSTABLE_MOTION_MAP:
                 fg_bin = (fg_clean > 0).astype(np.float32)
@@ -488,7 +501,7 @@ class Subtractor(EventExtractorInterface):
                 self._unstable_motion_frame_count += 1
 
             mask_resized = cv2.resize(fg_clean.astype(np.float32), (w, h))
-            blended = cv2.addWeighted(mask_resized, 0.35, self.prev_mask, 0.65, 0)
+            blended = cv2.addWeighted(mask_resized, 0.6, self.prev_mask, 0.4, 0)
             self.prev_mask = blended
             self.acc_mask = cv2.add(self.acc_mask, blended)
 
@@ -597,6 +610,7 @@ class Subtractor(EventExtractorInterface):
         motion_flags = []
         motion_scores = []
         self._last_batch_fg_masks: list = []  # binary downscale masks, one per frame
+        self._last_batch_frames: list = []    # downscaled BGR frames for fgbg.apply()
         lanes_final = None
         last_frame = batch[-1]
         self._last_calibration_frame = last_frame  # used by notify_vehicle_detections
@@ -616,6 +630,7 @@ class Subtractor(EventExtractorInterface):
                 self._last_batch_fg_masks.append(_bin.copy())
             else:
                 self._last_batch_fg_masks.append(None)
+            self._last_batch_frames.append(frame.copy())
 
             if save_img and save_idx is not None: 
                 save_idx += 1 
