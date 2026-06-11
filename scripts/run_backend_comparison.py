@@ -228,6 +228,7 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
         verbose=bool(args.verbose),
         save=bool(args.save_outputs),
         roi=bool(args.roi),
+        roi_profile=args.roi_profile,
         half=True,
         fep=bool(args.fep),
         bench=bool(args.labels_dir),
@@ -416,6 +417,7 @@ def main() -> None:
     parser.add_argument("--onnx-model", default=DEFAULT_ONNX_MODEL, help="Path to the ONNX model.")
     parser.add_argument("--engine-model", default=DEFAULT_ENGINE_MODEL, help="Path to the TensorRT engine.")
     parser.add_argument("--roi", action=argparse.BooleanOptionalAction, default=True, help="Enable ROI cropping.")
+    parser.add_argument("--roi-profile", default="", help="Optional ROI profile key from obs_system/utils/roi_profiles.json.")
     parser.add_argument("--fep", action=argparse.BooleanOptionalAction, default=False, help="Enable fisheye projection.")
     parser.add_argument("--mqtt", action=argparse.BooleanOptionalAction, default=False, help="Enable MQTT publishing during the benchmark.")
     parser.add_argument("--save-outputs", action=argparse.BooleanOptionalAction, default=False, help="Enable saving rendered outputs during the benchmark.")

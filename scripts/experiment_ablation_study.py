@@ -1157,6 +1157,7 @@ def _build_base_config(args: argparse.Namespace) -> PipelineConfig:
         verbose=bool(args.verbose),
         save=bool(args.save_outputs),
         roi=bool(args.roi),
+        roi_profile=args.roi_profile,
         half=True,
         fep=bool(args.fep),
         bench=bool(args.labels_dir),
@@ -1191,6 +1192,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Directory where ablation logs and summaries are written.")
     parser.add_argument("--labels-dir", default="", help="Optional YOLO label directory for accuracy metrics.")
     parser.add_argument("--roi", action=argparse.BooleanOptionalAction, default=True, help="Enable ROI cropping.")
+    parser.add_argument("--roi-profile", default="", help="Optional ROI profile key from obs_system/utils/roi_profiles.json.")
     parser.add_argument("--fep", action=argparse.BooleanOptionalAction, default=False, help="Enable fisheye reprojection.")
     parser.add_argument("--mqtt", action=argparse.BooleanOptionalAction, default=True, help="Enable MQTT in the full-pipeline baseline.")
     parser.add_argument("--save-outputs", action=argparse.BooleanOptionalAction, default=True, help="Enable frame/event saving in the full-pipeline baseline.")

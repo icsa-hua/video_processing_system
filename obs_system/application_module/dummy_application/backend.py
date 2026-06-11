@@ -53,6 +53,7 @@ class VideoProcessingRequest(BaseModel):
     verbose: bool = False
     save: bool = False
     roi: bool = False
+    roi_profile: str = ""
     half: bool = False
     fep: bool = False
     bench: bool = False

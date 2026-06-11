@@ -121,6 +121,12 @@ Enable ROI:
 python3 scripts/obs_pipeline.py --video_source samples/sample_video.mp4 --roi
 ```
 
+Select a specific ROI profile explicitly:
+
+```bash
+python3 scripts/obs_pipeline.py --video_source samples/test_samples/highway.mp4 --roi --roi_profile highway
+```
+
 Enable MQTT:
 
 ```bash
@@ -189,6 +195,8 @@ The primary execution script supports the following options through `obs_system/
   Save rendered outputs.
 - `--roi` / `--no-roi`
   Enable region-of-interest cropping.
+- `--roi_profile`
+  Optional ROI profile key from [obs_system/utils/roi_profiles.json](/Users/jimborg/WorkSpace/edgeai/video_processing_system/obs_system/utils/roi_profiles.json). If omitted, the pipeline tries the source path, filename, and stem automatically.
 - `--half` / `--no-half`
   Enable reduced resource / half-style execution path where supported.
 - `--fep` / `--no-fep`
@@ -213,6 +221,15 @@ The primary execution script supports the following options through `obs_system/
   Downscale factor for Jetson hazard-mask processing. Valid range: `(0, 1]`.
 - `--jetson_cpu_threads`
   CPU thread cap for the Jetson branch. `0` keeps the default runtime behavior.
+
+## ROI Profiles For Experiments
+
+Per-video ROI overrides live in [obs_system/utils/roi_profiles.json](/Users/jimborg/WorkSpace/edgeai/video_processing_system/obs_system/utils/roi_profiles.json).
+
+- The `default` entry preserves the existing static ROI rectangle.
+- Profiles can be selected explicitly with `--roi_profile`, or matched automatically from the video source path, filename, or stem.
+- Each profile stores `x1`, `y1`, `x2`, `y2` together with `reference_width` and `reference_height`.
+- The sample-video profiles are keyed for `MVI_39401`, `highway`, `fisheye`, and `short_1920_12fps`.
 
 ## Benchmark and Test Scripts
 

@@ -8,7 +8,7 @@ from shapely.geometry import Polygon
 from shapely.geometry.point import Point
 import platform
 from ultralytics.utils.ops import scale_boxes
-from obs_system.utils.global_config import TILE_SIZE, ROI_X1, ROI_Y1, ROI_X2, ROI_Y2, REGION_COLOR
+from obs_system.utils import global_config
 
 class RegionSetter(EventExtractorInterface):
 
@@ -32,17 +32,17 @@ class RegionSetter(EventExtractorInterface):
         # NOTE: ROI in this case considers the road network exclusively. 
         original_height, original_width = image.shape[:2]
 
-        new_width = TILE_SIZE
-        new_height = TILE_SIZE
+        roi_config = global_config.get_active_roi_config()
+        reference_width = max(1, int(roi_config["reference_width"]))
+        reference_height = max(1, int(roi_config["reference_height"]))
 
-        aspect_ratio_width = original_width / new_width
-        aspect_ratio_height = original_height / new_height
+        aspect_ratio_width = original_width / reference_width
+        aspect_ratio_height = original_height / reference_height
 
-        # NOTE: Change these values based on the camera feed.
-        x_start = int(ROI_X1 * aspect_ratio_width)
-        x_end = int(ROI_X2 * aspect_ratio_width)
-        y_start = int(ROI_Y1 * aspect_ratio_height)
-        y_end = int(ROI_Y2 * aspect_ratio_height)
+        x_start = int(roi_config["x1"] * aspect_ratio_width)
+        x_end = int(roi_config["x2"] * aspect_ratio_width)
+        y_start = int(roi_config["y1"] * aspect_ratio_height)
+        y_end = int(roi_config["y2"] * aspect_ratio_height)
         
         x_start, x_end = sorted([x_start, x_end])
         y_start, y_end = sorted([y_start, y_end])
@@ -66,7 +66,7 @@ class RegionSetter(EventExtractorInterface):
                     ]),
                     "counts": 0,
                     "dragging": False,
-                    "region_color": REGION_COLOR,  # BGR Value
+                    "region_color": global_config.REGION_COLOR,  # BGR Value
                     "text_color": (255, 255, 255),  # Region Text Color
                 },
         ]
