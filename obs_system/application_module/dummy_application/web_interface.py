@@ -102,6 +102,18 @@ if "live_stream_url_examine" not in st.session_state:
 if "examine_stream_active" not in st.session_state:
     st.session_state["examine_stream_active"] = False
 
+if "record_mode" not in st.session_state:
+    st.session_state["record_mode"] = False
+
+if "recording_active" not in st.session_state:
+    st.session_state["recording_active"] = False
+
+if "record_output_path" not in st.session_state:
+    st.session_state["record_output_path"] = ""
+
+if "record_duration" not in st.session_state:
+    st.session_state["record_duration"] = 30
+
 if "source_mode" not in st.session_state:
     st.session_state["source_mode"] = "Local Video"
 
@@ -322,11 +334,13 @@ if tab_examine is not None:
 
         st.session_state["examine_stream_active"] = bool(examine_status.get("running", False))
 
-        examine_col, stop_col = st.columns(2)
+        examine_col, stop_col, record_col = st.columns(3)
         with examine_col:
             examine_button = st.button("Examine", type="primary")
         with stop_col:
             stop_examine_button = st.button("Stop", key="stop_examine_stream")
+        with record_col:
+            record_button = st.button("Record", key="open_record_panel")
 
         if examine_button:
             stream_url = st.session_state.get("live_stream_url", "").strip()
@@ -365,6 +379,98 @@ if tab_examine is not None:
             finally:
                 st.session_state["examine_stream_active"] = False
             st.rerun()
+
+        if record_button:
+            st.session_state["record_mode"] = True
+
+        if st.session_state.get("record_mode") and not st.session_state.get("recording_active"):
+            with st.container(border=True):
+                st.markdown("**Configure Recording**")
+                st.caption("Captures raw frames from the stream. No pipeline processing is applied.")
+                duration_val = st.number_input(
+                    "Duration (seconds)",
+                    min_value=1,
+                    max_value=3600,
+                    value=st.session_state.get("record_duration", 30),
+                    step=5,
+                    key="record_duration_input",
+                )
+                st.session_state["record_duration"] = int(duration_val)
+                confirm_col, cancel_col = st.columns(2)
+                with confirm_col:
+                    start_record_button = st.button("Start Recording", type="primary", key="start_record_btn")
+                with cancel_col:
+                    cancel_record_button = st.button("Cancel", key="cancel_record_btn")
+
+            if cancel_record_button:
+                st.session_state["record_mode"] = False
+                st.rerun()
+
+            if start_record_button:
+                stream_url = st.session_state.get("live_stream_url", "").strip()
+                if not stream_url:
+                    st.error("Please enter a stream URL before recording.")
+                else:
+                    payload = {
+                        "video_source": stream_url,
+                        "duration_seconds": st.session_state["record_duration"],
+                        "output_dir": "recordings",
+                    }
+                    try:
+                        response = requests.post(
+                            f"{BACKEND_URL}/examine_stream/record", json=payload, timeout=15
+                        )
+                        response.raise_for_status()
+                        result = response.json()
+                        st.session_state["record_output_path"] = result.get("output_path", "")
+                        st.session_state["recording_active"] = True
+                        st.session_state["record_mode"] = False
+                        st.rerun()
+                    except requests.HTTPError as exc:
+                        detail = ""
+                        try:
+                            detail = exc.response.json().get("detail", "")
+                        except Exception:
+                            detail = exc.response.text
+                        st.error(f"Error: {detail or exc}")
+                    except requests.exceptions.RequestException as exc:
+                        st.error(f"Connection Error: {exc}")
+
+        if st.session_state.get("recording_active"):
+            record_status = {"running": False, "done": False, "error": False, "output_path": ""}
+            try:
+                rs = requests.get(f"{BACKEND_URL}/examine_stream/record/status", timeout=5)
+                rs.raise_for_status()
+                record_status = rs.json()
+            except requests.exceptions.RequestException:
+                pass
+
+            output_path = record_status.get("output_path") or st.session_state.get("record_output_path", "")
+
+            if record_status.get("error"):
+                st.error("Recording failed. Check stream URL and server logs.")
+                st.session_state["recording_active"] = False
+            elif record_status.get("done") and not record_status.get("running"):
+                st.success(f"Recording complete. Saved to: `{output_path}`")
+                st.session_state["recording_active"] = False
+                st.session_state["record_output_path"] = ""
+            else:
+                with st.container(border=True):
+                    st.markdown(f"**Recording in progress...** ({st.session_state.get('record_duration', '?')}s)")
+                    st.caption(f"Output: `{output_path}`")
+                    stop_record_col, _ = st.columns([1, 3])
+                    with stop_record_col:
+                        stop_record_button = st.button("Stop Recording", key="stop_record_btn")
+                if stop_record_button:
+                    try:
+                        requests.post(f"{BACKEND_URL}/examine_stream/record/stop", timeout=10)
+                    except requests.exceptions.RequestException:
+                        pass
+                    st.session_state["recording_active"] = False
+                    st.session_state["record_output_path"] = ""
+                    st.rerun()
+                time.sleep(2)
+                st.rerun()
 
         if st.session_state.get("examine_stream_active"):
             if not examine_status.get("preview_ready", False):

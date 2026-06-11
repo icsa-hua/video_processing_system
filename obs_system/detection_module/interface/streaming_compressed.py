@@ -1,4 +1,6 @@
 from obs_system.communication_module.interface import mqtt_interface
+from obs_system.logic_module.dummy_logic.tile_kalman import TileDetectionSmoother
+from obs_system.logic_module.dummy_logic.tile_activation import TileActivationWindow
 from obs_system.utils.common import _get_gt, _empty_dets_numpy, _empty_results
 from obs_system.compressed.interface.compressed_yolo import CompressedYOLO
 from obs_system.compressed.interface.tensor_yolo import TensorRTYOLO
@@ -615,6 +617,45 @@ class OptimizedStreamer(Streamer):
         return frame_log_rows
 
 
+    def _apply_kalman_smoother(self, detection_batch: DetectionBatch) -> DetectionBatch:
+        """
+        Run TileDetectionSmoother over each frame in the batch.
+
+        Called after cross-tile / cross-view NMS and before ByteTracker (Stage C).
+        Empty frames are still passed through so the smoother can emit predicted
+        boxes for confirmed tracks that YOLO missed on this frame.
+        """
+        smoother: TileDetectionSmoother = self._tile_kalman  # type: ignore[assignment]
+        smoothed: list[FrameDetections] = []
+        for frame in detection_batch:
+            if frame.is_empty:
+                boxes_np = np.zeros((0, 4), np.float32)
+                scores_np = np.zeros((0,), np.float32)
+                classes_np = np.zeros((0,), np.int64)
+            else:
+                boxes_np = frame.boxes.float().cpu().numpy()  # type: ignore[union-attr]
+                scores_np = frame.scores.float().cpu().numpy()  # type: ignore[union-attr]
+                classes_np = frame.classes.cpu().numpy()  # type: ignore[union-attr]
+
+            boxes_out, scores_out, classes_out = smoother.update(boxes_np, scores_np, classes_np)
+
+            if len(boxes_out) == 0:
+                smoothed.append(FrameDetections.empty(
+                    frame_id=frame.frame_id,
+                    batch_index=frame.batch_index,
+                    orig_img=frame.orig_img,
+                ))
+            else:
+                smoothed.append(FrameDetections(
+                    frame_id=frame.frame_id,
+                    batch_index=frame.batch_index,
+                    orig_img=frame.orig_img,
+                    boxes=torch.as_tensor(boxes_out, dtype=torch.float32),
+                    scores=torch.as_tensor(scores_out, dtype=torch.float32),
+                    classes=torch.as_tensor(classes_out, dtype=torch.int64),
+                ))
+        return DetectionBatch(frames=smoothed)
+
     def _ensure_benchmark_labels_loaded(self) -> None:
         if self._benchmark_labels_loaded or not self.args.bench:
             return
@@ -741,6 +782,28 @@ class OptimizedStreamer(Streamer):
             force_no_tiles = bool(getattr(self, "force_streaming_no_tiles", False)) and not force_tiles_flag
             auto_tile = (self.orig_width // TILE_SIZE) > TILE_THR or (self.orig_height // TILE_SIZE) >= TILE_THR
             use_tiles = (not use_panorama) and (force_tiles_flag or (auto_tile and not force_no_tiles))
+
+            # Kalman smoother is active only when multiple tile/view detections are merged
+            # per frame (tile mode or panorama mode). The regular single-pass path relies
+            # solely on ByteTracker for temporal stability.
+            if use_panorama or use_tiles:
+                self._tile_kalman: Optional[TileDetectionSmoother] = TileDetectionSmoother(
+                    max_age=TILE_KALMAN_MAX_AGE,
+                    min_hits=TILE_KALMAN_MIN_HITS,
+                    iou_threshold=TILE_KALMAN_IOU_THRESHOLD,
+                )
+            else:
+                self._tile_kalman = None
+
+            # Per-tile activation persistence window — tiles path only.
+            # Panorama already has per-view motion gating (PANORAMA_MIN_MOTION_FRACTION).
+            if use_tiles and TILE_ACTIVATION_ENABLED:
+                self._tile_activation: Optional[TileActivationWindow] = TileActivationWindow(
+                    persist_frames=TILE_ACTIVATION_PERSIST_FRAMES,
+                    motion_min_ratio=TILE_ACTIVATION_MOTION_MIN_RATIO,
+                )
+            else:
+                self._tile_activation = None
 
             if use_panorama:
                 Streamer.logger.info(
@@ -1029,6 +1092,12 @@ class OptimizedStreamer(Streamer):
             inference_ms = stage_b["inference_ms"]
             nms_ms = stage_b["nms_ms"]
             detection_batch = stage_b["detections"]
+
+            # Kalman smoother: fills tile-boundary / view-overlap gaps for
+            # panorama mode only.  The regular no-tiles path relies on ByteTracker.
+            if _use_panorama and getattr(self, "_tile_kalman", None) is not None:
+                detection_batch = self._apply_kalman_smoother(detection_batch)
+
             postprocess_total_t0 = time.perf_counter()
             if self.args.plot_performance:
                 _tpost = time.perf_counter()
@@ -1386,6 +1455,12 @@ class OptimizedStreamer(Streamer):
             # ── No-motion batch: identical path to _stream_inference_impl ──────────
             if stage_a.get("skip_reason") == "no_motion":
                 Streamer.logger.debug("No motion detected in tile-mode batch – skipping inference")
+                # Advance the activation window frame counter even for skipped batches
+                # so persistence ages out correctly with real elapsed time.
+                _tile_win_nm = getattr(self, "_tile_activation", None)
+                if _tile_win_nm is not None:
+                    for _ in im0s:
+                        _tile_win_nm.tick()
                 empty_preds = return_no_motion_frames(im0s=im0s, batch_size=len(im0s))
                 if self.mp is not None and self.args.bench:
                     for fid in frame_ids:
@@ -1435,6 +1510,9 @@ class OptimizedStreamer(Streamer):
                         "event_saving_ms_per_frame": 0.0,
                         "total_ms_per_frame": total_ms / max(len(im0s), 1),
                         "fps_sliding": fps_sliding,
+                        "tile_skip_rate": float("nan"),
+                        "tiles_total_per_frame": 0.0,
+                        "tiles_submitted_per_frame": 0.0,
                     })
                     timeline_logger.log_span(batch_idx, "batch_total", t_batch_start - stream_start, t_now - stream_start, {
                         "inference_ran": 0, "frames_in_batch": int(len(im0s)),
@@ -1454,17 +1532,36 @@ class OptimizedStreamer(Streamer):
                 _t0 = time.perf_counter()
                 _t0_rel = _t0 - stream_start
 
-            # ── Stage B (tiles): split → microbatch inference → reconstruct ────────
+            # ── Stage B (tiles): split → (gate) → microbatch inference → reconstruct ─
             all_tiles_with_meta: list = []
             overlap_px = max(0, int(round(tile_size * overlap_ratio)))
+            fg_masks_b = stage_a.get("fg_masks") or []
+            tile_win = getattr(self, "_tile_activation", None)
+            per_frame_tile_metrics: dict = {}   # bni_t → {"total": int, "submitted": int}
+
+            if tile_win is not None:
+                tile_win.reset_batch_metrics()
+
             for bni_t, (keep_frame, img, fid) in enumerate(zip(mfgs, im0s, frame_ids)):
+                if tile_win is not None:
+                    tile_win.tick()   # advance once per video frame (including skipped)
+                per_frame_tile_metrics[bni_t] = {"total": 0, "submitted": 0}
                 if not keep_frame:
                     continue
                 try:
                     fid_int = int(fid)
                 except (TypeError, ValueError):
                     fid_int = hash(str(fid)) & 0x7FFFFFFF
+                fg_mask_b = fg_masks_b[bni_t] if bni_t < len(fg_masks_b) else None
+                frame_shape_b = img.shape[:2]
                 for tile_img, meta in split_image_gen(img, fid_int, tile_size=tile_size, overlap=overlap_px):
+                    tx_b, ty_b = meta["left_x"], meta["top_y"]
+                    per_frame_tile_metrics[bni_t]["total"] += 1
+                    if tile_win is not None and not tile_win.gate_tile(
+                        fg_mask_b, frame_shape_b, tx_b, ty_b, tile_size
+                    ):
+                        continue    # cold tile — skip inference, Kalman fills any gap
+                    per_frame_tile_metrics[bni_t]["submitted"] += 1
                     all_tiles_with_meta.append((tile_img, meta, bni_t))
 
             # Per-frame accumulator: keyed by the integer frame-id used in tile metas
@@ -1523,6 +1620,10 @@ class OptimizedStreamer(Streamer):
                     classes_t = classes_t[road_mask]
                     if boxes_t.numel() == 0:
                         continue
+
+                    # Tile had road-scene detections → extend its persistence window
+                    if tile_win is not None:
+                        tile_win.mark_detection(meta["top_y"], meta["left_x"])
 
                     # Reconstruct tile-local boxes → frame-coordinate boxes (in-place)
                     boxes_np = boxes_t.float().cpu().numpy().copy()
@@ -1610,6 +1711,10 @@ class OptimizedStreamer(Streamer):
 
             detection_batch = DetectionBatch(frames=frames_dets)
             # ── End Stage B (tiles) ───────────────────────────────────────────────
+
+            # Kalman smoother: fills tile-boundary gaps before ByteTracker
+            if getattr(self, "_tile_kalman", None) is not None:
+                detection_batch = self._apply_kalman_smoother(detection_batch)
 
             postprocess_total_t0 = time.perf_counter()
             if self.args.plot_performance:
@@ -1730,13 +1835,30 @@ class OptimizedStreamer(Streamer):
                     "event_saving_ms_per_frame": batch_stage_metrics.get("event_saving_ms", 0.0) / max(frames_in_batch, 1),
                     "total_ms_per_frame": total_ms / max(frames_in_batch, 1),
                     "fps_sliding": fps,
+                    # ── Tile activation research metrics ──────────────────────────────
+                    "tile_skip_rate": tile_win.batch_skip_rate if tile_win is not None else float("nan"),
+                    "tiles_total_per_frame": (tile_win.batch_total / max(frames_in_batch, 1)) if tile_win is not None else float("nan"),
+                    "tiles_submitted_per_frame": (tile_win.batch_submitted / max(frames_in_batch, 1)) if tile_win is not None else float("nan"),
                 })
+                # Periodic console summary so the skip rate is visible without CSV post-processing
+                if tile_win is not None and (batch_idx % 100 == 0 or batch_idx == 0):
+                    Streamer.logger.info(
+                        "[tiles][gate] batch %d — skip %.1f%% (%d/%d tiles submitted) | "
+                        "cumulative skip %.1f%%",
+                        batch_idx,
+                        tile_win.batch_skip_rate * 100,
+                        tile_win.batch_submitted, tile_win.batch_total,
+                        tile_win.cumulative_skip_rate * 100,
+                    )
                 scores_list = getattr(self.logic_module.get("SUBTRACTOR", None), "last_motion_scores", None) or []
                 for row in frame_log_rows:
                     fid_row = row["frame_id"]
                     bni_row = row["bni"]
                     frame_stage_metrics = self._get_frame_stage_metrics(fid_row)
                     motion_score = float(scores_list[bni_row]) if bni_row < len(scores_list) else float("nan")
+                    _fm = per_frame_tile_metrics.get(bni_row, {"total": 0, "submitted": 0})
+                    _fm_total = _fm["total"]
+                    _fm_skip = 1.0 - _fm["submitted"] / max(_fm_total, 1) if _fm_total > 0 else float("nan")
                     frame_logger.log({
                         "t_wall": t_now, "batch_idx": batch_idx,
                         "frame_id": int(fid_row) if str(fid_row).isdigit() else fid_row,
@@ -1762,6 +1884,10 @@ class OptimizedStreamer(Streamer):
                             + frame_stage_metrics.get("preview_encode_ms", 0.0)
                             + frame_stage_metrics.get("mqtt_ms", 0.0)
                         ),
+                        # ── per-frame tile research columns ──────────────────────────
+                        "tiles_total": _fm_total,
+                        "tiles_submitted": _fm["submitted"],
+                        "tile_skip_rate": _fm_skip,
                     })
                 timeline_logger.log_span(
                     batch_idx, "batch_total", t_batch_start - stream_start, t_now - stream_start,
@@ -1794,6 +1920,19 @@ class OptimizedStreamer(Streamer):
             total_time = time.perf_counter() - stream_start
             if total_frames > 0:
                 print(f"[FPS][tiles] FINAL Average FPS: {total_frames / total_time:.2f}")
+
+        # Tile activation cumulative summary — useful for research / benchmarking
+        _tile_win_final = getattr(self, "_tile_activation", None)
+        if _tile_win_final is not None and _tile_win_final.cumulative_total > 0:
+            cum = _tile_win_final.get_cumulative_metrics()
+            Streamer.logger.info(
+                "[tiles][gate] STREAM TOTAL — %.1f%% tiles skipped  "
+                "(%d submitted / %d total, %d skipped)",
+                cum["cumulative_tile_skip_rate"] * 100,
+                cum["cumulative_tiles_submitted"],
+                cum["cumulative_tiles_total"],
+                cum["cumulative_tiles_skipped"],
+            )
 
         if self.args.plot_performance:
             try:
