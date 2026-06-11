@@ -100,6 +100,10 @@ class Subtractor(EventExtractorInterface):
         self.last_motion_scores = []  # list[float], same length as batch
         self.lanes_mask: Optional[np.ndarray] = None
         self.crosswalk_mask: Optional[np.ndarray] = None
+        # Running OR-accumulation of all vehicle-gated calibration candidates.
+        # None until the first vehicle-gated cycle completes; static detection
+        # is served as the lane fallback only while this remains None.
+        self._vehicle_gated_lanes_mask: Optional[np.ndarray] = None
         self._last_frame_shape: Optional[tuple[int, int]] = None
         self._source_is_stream = False
         self._startup_warmup_active = False
@@ -531,7 +535,22 @@ class Subtractor(EventExtractorInterface):
                 self._vehicle_confirmed_frames,
             )
             if self._last_calibration_frame is not None:
-                self.__apply_calibration(self._last_calibration_frame, save_img=True)
+                self.__apply_calibration(
+                    self._last_calibration_frame,
+                    save_img=True,
+                    skip_static_merge=True,
+                )
+                # OR-merge into the running vehicle-gated accumulation so each
+                # recalibration cycle adds lanes it observed rather than replacing
+                # what previous cycles found.
+                if self.lanes_mask is not None:
+                    if self._vehicle_gated_lanes_mask is None:
+                        self._vehicle_gated_lanes_mask = self.lanes_mask.copy()
+                    else:
+                        self._vehicle_gated_lanes_mask = cv2.bitwise_or(
+                            self._vehicle_gated_lanes_mask, self.lanes_mask
+                        )
+                    self.lanes_mask = self._vehicle_gated_lanes_mask
 
         self.accum_time = -1
         self._startup_warmup_active = False
@@ -830,8 +849,12 @@ class Subtractor(EventExtractorInterface):
                 100.0 * float(self._unstable_motion_map.sum()) / max(float(self._unstable_motion_map.size), 1.0),
             )
 
-        # Hybrid merge: blend motion accumulation result with static geometry baseline
-        candidate_lanes = self._merge_with_static(candidate_lanes)
+        # Blend with static only on the startup/MOG2 path (skip_static_merge=False).
+        # Vehicle-gated calibrations set skip_static_merge=True: the fgbg slow-
+        # learning model already discriminates vehicles from background, so blending
+        # with static would reintroduce the dark-pixel contamination being eliminated.
+        if not kwargs.get("skip_static_merge", False):
+            candidate_lanes = self._merge_with_static(candidate_lanes)
 
         candidate_crosswalk = self.__detect_crosswalks(last_frame=frame, lanes_mask=candidate_lanes)
 
