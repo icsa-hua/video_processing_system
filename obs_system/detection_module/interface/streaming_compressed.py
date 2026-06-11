@@ -640,6 +640,39 @@ class OptimizedStreamer(Streamer):
         }
 
     def _stage_c_tracking_and_hazard_logic(self, detection_batch: DetectionBatch, orig_images_bgr, profilers):
+        # YOLO-gated lane calibration: pass batch indices where YOLO confirmed
+        # at least one detection (score >= CONF_THR) to the subtractor accumulator.
+        # Motion boxes injected by _merge_motion_boxes have confidence 0.15 <
+        # CONF_THR so they are automatically excluded — only real YOLO vehicle
+        # detections drive the lane calibration window.
+        _subtractor = self.logic_module.get("SUBTRACTOR") if self.logic_module is not None else None
+        if _subtractor is not None and hasattr(_subtractor, "notify_vehicle_detections"):
+            _class_names = getattr(getattr(self, "converter", None), "class_names", [])
+            _vehicle_ids = {
+                i for i, n in enumerate(_class_names) if n.lower() in {v.lower() for v in VOCAB}
+            }
+            _yolo_confirmed = []
+            for fd in detection_batch:
+                if fd.is_empty or fd.scores is None or fd.classes is None:
+                    continue
+                scores_cpu = fd.scores.cpu()
+                classes_cpu = fd.classes.cpu()
+                high_conf = scores_cpu >= CONF_THR
+                if not high_conf.any():
+                    continue
+                if _vehicle_ids:
+                    is_vehicle = torch.tensor(
+                        [int(c) in _vehicle_ids for c in classes_cpu.tolist()],
+                        dtype=torch.bool,
+                    )
+                    if bool((high_conf & is_vehicle).any()):
+                        _yolo_confirmed.append(fd.batch_index)
+                else:
+                    # No class mapping available — fall back to score-only gate
+                    _yolo_confirmed.append(fd.batch_index)
+            if _yolo_confirmed:
+                _subtractor.notify_vehicle_detections(_yolo_confirmed)
+
         tracked_results = []
         frame_bundles = []
         for frame in detection_batch:

@@ -124,6 +124,19 @@ class Subtractor(EventExtractorInterface):
         self._motion_dense_threshold: float = 0.006   # above → prefer motion-derived lanes
         self._static_lane_max_fill_ratio: float = 0.65
 
+        # YOLO-gated calibration ───────────────────────────────────────────────
+        # The calibration accumulator is now driven by vehicle-confirmed frames
+        # (notify_vehicle_detections) rather than raw MOG2 output.  This counter
+        # tracks how many such frames have contributed to the current window.
+        self._vehicle_confirmed_frames: int = 0
+        # Minimum vehicle-confirmed frames before the dynamic candidate is trusted.
+        # Below this the window closed without enough real vehicle evidence and the
+        # static baseline is kept instead.
+        self._min_vehicle_frames_for_calibration: int = max(10, self.initial_accum_time // 5)
+        # Last frame seen by detect(); used as the reference frame for crosswalk
+        # detection when __apply_calibration is triggered from notify_vehicle_detections.
+        self._last_calibration_frame: Optional[np.ndarray] = None
+
         # ── Step 1: motion-quality filtering ──────────────────────────────────
         # Elliptic kernel used for the motion-gate morphology pass (larger than
         # kernel3 to better connect coherent blobs before CC analysis).
@@ -196,6 +209,7 @@ class Subtractor(EventExtractorInterface):
         self.prev_mask = None
         self.__calibration_started = False
         self.__calibration_ended = False
+        self._vehicle_confirmed_frames = 0
 
 
     def _has_nonempty_mask(self, mask: Optional[np.ndarray]) -> bool:
@@ -428,6 +442,92 @@ class Subtractor(EventExtractorInterface):
         )
 
 
+    def notify_vehicle_detections(self, confirmed_batch_indices: list) -> None:
+        """YOLO-gated lane calibration accumulator.
+
+        Called from Stage C after YOLO inference completes for a batch.
+        Only the fg_masks of frames where YOLO confirmed at least one vehicle
+        (score >= CONF_THR) are accumulated — MOG2 false positives from
+        trees, shadows, and lighting changes that would otherwise contaminate
+        the lane candidate are silently skipped.
+
+        Calibration completes once ``accum_time`` vehicle-confirmed frames
+        have been accumulated.  If fewer than
+        ``_min_vehicle_frames_for_calibration`` frames were confirmed before
+        the window closed, the dynamic result is discarded and the static
+        baseline is kept.
+        """
+        if self.__calibration_ended or self.accum_time <= 0:
+            return
+        if not self.__calibration_started or not confirmed_batch_indices:
+            return
+
+        h, w = self._last_frame_shape if self._last_frame_shape is not None else self.downscale
+
+        for bni in confirmed_batch_indices:
+            fg_masks = getattr(self, "_last_batch_fg_masks", [])
+            if bni >= len(fg_masks):
+                continue
+            fg_mask = fg_masks[bni]
+            if fg_mask is None:
+                continue
+
+            # fg_mask is already thresholded at 127 (shadows included); apply
+            # the same CC quality filter used by the motion gate so large
+            # connected vegetation blobs don't survive via vehicle confirmation.
+            fg_clean = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, self.kernel3)
+            if self._cached_total_pixels > 0:
+                fg_clean = self._filter_motion_components(fg_clean)
+
+            if ENABLE_UNSTABLE_MOTION_MAP:
+                fg_bin = (fg_clean > 0).astype(np.float32)
+                if self._unstable_motion_accumulator is None:
+                    self._unstable_motion_accumulator = np.zeros_like(fg_bin, dtype=np.float32)
+                    self._unstable_motion_frame_count = 0
+                self._unstable_motion_accumulator += fg_bin
+                self._unstable_motion_frame_count += 1
+
+            mask_resized = cv2.resize(fg_clean.astype(np.float32), (w, h))
+            blended = cv2.addWeighted(mask_resized, 0.35, self.prev_mask, 0.65, 0)
+            self.prev_mask = blended
+            self.acc_mask = cv2.add(self.acc_mask, blended)
+
+            self._vehicle_confirmed_frames += 1
+            self.accum_time -= 1
+
+            if self.accum_time <= 0:
+                self.__calibration_ended = True
+                break
+
+        if not self.__calibration_ended:
+            return
+
+        # ── calibration window closed ─────────────────────────────────────────
+        if self._vehicle_confirmed_frames < self._min_vehicle_frames_for_calibration:
+            logger.info(
+                "YOLO-gated calibration: only %d/%d vehicle-confirmed frames; "
+                "keeping static baseline",
+                self._vehicle_confirmed_frames,
+                self._min_vehicle_frames_for_calibration,
+            )
+            if self.lanes_mask is None and self._static_lanes_mask is not None:
+                self.lanes_mask = self._static_lanes_mask.copy()
+        else:
+            logger.info(
+                "YOLO-gated calibration complete: %d vehicle-confirmed frames accumulated",
+                self._vehicle_confirmed_frames,
+            )
+            if self._last_calibration_frame is not None:
+                self.__apply_calibration(self._last_calibration_frame, save_img=True)
+
+        self.accum_time = -1
+        self._startup_warmup_active = False
+        self._ready_for_inference = True
+        self._recalibration_active = False
+        self._frames_since_last_calibration = 0
+        self._recent.clear()
+        self._hold = 0
+
     def is_ready_for_inference(self) -> bool:
         return bool(self._ready_for_inference)
 
@@ -499,6 +599,7 @@ class Subtractor(EventExtractorInterface):
         self._last_batch_fg_masks: list = []  # binary downscale masks, one per frame
         lanes_final = None
         last_frame = batch[-1]
+        self._last_calibration_frame = last_frame  # used by notify_vehicle_detections
         startup_skip_batch = self._startup_warmup_active and not self._ready_for_inference
 
         for frame in batch:
@@ -519,14 +620,15 @@ class Subtractor(EventExtractorInterface):
             if save_img and save_idx is not None: 
                 save_idx += 1 
 
-            should_accumulate_calibration = False
-            if self.accum_time > 0:
-                should_accumulate_calibration = startup_skip_batch or self._recalibration_active or motion_flag
-
-            if should_accumulate_calibration:
+            # Accumulation is YOLO-gated: only frames where YOLO confirms a
+            # vehicle contribute to the calibration window, via
+            # notify_vehicle_detections() called from Stage C.
+            # Exception: live-stream startup warmup where YOLO has not yet run
+            # still uses the old MOG2 path so the subtractor has an initial
+            # baseline before inference begins.
+            if startup_skip_batch and self.accum_time > 0:
                 self.__cal_calibrator(frame, size=(h,w))
-                if startup_skip_batch:
-                    self._startup_frames_seen = min(self.initial_accum_time, self._startup_frames_seen + 1)
+                self._startup_frames_seen = min(self.initial_accum_time, self._startup_frames_seen + 1)
 
         # Update rolling density window and trigger one-shot static detection
         # once the background model has had enough frames to stabilise
