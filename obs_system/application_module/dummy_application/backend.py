@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import datetime
 import logging
+import os
 import queue as queue_module
 import time
 from multiprocessing import Process, Queue, Value
+from pathlib import Path
 from threading import Lock
 
 from fastapi import FastAPI, HTTPException
@@ -32,6 +35,13 @@ examine_process: Process | None = None
 examine_frame_queue: Queue = Queue(maxsize=2)
 examine_ready = Value("b", False)
 examine_stop_requested = Value("b", False)
+record_lock = Lock()
+record_process: Process | None = None
+record_running = Value("b", False)
+record_done = Value("b", False)
+record_error = Value("b", False)
+record_stop_flag = Value("b", False)
+_current_record_output_path: str = ""
 
 
 class VideoProcessingRequest(BaseModel):
@@ -64,6 +74,12 @@ class StreamExaminationRequest(BaseModel):
     preview_max_width: int = 960
     preview_jpeg_quality: int = 70
     preview_fps: float = 8.0
+
+
+class StreamRecordRequest(BaseModel):
+    video_source: str
+    duration_seconds: int = 30
+    output_dir: str = "recordings"
 
 
 def _is_process_alive(process: Process | None) -> bool:
@@ -103,6 +119,13 @@ def _reset_examine_preview_state() -> None:
     examine_frame_queue = Queue(maxsize=2)
     examine_ready.value = False
     examine_stop_requested.value = False
+
+
+def _reset_record_state() -> None:
+    record_running.value = False
+    record_done.value = False
+    record_error.value = False
+    record_stop_flag.value = False
 
 
 def _finalize_process(process: Process | None, *, graceful_timeout: float, force_timeout: float, process_name: str) -> Process | None:
@@ -160,6 +183,89 @@ def _stop_examine_worker() -> None:
     )
 
     examine_stop_requested.value = False
+
+
+def _stop_record_worker() -> None:
+    global record_process
+
+    record_stop_flag.value = True
+
+    record_process = _finalize_process(
+        record_process,
+        graceful_timeout=5.0,
+        force_timeout=5.0,
+        process_name="stream recording worker",
+    )
+
+
+def _record_worker_main(
+    video_source: str,
+    output_path: str,
+    duration_seconds: int,
+    running_flag: Value,
+    done_flag: Value,
+    error_flag: Value,
+    stop_flag: Value,
+) -> None:
+    import os
+    import time
+
+    import cv2
+
+    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+
+    cap = None
+    writer = None
+
+    try:
+        print(f"[RECORD] Opening stream: {video_source}", flush=True)
+        cap = cv2.VideoCapture()
+        opened = cap.open(video_source, cv2.CAP_FFMPEG)
+        if not opened or not cap.isOpened():
+            print("[RECORD] Failed to open stream.", flush=True)
+            error_flag.value = True
+            return
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0 or fps > 240:
+            fps = 25.0
+
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+        running_flag.value = True
+        print(f"[RECORD] Recording started → {output_path} ({duration_seconds}s)", flush=True)
+
+        start_time = time.perf_counter()
+
+        while not bool(stop_flag.value):
+            if time.perf_counter() - start_time >= duration_seconds:
+                break
+
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                time.sleep(0.01)
+                continue
+
+            writer.write(frame)
+
+        print(f"[RECORD] Recording finished → {output_path}", flush=True)
+        done_flag.value = True
+
+    except Exception as exc:
+        print(f"[RECORD] Error: {exc}", flush=True)
+        error_flag.value = True
+    finally:
+        running_flag.value = False
+        if writer is not None:
+            writer.release()
+        if cap is not None:
+            cap.release()
 
 
 def _worker_main(config: PipelineConfig, preview_queue: Queue, ready_flag: Value) -> None:
@@ -350,6 +456,67 @@ def get_examine_frame():
         _frame_stream(examine_frame_queue, examine_ready, _is_examine_worker_alive),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
+
+
+@server.post("/examine_stream/record")
+def start_stream_recording(request: StreamRecordRequest):
+    global record_process, _current_record_output_path
+
+    if not request.video_source or not request.video_source.strip():
+        raise HTTPException(status_code=400, detail="Please provide a stream URL.")
+
+    if request.duration_seconds < 1 or request.duration_seconds > 86400:
+        raise HTTPException(status_code=400, detail="duration_seconds must be between 1 and 86400.")
+
+    with record_lock:
+        if _is_process_alive(record_process):
+            return {"status": "Already recording", "output_path": _current_record_output_path}
+
+        _reset_record_state()
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = str(Path(request.output_dir) / f"record_{timestamp}.mp4")
+        _current_record_output_path = output_path
+
+        record_process = Process(
+            target=_record_worker_main,
+            args=(
+                request.video_source.strip(),
+                output_path,
+                request.duration_seconds,
+                record_running,
+                record_done,
+                record_error,
+                record_stop_flag,
+            ),
+        )
+        record_process.start()
+
+    return {
+        "status": "Recording started",
+        "output_path": output_path,
+        "duration_seconds": request.duration_seconds,
+    }
+
+
+@server.get("/examine_stream/record/status")
+def get_record_status():
+    return {
+        "running": bool(record_running.value) or (_is_process_alive(record_process) and not bool(record_done.value) and not bool(record_error.value)),
+        "done": bool(record_done.value),
+        "error": bool(record_error.value),
+        "output_path": _current_record_output_path,
+    }
+
+
+@server.post("/examine_stream/record/stop")
+def stop_stream_recording():
+    with record_lock:
+        if not _is_process_alive(record_process):
+            return {"status": "Not recording"}
+        _stop_record_worker()
+
+    return {"status": "Recording stopped", "output_path": _current_record_output_path}
 
 
 @server.get("/examine_stream/view")
