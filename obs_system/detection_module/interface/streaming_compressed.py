@@ -307,7 +307,17 @@ class OptimizedStreamer(Streamer):
         if len(mot_boxes) == 0:
             return frame_det
 
-        mot_boxes_t = torch.as_tensor(mot_boxes, dtype=torch.float32)
+        # Stay on the same device as YOLO tensors; fall back to CUDA when the frame
+        # is empty (no existing boxes to infer device from) so motion tensors never
+        # force a host-side copy of the main detection pipeline.
+        if not frame_det.is_empty:
+            device = frame_det.boxes.device
+        elif torch.cuda.is_available():
+            device = torch.device("cuda:0")
+        else:
+            device = torch.device("cpu")
+
+        mot_boxes_t = torch.as_tensor(mot_boxes, dtype=torch.float32).to(device)
         if self.use_roi and self.logic_module is not None and self.logic_module.get("ROI") is not None:
             mot_boxes_t = self.logic_module["ROI"].translate_bounding_boxes(
                 results=mot_boxes_t,
@@ -315,9 +325,10 @@ class OptimizedStreamer(Streamer):
             )
             if mot_boxes_t is None or mot_boxes_t.numel() == 0:
                 return frame_det
+            mot_boxes_t = mot_boxes_t.to(device)
 
-        mot_scores_t = torch.as_tensor(mot_scores, dtype=torch.float32)
-        mot_classes_t = torch.as_tensor(mot_classes, dtype=torch.int64)
+        mot_scores_t = torch.as_tensor(mot_scores, dtype=torch.float32).to(device)
+        mot_classes_t = torch.as_tensor(mot_classes, dtype=torch.int64).to(device)
 
         if frame_det.is_empty:
             return FrameDetections(

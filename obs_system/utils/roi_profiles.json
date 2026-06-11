@@ -16,8 +16,8 @@
     "reference_height": 540
   },
   "highway": {
-    "x1": 0,
-    "y1": 360,
+    "x1": 100,
+    "y1": 600,
     "x2": 1920,
     "y2": 1080,
     "reference_width": 1920,
