@@ -249,6 +249,95 @@ class OptimizedStreamer(Streamer):
         )
         return keep
 
+    def _extract_motion_detections(
+        self,
+        fg_mask: Optional[np.ndarray],
+        im0_hw: tuple,
+    ) -> tuple:
+        """
+        Extract bounding boxes from a binary MOG2 fg_mask and return them as
+        low-confidence detections to be merged with YOLO detections.
+
+        Confidence is fixed at MOTION_BOX_CONFIDENCE (below ByteTrack's
+        track_activation_threshold=0.25) so these detections only reinforce
+        existing tracks and never spawn new ones — the allow_spawn=False
+        behaviour from CarDet_Dummy_EdgeAI.
+        """
+        if fg_mask is None or fg_mask.size == 0:
+            return np.zeros((0, 4), np.float32), np.zeros((0,), np.float32), np.zeros((0,), np.int64)
+
+        mask_h, mask_w = fg_mask.shape[:2]
+        frame_h, frame_w = im0_hw
+        sx = float(frame_w) / max(float(mask_w), 1.0)
+        sy = float(frame_h) / max(float(mask_h), 1.0)
+        total_px = float(mask_h * mask_w)
+
+        contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        boxes, scores, classes = [], [], []
+        for cnt in contours:
+            area = float(cv2.contourArea(cnt))
+            area_ratio = area / max(total_px, 1.0)
+            if area_ratio < MOTION_BOX_MIN_AREA_RATIO or area_ratio > MOTION_BOX_MAX_AREA_RATIO:
+                continue
+            x, y, w, h = cv2.boundingRect(cnt)
+            aspect = float(w) / max(float(h), 1e-6)
+            if aspect < MOTION_BOX_MIN_ASPECT or aspect > MOTION_BOX_MAX_ASPECT:
+                continue
+            boxes.append([x * sx, y * sy, (x + w) * sx, (y + h) * sy])
+            scores.append(MOTION_BOX_CONFIDENCE)
+            classes.append(0)
+
+        if not boxes:
+            return np.zeros((0, 4), np.float32), np.zeros((0,), np.float32), np.zeros((0,), np.int64)
+
+        return (
+            np.array(boxes, dtype=np.float32),
+            np.array(scores, dtype=np.float32),
+            np.array(classes, dtype=np.int64),
+        )
+
+    def _merge_motion_boxes(
+        self,
+        frame_det: "FrameDetections",
+        fg_mask: Optional[np.ndarray],
+        im0_hw: tuple,
+    ) -> "FrameDetections":
+        """Merge allow_spawn=False motion boxes into frame_det at low confidence."""
+        mot_boxes, mot_scores, mot_classes = self._extract_motion_detections(fg_mask, im0_hw)
+        if len(mot_boxes) == 0:
+            return frame_det
+
+        mot_boxes_t = torch.as_tensor(mot_boxes, dtype=torch.float32)
+        if self.use_roi and self.logic_module is not None and self.logic_module.get("ROI") is not None:
+            mot_boxes_t = self.logic_module["ROI"].translate_bounding_boxes(
+                results=mot_boxes_t,
+                orig_img_shape=self.original_imgsz,
+            )
+            if mot_boxes_t is None or mot_boxes_t.numel() == 0:
+                return frame_det
+
+        mot_scores_t = torch.as_tensor(mot_scores, dtype=torch.float32)
+        mot_classes_t = torch.as_tensor(mot_classes, dtype=torch.int64)
+
+        if frame_det.is_empty:
+            return FrameDetections(
+                frame_id=frame_det.frame_id,
+                batch_index=frame_det.batch_index,
+                orig_img=frame_det.orig_img,
+                boxes=mot_boxes_t,
+                scores=mot_scores_t,
+                classes=mot_classes_t,
+            )
+
+        return FrameDetections(
+            frame_id=frame_det.frame_id,
+            batch_index=frame_det.batch_index,
+            orig_img=frame_det.orig_img,
+            boxes=torch.cat([frame_det.boxes, mot_boxes_t], dim=0),
+            scores=torch.cat([frame_det.scores, mot_scores_t], dim=0),
+            classes=torch.cat([frame_det.classes, mot_classes_t], dim=0),
+        )
+
     def _stage_b_panorama_inference(self, stage_a, model, profilers, activities, stream_start, timeline_logger, batch_idx):
         """
         Panorama-mode stage B.
@@ -349,9 +438,15 @@ class OptimizedStreamer(Streamer):
         frames: List[FrameDetections] = []
         for bni, (keep_frame, fid) in enumerate(zip(mfgs, frame_ids)):
             orig_img = original_images[bni]
+            fg_mask_bni = fg_masks[bni] if bni < len(fg_masks) else None
 
-            if not keep_frame or bni not in frame_acc or not frame_acc[bni]["boxes"]:
+            if not keep_frame:
                 frames.append(FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img))
+                continue
+
+            if bni not in frame_acc or not frame_acc[bni]["boxes"]:
+                fd = FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img)
+                frames.append(self._merge_motion_boxes(fd, fg_mask_bni, im0s[bni].shape[:2]))
                 continue
 
             accum = frame_acc[bni]
@@ -378,17 +473,19 @@ class OptimizedStreamer(Streamer):
                 )
 
             if boxes_t_all.numel() == 0:
-                frames.append(FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img))
+                fd = FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img)
+                frames.append(self._merge_motion_boxes(fd, fg_mask_bni, im0s[bni].shape[:2]))
                 continue
 
-            frames.append(FrameDetections(
+            fd = FrameDetections(
                 frame_id=fid,
                 batch_index=bni,
                 orig_img=orig_img,
                 boxes=boxes_t_all,
                 scores=scores_t_all,
                 classes=classes_t_all,
-            ))
+            )
+            frames.append(self._merge_motion_boxes(fd, fg_mask_bni, im0s[bni].shape[:2]))
 
         return {
             "detections": DetectionBatch(frames=frames),
@@ -461,6 +558,7 @@ class OptimizedStreamer(Streamer):
         if event is not None and torch.cuda.is_available():
             torch.cuda.current_stream().wait_event(event)
 
+        fg_masks = stage_a.get("fg_masks") or []
         frames: List[FrameDetections] = []
         nms_ms = 0.0
         for bni, fid in enumerate(frame_ids):
@@ -468,9 +566,13 @@ class OptimizedStreamer(Streamer):
             boxes = i_boxes[bni]
             scores = i_scores[bni]
             cls_ = i_classes[bni]
+            fg_mask_bni = fg_masks[bni] if bni < len(fg_masks) else None
 
             if not mfgs[bni] or boxes is None or len(boxes) == 0:
-                frames.append(FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img))
+                fd = FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img)
+                if mfgs[bni]:
+                    fd = self._merge_motion_boxes(fd, fg_mask_bni, im0s[bni].shape[:2])
+                frames.append(fd)
                 continue
 
             boxes_t = boxes if torch.is_tensor(boxes) else torch.as_tensor(boxes)
@@ -486,7 +588,8 @@ class OptimizedStreamer(Streamer):
             classes_t = classes_t[road_mask]
 
             if boxes_t.numel() == 0:
-                frames.append(FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img))
+                fd = FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img)
+                frames.append(self._merge_motion_boxes(fd, fg_mask_bni, im0s[bni].shape[:2]))
                 continue
 
             t_nms0 = time.perf_counter()
@@ -503,19 +606,19 @@ class OptimizedStreamer(Streamer):
                 )
 
             if boxes_t.numel() == 0:
-                frames.append(FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img))
+                fd = FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img)
+                frames.append(self._merge_motion_boxes(fd, fg_mask_bni, im0s[bni].shape[:2]))
                 continue
 
-            frames.append(
-                FrameDetections(
-                    frame_id=fid,
-                    batch_index=bni,
-                    orig_img=orig_img,
-                    boxes=boxes_t,
-                    scores=scores_t,
-                    classes=classes_t,
-                )
+            fd = FrameDetections(
+                frame_id=fid,
+                batch_index=bni,
+                orig_img=orig_img,
+                boxes=boxes_t,
+                scores=scores_t,
+                classes=classes_t,
             )
+            frames.append(self._merge_motion_boxes(fd, fg_mask_bni, im0s[bni].shape[:2]))
 
         stage_a["im0s"] = im0s
         return {
@@ -1657,18 +1760,25 @@ class OptimizedStreamer(Streamer):
             frames_dets: List[FrameDetections] = []
             for bni_a, (fid, keep_frame) in enumerate(zip(frame_ids, mfgs)):
                 orig_img = original_images[bni_a]
+                fg_mask_bni = fg_masks_b[bni_a] if bni_a < len(fg_masks_b) else None
                 try:
                     fid_key = int(fid)
                 except (TypeError, ValueError):
                     fid_key = hash(str(fid)) & 0x7FFFFFFF
 
-                if not keep_frame or fid_key not in frame_tile_acc:
+                if not keep_frame:
                     frames_dets.append(FrameDetections.empty(frame_id=fid, batch_index=bni_a, orig_img=orig_img))
+                    continue
+
+                if fid_key not in frame_tile_acc:
+                    fd = FrameDetections.empty(frame_id=fid, batch_index=bni_a, orig_img=orig_img)
+                    frames_dets.append(self._merge_motion_boxes(fd, fg_mask_bni, im0s[bni_a].shape[:2]))
                     continue
 
                 accum = frame_tile_acc[fid_key]
                 if not accum["boxes"]:
-                    frames_dets.append(FrameDetections.empty(frame_id=fid, batch_index=bni_a, orig_img=orig_img))
+                    fd = FrameDetections.empty(frame_id=fid, batch_index=bni_a, orig_img=orig_img)
+                    frames_dets.append(self._merge_motion_boxes(fd, fg_mask_bni, im0s[bni_a].shape[:2]))
                     continue
 
                 all_boxes_np = np.concatenate(accum["boxes"], axis=0).astype(np.float32)
@@ -1697,17 +1807,19 @@ class OptimizedStreamer(Streamer):
                     )
 
                 if boxes_t_all.numel() == 0:
-                    frames_dets.append(FrameDetections.empty(frame_id=fid, batch_index=bni_a, orig_img=orig_img))
+                    fd = FrameDetections.empty(frame_id=fid, batch_index=bni_a, orig_img=orig_img)
+                    frames_dets.append(self._merge_motion_boxes(fd, fg_mask_bni, im0s[bni_a].shape[:2]))
                     continue
 
-                frames_dets.append(FrameDetections(
+                fd = FrameDetections(
                     frame_id=fid,
                     batch_index=bni_a,
                     orig_img=orig_img,
                     boxes=boxes_t_all,
                     scores=scores_t_all,
                     classes=classes_t_all,
-                ))
+                )
+                frames_dets.append(self._merge_motion_boxes(fd, fg_mask_bni, im0s[bni_a].shape[:2]))
 
             detection_batch = DetectionBatch(frames=frames_dets)
             # ── End Stage B (tiles) ───────────────────────────────────────────────
