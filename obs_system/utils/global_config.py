@@ -63,6 +63,19 @@ VOCAB = ['car', 'bus', 'bike',
 
 RED = (0, 0, 255)
 
+#--------- Motion-Derived Detection (allow_spawn) ----------
+# Confidence assigned to MOG2 foreground blobs merged alongside YOLO detections.
+# Must stay BELOW sv.ByteTrack.track_activation_threshold (default 0.25) so the blobs
+# enter only the second-round matching pass — reinforcing existing tracks but never
+# spawning new ones. This is the allow_spawn=False behaviour from CarDet_Dummy_EdgeAI.
+MOTION_BOX_CONFIDENCE = 0.15
+# Blob area as fraction of the fg_mask (downscale) total pixels
+MOTION_BOX_MIN_AREA_RATIO = 0.003
+MOTION_BOX_MAX_AREA_RATIO = 0.40
+# Bounding-box w/h aspect bounds — rejects needle-thin vegetation streaks
+MOTION_BOX_MIN_ASPECT = 0.4
+MOTION_BOX_MAX_ASPECT = 7.0
+
 #--------- Motion Quality Filtering (Step 1) ----------
 # Fraction of total frame area; blobs smaller than this are discarded as noise
 MIN_MOTION_COMPONENT_AREA_RATIO = 0.0002
