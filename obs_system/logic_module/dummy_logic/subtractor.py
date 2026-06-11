@@ -632,6 +632,11 @@ class Subtractor(EventExtractorInterface):
         # giving denser accumulation than the motion-gate mask (threshold 254).
         _, fg = cv2.threshold(self._last_fg_mask, 127, 255, cv2.THRESH_BINARY)
         fg_clean = cv2.morphologyEx(fg, cv2.MORPH_OPEN, self.kernel3)
+        # Remove scattered/thin vegetation blobs before accumulating — same CC quality
+        # filter used by the motion gate, applied here so the accumulator isn't
+        # contaminated by tree motion that would otherwise inflate candidate_lanes.
+        if self._cached_total_pixels > 0:
+            fg_clean = self._filter_motion_components(fg_clean)
 
         # ── Step 2: accumulate unstable-motion map at downscale resolution ────
         # fg_clean is already at downscale size (frame was resized before this call).
@@ -789,6 +794,17 @@ class Subtractor(EventExtractorInterface):
                 static_fill_ratio,
             )
             return merged
+
+        motion_fill_ratio = self._mask_fill_ratio(motion_mask)
+        if motion_fill_ratio >= self._static_lane_max_fill_ratio:
+            logger.info(
+                "Lane mask: motion candidate overfills ROI (fill=%.3f); "
+                "using static baseline (density=%.4f static_fill=%.3f)",
+                motion_fill_ratio,
+                mean_density,
+                static_fill_ratio,
+            )
+            return static.copy()
 
         motion_support = cv2.dilate(motion_mask, self.kernel15, iterations=2)
         static_supported = cv2.bitwise_and(static, motion_support)
