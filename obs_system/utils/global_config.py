@@ -102,6 +102,22 @@ PANORAMA_MIN_MOTION_FRACTION = 0.005
 # Cross-view NMS IoU threshold (applied after back-projecting all view detections to panorama space)
 PANORAMA_NMS_IOU = 0.35
 
+#--------- Tile Activation Persistence Window ----------
+# Set to False to disable per-tile motion gating and fall back to whole-frame inference.
+TILE_ACTIVATION_ENABLED = True
+# Frames a tile stays active after its last motion trigger or detection hit.
+TILE_ACTIVATION_PERSIST_FRAMES = 5
+# Minimum fraction of a tile's FG-mask region that must be foreground to trigger it.
+TILE_ACTIVATION_MOTION_MIN_RATIO = 0.005
+
+#--------- Tile / Panorama Kalman Detection Smoother ----------
+# Maximum frames a Kalman track survives without a matching detection.
+TILE_KALMAN_MAX_AGE = 3
+# Minimum detections before a track contributes Kalman-predicted boxes.
+TILE_KALMAN_MIN_HITS = 2
+# Minimum IoU to associate a detection with a Kalman-predicted track position.
+TILE_KALMAN_IOU_THRESHOLD = 0.35
+
 #--------- Road-Scene Class Filter ----------
 # Classes that cannot appear in a road traffic scene — removed from all detections.
 # Applied in both panorama and standard inference paths to reduce impossible-class FPs.
