@@ -5,7 +5,12 @@
     "x2": 430,
     "y2": 300,
     "reference_width": 640,
-    "reference_height": 640
+    "reference_height": 640,
+    "motion": {
+      "var_threshold": 32,
+      "gate_score_threshold": 0.002,
+      "max_components": 25
+    }
   },
   "MVI_39401": {
     "x1": 0,
@@ -13,7 +18,12 @@
     "x2": 960,
     "y2": 540,
     "reference_width": 960,
-    "reference_height": 540
+    "reference_height": 540,
+    "motion": {
+      "var_threshold": 48,
+      "gate_score_threshold": 0.003,
+      "max_components": 20
+    }
   },
   "highway": {
     "x1": 100,
@@ -21,7 +31,12 @@
     "x2": 1920,
     "y2": 1080,
     "reference_width": 1920,
-    "reference_height": 1080
+    "reference_height": 1080,
+    "motion": {
+      "var_threshold": 48,
+      "gate_score_threshold": 0.003,
+      "max_components": 20
+    }
   },
   "fisheye": {
     "x1": 70,
@@ -29,7 +44,12 @@
     "x2": 1170,
     "y2": 1030,
     "reference_width": 1244,
-    "reference_height": 1088
+    "reference_height": 1088,
+    "motion": {
+      "var_threshold": 48,
+      "gate_score_threshold": 0.003,
+      "max_components": 20
+    }
   },
   "short_1920_12fps": {
     "x1": 0,
@@ -37,6 +57,11 @@
     "x2": 1920,
     "y2": 500,
     "reference_width": 1920,
-    "reference_height": 720
+    "reference_height": 720,
+    "motion": {
+      "var_threshold": 48,
+      "gate_score_threshold": 0.003,
+      "max_components": 20
+    }
   }
 }

@@ -158,7 +158,13 @@ DEFAULT_ROI_CONFIG = {
     "reference_width": ROI_REFERENCE_WIDTH,
     "reference_height": ROI_REFERENCE_HEIGHT,
 }
+DEFAULT_MOTION_CONFIG = {
+    "var_threshold": VARTHRESHOLD,
+    "gate_score_threshold": MOTION_GATE_FILTERED_SCORE_THRESHOLD,
+    "max_components": MAX_MOTION_COMPONENTS,
+}
 ACTIVE_ROI_CONFIG = dict(DEFAULT_ROI_CONFIG)
+ACTIVE_MOTION_CONFIG = dict(DEFAULT_MOTION_CONFIG)
 ACTIVE_ROI_PROFILE = "default"
 
 
@@ -186,8 +192,50 @@ def _normalize_roi_profile(raw_profile, profile_name: str) -> dict[str, int]:
     return normalized
 
 
-def load_roi_profiles() -> dict[str, dict[str, int]]:
-    profiles = {"default": dict(DEFAULT_ROI_CONFIG)}
+def _normalize_motion_profile(raw_motion, profile_name: str) -> dict[str, float | int]:
+    if raw_motion is None:
+        return dict(DEFAULT_MOTION_CONFIG)
+
+    if not isinstance(raw_motion, dict):
+        raise ValueError(f"Motion profile for '{profile_name}' must be a JSON object.")
+
+    try:
+        normalized = {
+            "var_threshold": int(raw_motion.get("var_threshold", VARTHRESHOLD)),
+            "gate_score_threshold": float(
+                raw_motion.get("gate_score_threshold", MOTION_GATE_FILTERED_SCORE_THRESHOLD)
+            ),
+            "max_components": int(raw_motion.get("max_components", MAX_MOTION_COMPONENTS)),
+        }
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Motion profile for '{profile_name}' contains invalid values.") from exc
+
+    if normalized["var_threshold"] <= 0:
+        raise ValueError(f"Motion profile for '{profile_name}' must define a positive var_threshold.")
+    if normalized["gate_score_threshold"] < 0.0:
+        raise ValueError(f"Motion profile for '{profile_name}' must define a non-negative gate_score_threshold.")
+    if normalized["max_components"] <= 0:
+        raise ValueError(f"Motion profile for '{profile_name}' must define a positive max_components.")
+
+    return normalized
+
+
+def _normalize_video_profile(raw_profile, profile_name: str) -> dict[str, object]:
+    roi_config = _normalize_roi_profile(raw_profile, profile_name)
+    motion_config = _normalize_motion_profile(raw_profile.get("motion"), profile_name)
+    return {
+        **roi_config,
+        "motion": motion_config,
+    }
+
+
+def load_roi_profiles() -> dict[str, dict[str, object]]:
+    profiles = {
+        "default": {
+            **dict(DEFAULT_ROI_CONFIG),
+            "motion": dict(DEFAULT_MOTION_CONFIG),
+        }
+    }
 
     if not ROI_PROFILES_PATH.exists():
         return profiles
@@ -204,7 +252,7 @@ def load_roi_profiles() -> dict[str, dict[str, int]]:
 
     for profile_name, raw_profile in payload.items():
         try:
-            profiles[str(profile_name)] = _normalize_roi_profile(raw_profile, str(profile_name))
+            profiles[str(profile_name)] = _normalize_video_profile(raw_profile, str(profile_name))
         except ValueError as exc:
             logger.warning("%s", exc)
 
@@ -244,7 +292,7 @@ def _candidate_roi_profile_keys(video_source: str = "", roi_profile: str = "") -
     return keys
 
 
-def resolve_roi_profile(video_source: str = "", roi_profile: str = "") -> tuple[str, dict[str, int]]:
+def resolve_roi_profile(video_source: str = "", roi_profile: str = "") -> tuple[str, dict[str, object]]:
     profiles = load_roi_profiles()
     lowercase_profiles = {name.lower(): name for name in profiles}
 
@@ -261,12 +309,21 @@ def resolve_roi_profile(video_source: str = "", roi_profile: str = "") -> tuple[
 
 
 def set_active_roi(video_source: str = "", roi_profile: str = "") -> dict[str, int]:
-    global ACTIVE_ROI_CONFIG, ACTIVE_ROI_PROFILE
+    global ACTIVE_ROI_CONFIG, ACTIVE_MOTION_CONFIG, ACTIVE_ROI_PROFILE
 
-    ACTIVE_ROI_PROFILE, ACTIVE_ROI_CONFIG = resolve_roi_profile(
+    ACTIVE_ROI_PROFILE, profile = resolve_roi_profile(
         video_source=video_source,
         roi_profile=roi_profile,
     )
+    ACTIVE_ROI_CONFIG = {
+        "x1": int(profile["x1"]),
+        "y1": int(profile["y1"]),
+        "x2": int(profile["x2"]),
+        "y2": int(profile["y2"]),
+        "reference_width": int(profile["reference_width"]),
+        "reference_height": int(profile["reference_height"]),
+    }
+    ACTIVE_MOTION_CONFIG = dict(profile.get("motion", DEFAULT_MOTION_CONFIG))
     return dict(ACTIVE_ROI_CONFIG)
 
 
@@ -285,3 +342,7 @@ def get_active_roi() -> tuple[int, int, int, int]:
 
 def get_active_roi_profile() -> str:
     return ACTIVE_ROI_PROFILE
+
+
+def get_active_motion_config() -> dict[str, float | int]:
+    return dict(ACTIVE_MOTION_CONFIG)

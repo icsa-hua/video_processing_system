@@ -9,7 +9,7 @@ from obs_system.logic_module.dummy_logic.subtractor import Subtractor
 from obs_system.logic_module.dummy_logic.fisheye import FishEyeProjection
 from obs_system.logic_module.dummy_logic.panorama_reprojection import PanoramaReprojector
 from obs_system.utils.common import check_nvidia_existence
-from obs_system.utils.global_config import get_active_roi_profile, set_active_roi
+from obs_system.utils.global_config import get_active_motion_config, get_active_roi_profile, set_active_roi
 from obs_system.utils.logger import get_logger
 from obs_system.utils.appraisal import perf, frame_list, StepContext
 
@@ -120,6 +120,7 @@ class Application:
 
         logger.info("Pipeline save root: %s", workspace_runs_dir / "obs_pipeline")
         logger.info("Active ROI profile: %s (%s)", get_active_roi_profile(), active_roi)
+        logger.info("Active motion profile: %s", get_active_motion_config())
 
         tracemalloc.start()
 

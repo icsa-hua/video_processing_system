@@ -1,16 +1,14 @@
 from obs_system.logic_module.interface.event_extractor import EventExtractorInterface
+from obs_system.utils import global_config
 from obs_system.utils.global_config import (
     TRIALS,
     HISTORY,
-    VARTHRESHOLD,
     THR_RATIO,
     K_CONSECUTIVE,
     HOLD_FRAMES,
     MIN_OBJ_AREA,
     MIN_MOTION_COMPONENT_AREA_RATIO,
-    MAX_MOTION_COMPONENTS,
     MOTION_MORPH_KERNEL,
-    MOTION_GATE_FILTERED_SCORE_THRESHOLD,
     ENABLE_UNSTABLE_MOTION_MAP,
     UNSTABLE_MOTION_THRESHOLD,
     UNSTABLE_MOTION_SUPPRESSION_WEIGHT,
@@ -59,10 +57,15 @@ class Subtractor(EventExtractorInterface):
         )
         # self.save_scene_overlays = bool(save_scene_overlays)
         self.save_scene_overlays = False
+
+        motion_config = global_config.get_active_motion_config()
+        self.var_threshold = int(motion_config["var_threshold"])
+        self.motion_gate_filtered_score_threshold = float(motion_config["gate_score_threshold"])
+        self.max_motion_components = int(motion_config["max_components"])
         
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
                     history=history, 
-                    varThreshold=VARTHRESHOLD,
+                    varThreshold=self.var_threshold,
                     detectShadows=detect_shadows)
 
 
@@ -143,6 +146,12 @@ class Subtractor(EventExtractorInterface):
         self._drivable_rebuild_counter: int = 0
         self._drivable_rebuild_interval: int = 5   # rebuild combined map every N updates
         self._dc_call_count: int = 0               # used to throttle heatmap decay
+        logger.info(
+            "Active motion gating: var_threshold=%d gate_score_threshold=%.6f max_components=%d",
+            self.var_threshold,
+            self.motion_gate_filtered_score_threshold,
+            self.max_motion_components,
+        )
 
 
     def configure_source_warmup(self, source_is_stream: bool) -> None:
@@ -227,7 +236,7 @@ class Subtractor(EventExtractorInterface):
             n_valid += 1
 
         # Many small-but-passing blobs = vegetation scatter field → suppress all
-        if n_valid > MAX_MOTION_COMPONENTS:
+        if n_valid > self.max_motion_components:
             return np.zeros_like(binary_mask)
 
         return filtered
@@ -598,7 +607,7 @@ class Subtractor(EventExtractorInterface):
             max_obj_area = max((cv2.contourArea(c) for c in contours), default=0)
             min_obj_area = MIN_OBJ_AREA * self._cached_total_pixels
             flag = (
-                filtered_score > MOTION_GATE_FILTERED_SCORE_THRESHOLD
+                filtered_score > self.motion_gate_filtered_score_threshold
                 and max_obj_area > min_obj_area
             )
 
