@@ -1,0 +1,42 @@
+{
+  "default": {
+    "x1": 0,
+    "y1": 639,
+    "x2": 430,
+    "y2": 300,
+    "reference_width": 640,
+    "reference_height": 640
+  },
+  "MVI_39401": {
+    "x1": 0,
+    "y1": 140,
+    "x2": 960,
+    "y2": 540,
+    "reference_width": 960,
+    "reference_height": 540
+  },
+  "highway": {
+    "x1": 0,
+    "y1": 360,
+    "x2": 1920,
+    "y2": 1080,
+    "reference_width": 1920,
+    "reference_height": 1080
+  },
+  "fisheye": {
+    "x1": 70,
+    "y1": 40,
+    "x2": 1170,
+    "y2": 1030,
+    "reference_width": 1244,
+    "reference_height": 1088
+  },
+  "short_1920_12fps": {
+    "x1": 0,
+    "y1": 180,
+    "x2": 1920,
+    "y2": 720,
+    "reference_width": 1920,
+    "reference_height": 720
+  }
+}

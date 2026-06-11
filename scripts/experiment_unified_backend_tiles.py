@@ -297,6 +297,7 @@ def _build_config(run_spec: RunSpec, args: argparse.Namespace) -> PipelineConfig
         verbose=bool(args.verbose),
         save=bool(run_spec.save_outputs),
         roi=bool(args.roi),
+        roi_profile=args.roi_profile,
         half=True,
         fep=bool(args.fep),
         bench=bool(args.labels_dir),
@@ -631,6 +632,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--onnx-model", default=DEFAULT_ONNX_MODEL, help="Path to the ONNX model.")
     parser.add_argument("--engine-model", default=DEFAULT_ENGINE_MODEL, help="Path to the TensorRT engine.")
     parser.add_argument("--roi", action=argparse.BooleanOptionalAction, default=True, help="Enable ROI cropping.")
+    parser.add_argument("--roi-profile", default="", help="Optional ROI profile key from obs_system/utils/roi_profiles.json.")
     parser.add_argument("--fep", action=argparse.BooleanOptionalAction, default=False, help="Enable fisheye reprojection.")
     parser.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=False, help="Verbose streamer logging.")
     parser.add_argument("--stream-limit-hours", type=float, default=0.0, help="Live-stream runtime cap in hours. Use 0 to disable.")

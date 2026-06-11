@@ -34,6 +34,7 @@ class PipelineConfig:
     host_address: str = DEFAULT_HOST
     save: bool = False
     roi: bool = False
+    roi_profile: str = ""
     half: bool = False
     fep: bool = False
     bench: bool = False
@@ -131,6 +132,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     argparser.add_argument("--host_address", metavar="H", default=DEFAULT_HOST, help="Host server for both streamlit and fastapi")
     argparser.add_argument("--save", metavar="SA", action=argparse.BooleanOptionalAction, help="Save inference results to file")
     argparser.add_argument("--roi", metavar="R", action=argparse.BooleanOptionalAction, help="Use Region of Interest to detect obstacles")
+    argparser.add_argument(
+        "--roi_profile",
+        metavar="RP",
+        default="",
+        help="Optional ROI profile key from obs_system/utils/roi_profiles.json. If omitted, the video path/name is matched automatically.",
+    )
     argparser.add_argument("--half", metavar="HF", action=argparse.BooleanOptionalAction, help="Use Half the available resources by reducing the data size")
     argparser.add_argument("--fep", metavar="F", action=argparse.BooleanOptionalAction, help="Use of FishEye Projection based on camera")
     argparser.add_argument("--bench", metavar="BM", action=argparse.BooleanOptionalAction, help="Benchmark the Performance of the model and hardware.")

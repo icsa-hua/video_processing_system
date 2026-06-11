@@ -4,6 +4,7 @@
 *.pt
 *.ipynb
 *.json
+!obs_system/utils/roi_profiles.json
 *.jpg
 *.jpeg
 *.yaml

@@ -1,4 +1,8 @@
-# Global configuration file for Thresholds and configuration variables. 
+# Global configuration file for Thresholds and configuration variables.
+
+import json
+import logging
+from pathlib import Path
 
 #---------- Detection Thresholds ------------
 CONF_THR = 0.25 
@@ -42,6 +46,9 @@ ROI_Y1 = 639
 ROI_X2 = 430 
 ROI_Y2 = 300
 REGION_COLOR = (255, 42, 4) 
+ROI_REFERENCE_WIDTH = TILE_SIZE
+ROI_REFERENCE_HEIGHT = TILE_SIZE
+ROI_PROFILES_PATH = Path(__file__).with_name("roi_profiles.json")
 
 
 #-------- False Positives -------
@@ -126,3 +133,142 @@ ROAD_IMPOSSIBLE_CLASSES = frozenset({
     "train", "airplane", "aeroplane", "helicopter",
     "submarine", "kite",
 })
+
+
+logger = logging.getLogger("obs_system." + __name__)
+
+DEFAULT_ROI_CONFIG = {
+    "x1": ROI_X1,
+    "y1": ROI_Y1,
+    "x2": ROI_X2,
+    "y2": ROI_Y2,
+    "reference_width": ROI_REFERENCE_WIDTH,
+    "reference_height": ROI_REFERENCE_HEIGHT,
+}
+ACTIVE_ROI_CONFIG = dict(DEFAULT_ROI_CONFIG)
+ACTIVE_ROI_PROFILE = "default"
+
+
+def _normalize_roi_profile(raw_profile, profile_name: str) -> dict[str, int]:
+    if not isinstance(raw_profile, dict):
+        raise ValueError(f"ROI profile '{profile_name}' must be a JSON object.")
+
+    try:
+        normalized = {
+            "x1": int(raw_profile["x1"]),
+            "y1": int(raw_profile["y1"]),
+            "x2": int(raw_profile["x2"]),
+            "y2": int(raw_profile["y2"]),
+            "reference_width": int(raw_profile.get("reference_width", ROI_REFERENCE_WIDTH)),
+            "reference_height": int(raw_profile.get("reference_height", ROI_REFERENCE_HEIGHT)),
+        }
+    except KeyError as exc:
+        raise ValueError(f"ROI profile '{profile_name}' is missing field {exc.args[0]!r}.") from exc
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"ROI profile '{profile_name}' contains non-integer values.") from exc
+
+    if normalized["reference_width"] <= 0 or normalized["reference_height"] <= 0:
+        raise ValueError(f"ROI profile '{profile_name}' must define positive reference dimensions.")
+
+    return normalized
+
+
+def load_roi_profiles() -> dict[str, dict[str, int]]:
+    profiles = {"default": dict(DEFAULT_ROI_CONFIG)}
+
+    if not ROI_PROFILES_PATH.exists():
+        return profiles
+
+    try:
+        payload = json.loads(ROI_PROFILES_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to load ROI profile file %s: %s", ROI_PROFILES_PATH, exc)
+        return profiles
+
+    if not isinstance(payload, dict):
+        logger.warning("ROI profile file %s must contain a JSON object at the top level.", ROI_PROFILES_PATH)
+        return profiles
+
+    for profile_name, raw_profile in payload.items():
+        try:
+            profiles[str(profile_name)] = _normalize_roi_profile(raw_profile, str(profile_name))
+        except ValueError as exc:
+            logger.warning("%s", exc)
+
+    return profiles
+
+
+def _candidate_roi_profile_keys(video_source: str = "", roi_profile: str = "") -> list[str]:
+    keys: list[str] = []
+
+    def _append(value: object) -> None:
+        key = str(value or "").strip()
+        if key and key not in keys:
+            keys.append(key)
+
+    _append(roi_profile)
+    _append(video_source)
+
+    source = str(video_source or "").strip()
+    if not source or "://" in source:
+        return keys
+
+    source_path = Path(source)
+    _append(source_path.as_posix())
+    _append(source_path.name)
+    _append(source_path.stem)
+
+    try:
+        resolved = source_path.resolve(strict=False)
+    except OSError:
+        resolved = None
+
+    if resolved is not None:
+        _append(resolved.as_posix())
+        _append(resolved.name)
+        _append(resolved.stem)
+
+    return keys
+
+
+def resolve_roi_profile(video_source: str = "", roi_profile: str = "") -> tuple[str, dict[str, int]]:
+    profiles = load_roi_profiles()
+    lowercase_profiles = {name.lower(): name for name in profiles}
+
+    for candidate in _candidate_roi_profile_keys(video_source=video_source, roi_profile=roi_profile):
+        exact = profiles.get(candidate)
+        if exact is not None:
+            return candidate, dict(exact)
+
+        lowered = lowercase_profiles.get(candidate.lower())
+        if lowered is not None:
+            return lowered, dict(profiles[lowered])
+
+    return "default", dict(profiles["default"])
+
+
+def set_active_roi(video_source: str = "", roi_profile: str = "") -> dict[str, int]:
+    global ACTIVE_ROI_CONFIG, ACTIVE_ROI_PROFILE
+
+    ACTIVE_ROI_PROFILE, ACTIVE_ROI_CONFIG = resolve_roi_profile(
+        video_source=video_source,
+        roi_profile=roi_profile,
+    )
+    return dict(ACTIVE_ROI_CONFIG)
+
+
+def get_active_roi_config() -> dict[str, int]:
+    return dict(ACTIVE_ROI_CONFIG)
+
+
+def get_active_roi() -> tuple[int, int, int, int]:
+    return (
+        ACTIVE_ROI_CONFIG["x1"],
+        ACTIVE_ROI_CONFIG["y1"],
+        ACTIVE_ROI_CONFIG["x2"],
+        ACTIVE_ROI_CONFIG["y2"],
+    )
+
+
+def get_active_roi_profile() -> str:
+    return ACTIVE_ROI_PROFILE

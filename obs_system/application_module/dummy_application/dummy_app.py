@@ -9,6 +9,7 @@ from obs_system.logic_module.dummy_logic.subtractor import Subtractor
 from obs_system.logic_module.dummy_logic.fisheye import FishEyeProjection
 from obs_system.logic_module.dummy_logic.panorama_reprojection import PanoramaReprojector
 from obs_system.utils.common import check_nvidia_existence
+from obs_system.utils.global_config import get_active_roi_profile, set_active_roi
 from obs_system.utils.logger import get_logger
 from obs_system.utils.appraisal import perf, frame_list, StepContext
 
@@ -89,6 +90,7 @@ class Application:
         else:
             source_path = Path(config.video_source)
             self.source = str(source_path if source_path.is_absolute() else Path(self.parent_path) / source_path)
+        active_roi = set_active_roi(video_source=self.source, roi_profile=config.roi_profile)
         self.use_TRT = bool(config.use_TRT)
         self.mqtt = bool(config.mqtt)
         self.start_time = time.time()
@@ -117,6 +119,7 @@ class Application:
         DEFAULT_CFG.name = "obs_pipeline"
 
         logger.info("Pipeline save root: %s", workspace_runs_dir / "obs_pipeline")
+        logger.info("Active ROI profile: %s (%s)", get_active_roi_profile(), active_roi)
 
         tracemalloc.start()
 
