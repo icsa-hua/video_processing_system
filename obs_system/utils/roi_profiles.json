@@ -63,5 +63,20 @@
       "gate_score_threshold": 0.003,
       "max_components": 20
     }
+  },
+  "jetson_2":{
+    "x1": 0,
+    "y1": 0, 
+    "x2": 1920,
+    "y2": 600,
+    "reference_width": 1920,
+    "reference_height": 720, 
+    "motion": {
+    	"var_threshold": 48, 
+	"gate_score_threshold": 0.003, 
+	"max_components": 20
+    }
+
   }
+
 }
