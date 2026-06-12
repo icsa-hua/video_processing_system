@@ -22,8 +22,6 @@ import time
 import platform
 import tracemalloc
 import torch
-import jtop 
-
 from jtop import jtop
 from pathlib import Path
 from typing import Any, Optional
@@ -292,12 +290,12 @@ class Application:
                 except pynvml.NVMLError as e:
                     logger.error(f"| Failed to get GPU metrics: {e}")
         elif self.machine_type == 'jetson': 
-            try: 
-                with jtop() as jetson: 
-                    if jetson.ok(): 
+            try:
+                with jtop() as jetson:
+                    if jetson.ok():
                         print(jetson.memory)
-            except Exception as je: 
-                print(f"JTOP Measurements Unavailable {je}")
+            except BaseException as je:
+                print(f"JTOP Measurements Unavailable: {je}")
 
 
         logger.info(f"-" * 84)
@@ -336,6 +334,10 @@ class Application:
         self.streamer = None
         self.logic_module.clear()
 
+        # Flush Python-held CUDA references before touching NVML so that tensor
+        # __del__ calls don't fire after nvmlShutdown and crash in the driver.
+        gc.collect()
+
         if torch.cuda.is_available():
             try:
                 torch.cuda.empty_cache()
@@ -352,8 +354,6 @@ class Application:
 
         if tracemalloc.is_tracing():
             tracemalloc.stop()
-
-        gc.collect()
 
 
     def run_application(

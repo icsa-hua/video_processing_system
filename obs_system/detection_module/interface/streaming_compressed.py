@@ -89,13 +89,6 @@ class OptimizedStreamer(Streamer):
         return [letterbox(image=x) for x in im]
 
 
-    def preprocess(self, im: Union[torch.Tensor, List[np.ndarray]])-> torch.Tensor | List[np.ndarray]:
-        return super().preprocess(im)
-
-    
-    def postprocess(self, preds:Any, orig_image:Any)->Any : 
-        return super().postprocess(preds, orig_image=orig_image) 
-
     def _get_batch_frame_ids(self, labels: List[str], frame_count: int) -> List[int]:
         labels = list(labels or [])
         if len(labels) < frame_count:
@@ -131,11 +124,11 @@ class OptimizedStreamer(Streamer):
         return ops.scale_boxes(model_input_shape, boxes.clone(), original_shape)
 
 
-    def _publish_no_motion_preview(self, original_images, preview_queue, producer_flag) -> None:
-        if not self.args.show or not original_images:
+    def _publish_no_motion_preview(self, images_bgr, preview_queue, producer_flag) -> None:
+        if not self.args.show or not images_bgr:
             return
         self._enqueue_async_sink(
-            ("preview_frame", original_images[-1].copy(), preview_queue, producer_flag),
+            ("preview_frame", images_bgr[-1].copy(), preview_queue, producer_flag),
             stage="preview_encode_ms",
             drop_if_full=True,
         )
@@ -157,8 +150,7 @@ class OptimizedStreamer(Streamer):
         self._record_stage_time("frame_read_ms", frame_read_ms, frame_ids=frame_ids)
         self._note_frame_ids(frame_ids)
         original_images_bgr = [im.copy() for im in im0s]
-        original_images = [cv2.cvtColor(im, cv2.COLOR_BGR2RGB) for im in original_images_bgr]
-        cropped_original_images = original_images
+        cropped_original_images_bgr = original_images_bgr
 
         roi_ms = 0.0
         mog2_ms = 0.0
@@ -173,7 +165,7 @@ class OptimizedStreamer(Streamer):
                     _t0 = time.perf_counter()
                     _t0_rel = _t0 - stream_start
                 im0s = self.logic_module["ROI"].crop_image(im0s)
-                cropped_original_images = self.logic_module["ROI"].crop_image(original_images)
+                cropped_original_images_bgr = self.logic_module["ROI"].crop_image(original_images_bgr)
                 if self.args.plot_performance:
                     roi_ms = (time.perf_counter() - _t0) * 1e3
                     self._record_stage_time("roi_ms", roi_ms, frame_ids=frame_ids)
@@ -220,9 +212,8 @@ class OptimizedStreamer(Streamer):
             "im0s": im0s,
             "frame_ids": frame_ids,
             "frame_read_ms": frame_read_ms,
-            "original_images": original_images,
             "original_images_bgr": original_images_bgr,
-            "cropped_original_images": cropped_original_images,
+            "cropped_original_images_bgr": cropped_original_images_bgr,
             "mfgs": mfgs,
             "fg_masks": fg_masks,
             "roi_ms": roi_ms,
@@ -363,7 +354,7 @@ class OptimizedStreamer(Streamer):
         Back-projection and cross-view NMS are applied per frame after inference.
         """
         im0s = stage_a["im0s"]
-        original_images = stage_a["original_images"]
+        original_images_bgr = stage_a["original_images_bgr"]
         mfgs = stage_a["mfgs"]
         frame_ids = stage_a["frame_ids"]
         fg_masks = stage_a.get("fg_masks") or []
@@ -448,7 +439,7 @@ class OptimizedStreamer(Streamer):
         # ── Pass 3: per-frame NMS + ROI back-translation ─────────────────────
         frames: List[FrameDetections] = []
         for bni, (keep_frame, fid) in enumerate(zip(mfgs, frame_ids)):
-            orig_img = original_images[bni]
+            orig_img = original_images_bgr[bni]
             fg_mask_bni = fg_masks[bni] if bni < len(fg_masks) else None
 
             if not keep_frame:
@@ -507,16 +498,14 @@ class OptimizedStreamer(Streamer):
 
     def _stage_b_inference_and_nms(self, stage_a, model, profilers, activities, stream_start, timeline_logger, batch_idx):
         im0s = stage_a["im0s"]
-        original_images = stage_a["original_images"]
         original_images_bgr = stage_a["original_images_bgr"]
-        cropped_original_images = stage_a["cropped_original_images"]
+        cropped_original_images_bgr = stage_a.get("cropped_original_images_bgr", original_images_bgr)
         mfgs = stage_a["mfgs"]
         frame_ids = stage_a["frame_ids"]
 
         for i, keep_frame in enumerate(mfgs):
             if not keep_frame:
                 im0s[i] = empty_image(im0s[i])
-                original_images[i] = empty_image(original_images[i])
                 original_images_bgr[i] = empty_image(original_images_bgr[i])
 
         if self.args.plot_performance:
@@ -542,7 +531,7 @@ class OptimizedStreamer(Streamer):
                 with profile(activities=activities) as prof:
                     infer_outputs = self.model(
                         images,
-                        orig_imgs=original_images if not self.use_roi else cropped_original_images,
+                        orig_imgs=original_images_bgr if not self.use_roi else cropped_original_images_bgr,
                         debug=self.args.verbose,
                     )
                 if not os.path.exists("assets/trace_jsons"):
@@ -552,7 +541,7 @@ class OptimizedStreamer(Streamer):
             else:
                 infer_outputs = self.model(
                     images,
-                    orig_imgs=original_images if not self.use_roi else cropped_original_images,
+                    orig_imgs=original_images_bgr if not self.use_roi else cropped_original_images_bgr,
                     debug=self.args.verbose,
                 )
             if isinstance(infer_outputs, tuple) and len(infer_outputs) == 2 and isinstance(infer_outputs[0], tuple):
@@ -573,7 +562,7 @@ class OptimizedStreamer(Streamer):
         frames: List[FrameDetections] = []
         nms_ms = 0.0
         for bni, fid in enumerate(frame_ids):
-            orig_img = original_images[bni]
+            orig_img = original_images_bgr[bni]
             boxes = i_boxes[bni]
             scores = i_scores[bni]
             cls_ = i_classes[bni]
@@ -838,10 +827,6 @@ class OptimizedStreamer(Streamer):
         return (np.zeros((0,), np.float32), np.zeros((0, 4), np.float32))
 
 
-    def setup_model(self, model_name:str, path_to_load:Optional[str|Path], opt:str)->None:
-        pass 
-
-
     @smart_inference_mode()
     def stream_inference(self, source:str, model:str, producer_flag:Any, preview_queue:Any, *args, **kwargs)->Generator[Optional[Any], None, None]:
 
@@ -1046,7 +1031,7 @@ class OptimizedStreamer(Streamer):
                 self.model_warmup_done = True
 
         # Asynchronous batch loading to avoid stalls
-        batch_queue = queue.Queue(maxsize=8)
+        batch_queue = queue.Queue(maxsize=4)
 
         def producer():
             try:
@@ -1590,7 +1575,6 @@ class OptimizedStreamer(Streamer):
             paths = stage_a["paths"]
             im0s = stage_a["im0s"]
             frame_ids = stage_a["frame_ids"]
-            original_images = stage_a["original_images"]
             original_images_bgr = stage_a["original_images_bgr"]
             roi_ms = stage_a["roi_ms"]
             mog2_ms = stage_a["mog2_ms"]
@@ -1672,7 +1656,6 @@ class OptimizedStreamer(Streamer):
             for i, keep_frame in enumerate(mfgs):
                 if not keep_frame:
                     im0s[i] = empty_image(im0s[i])
-                    original_images[i] = empty_image(original_images[i])
                     original_images_bgr[i] = empty_image(original_images_bgr[i])
 
             if self.args.plot_performance:
@@ -1803,7 +1786,7 @@ class OptimizedStreamer(Streamer):
             # Assemble DetectionBatch: global NMS per frame, optional ROI back-projection
             frames_dets: List[FrameDetections] = []
             for bni_a, (fid, keep_frame) in enumerate(zip(frame_ids, mfgs)):
-                orig_img = original_images[bni_a]
+                orig_img = original_images_bgr[bni_a]
                 fg_mask_bni = fg_masks_b[bni_a] if bni_a < len(fg_masks_b) else None
                 try:
                     fid_key = int(fid)
@@ -2101,99 +2084,6 @@ class OptimizedStreamer(Streamer):
         self.release_session_resources(preview_queue=preview_queue, producer_flag=producer_flag)
         self.run_callbacks("on_predict_end")
 
-
-    def _frames_to_tiles(self, frame_iter, tile_size:int, overlap_ratio:float): 
-        overlap_px = max(0, int(round(tile_size * overlap_ratio)))
-        for f_id, img in frame_iter:
-            for t, m in split_image_gen(img, f_id, tile_size=tile_size, overlap=overlap_px):
-                yield t, m
-
-
-    def iter_data(self): 
-
-        """ Yields (frame_id, image) lazily from self.dataset after ROI + MOG2 gating """
-        
-        self.dataset = iter(self.dataset) 
-        while True: 
-            if self.runtime_limit_reached():
-                return
-
-            try: 
-                self.batch = next(self.dataset)
-            except StopIteration: 
-                return 
-
-            _, im0s, s = self.batch 
-            frame_ids = self._get_batch_frame_ids(labels=s, frame_count=len(im0s))
-            self._note_frame_ids(frame_ids)
-            original_images = im0s.copy() 
-            if self.use_roi:
-                with StepContext(name="ROI Cropping", catch=(RuntimeError, ), verbose=self.args.verbose): 
-                    im0s = self.logic_module['ROI'].crop_image(im0s)
-
-            with StepContext(name="FishEyE Processing (Defish)", catch=(RuntimeError, ), verbose=self.args.verbose):    
-                # Defish FishEye camera frames to increase accuracy
-                if self.logic_module["FEP"] is not None: 
-                    Streamer.logger.debug("FEP enabled")
-                    im0s = self.logic_module["FEP"]._defish(im0s)
-
-            with StepContext(name="BackGround Subtractor (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
-                # Motion gate (vectorized over the mini batch) 
-                mfgs, lanes_final = self.logic_module["SUBTRACTOR"].detect(im0s, save_img=False)
-                if lanes_final is not None: 
-                    self.lanes_final = lanes_final
-
-            warmup_pending = not self.done_warmup
-            if warmup_pending:
-                if self._sync_subtractor_warmup_state():
-                    Streamer.logger.info("Background subtractor warmup completed. Detection pipeline enabled for the next batch.")
-                self.step_attention_state()
-                continue
-
-            if self.should_force_inference_all_frames():
-                mfgs = [True] * len(mfgs)
-
-            if not any(mfgs):
-                print("No motion detected in the batch - skipping inference")
-                empty_preds = return_no_motion_frames(
-                    im0s=im0s,
-                    batch_size=len(im0s),
-                )
-                self._enqueue_async_sink(("mqtt_no_detection", empty_preds, frame_ids), stage="mqtt_ms", frame_ids=frame_ids)
-                self.step_attention_state()
-                continue 
-
-            for i, keep_frame in enumerate(mfgs):
-                if not keep_frame:
-                    im0s[i] = empty_image(im0s[i])
-                    original_images[i] = empty_image(original_images[i])
-
-            if self.args.bench and self.mp is not None: 
-                self._ensure_benchmark_labels_loaded()
-
-                for passed, f_id, img in zip(mfgs, frame_ids, im0s): 
-                    gt_cls, gt_bbs = self._resolve_benchmark_gt(f_id)
-
-                    if passed : 
-                        yield (int(f_id), img)
-
-                    else: 
-                        empty_boxes, empty_scores, empty_cls = _empty_dets_numpy() 
-                        self.mp.update(
-                            boxes_xyxy=empty_boxes,
-                            scores=empty_scores,
-                            classes=empty_cls,
-                            gt_boxes_xyxy=gt_bbs.astype(np.float32),
-                            gt_classes=gt_cls.astype(np.int64),
-                        )                
-                        continue
-
-            else: 
-                for passed, f_id, img in zip(mfgs, frame_ids, im0s): 
-                    if passed: 
-                        yield (int(f_id), img)
-
-            self.step_attention_state()
 
 
 
