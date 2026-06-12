@@ -89,6 +89,10 @@ class OptimizedStreamer(Streamer):
         return [letterbox(image=x) for x in im]
 
 
+    def postprocess(self, preds: Any, orig_image: Any) -> Any:
+        return super().postprocess(preds, orig_image)
+
+
     def _get_batch_frame_ids(self, labels: List[str], frame_count: int) -> List[int]:
         labels = list(labels or [])
         if len(labels) < frame_count:
