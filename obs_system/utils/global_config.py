@@ -13,7 +13,7 @@ CLASS_AGNOSTIC = True
 #---------- Image Tiling parameters ---------
 TILE_SIZE = 640
 TILE_OVERLAP = 0.05
-TILE_NMS_IOU = 0.30
+TILE_NMS_IOU = 0.50
 TILE_THR = 3
 
 #--------- Defish Parameters --------- 
@@ -128,7 +128,7 @@ TILE_ACTIVATION_ENABLED = True
 # Frames a tile stays active after its last motion trigger or detection hit.
 TILE_ACTIVATION_PERSIST_FRAMES = 5
 # Minimum fraction of a tile's FG-mask region that must be foreground to trigger it.
-TILE_ACTIVATION_MOTION_MIN_RATIO = 0.005
+TILE_ACTIVATION_MOTION_MIN_RATIO = 0.02
 
 #--------- Tile / Panorama Kalman Detection Smoother ----------
 # Maximum frames a Kalman track survives without a matching detection.
