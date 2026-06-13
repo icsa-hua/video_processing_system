@@ -444,6 +444,8 @@ class OptimizedStreamer(Streamer):
         frames: List[FrameDetections] = []
         for bni, (keep_frame, fid) in enumerate(zip(mfgs, frame_ids)):
             orig_img = original_images_bgr[bni]
+            if self.args.save or self.args.show:
+                orig_img = cv2.cvtColor(orig_img, cv2.COLOR_BGR2RGB)
             fg_mask_bni = fg_masks[bni] if bni < len(fg_masks) else None
 
             if not keep_frame:
@@ -567,6 +569,8 @@ class OptimizedStreamer(Streamer):
         nms_ms = 0.0
         for bni, fid in enumerate(frame_ids):
             orig_img = original_images_bgr[bni]
+            if self.args.save or self.args.show:
+                orig_img = cv2.cvtColor(orig_img, cv2.COLOR_BGR2RGB)
             boxes = i_boxes[bni]
             scores = i_scores[bni]
             cls_ = i_classes[bni]
@@ -1791,6 +1795,8 @@ class OptimizedStreamer(Streamer):
             frames_dets: List[FrameDetections] = []
             for bni_a, (fid, keep_frame) in enumerate(zip(frame_ids, mfgs)):
                 orig_img = original_images_bgr[bni_a]
+                if self.args.save or self.args.show:
+                    orig_img = cv2.cvtColor(orig_img, cv2.COLOR_BGR2RGB)
                 fg_mask_bni = fg_masks_b[bni_a] if bni_a < len(fg_masks_b) else None
                 try:
                     fid_key = int(fid)
