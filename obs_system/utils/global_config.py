@@ -34,7 +34,7 @@ MIN_OBJ_AREA = 0.003
 EMPTY_IMAGE_PATH = "samples/highway_rescaled.png" 
 
 #--------- Frame Batching ---------
-BATCH_SIZE = 16
+BATCH_SIZE = 4
 WARM_UP_SESSIONS = 8
 FIXED_WIDTH = 1245
 FIXED_HEIGHT = 1088

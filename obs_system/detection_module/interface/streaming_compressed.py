@@ -44,6 +44,7 @@ class OptimizedStreamer(Streamer):
         self._benchmark_label_files: List[Path] = []
         self._benchmark_gt_by_stem: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         self._benchmark_labels_loaded = False
+        self.print_flag = True
         
 
     def __call__(self, source:str, model:str, logic_module=None, mqtt_broker=None, producer_flag=None, preview_queue=None, *args, **kwargs)->None:
@@ -362,9 +363,13 @@ class OptimizedStreamer(Streamer):
         mfgs = stage_a["mfgs"]
         frame_ids = stage_a["frame_ids"]
         fg_masks = stage_a.get("fg_masks") or []
+      
+        if self.print_flag: 
+            print(f"Original resolution {original_images_bgr[0].shape} | Cropped Resolution {im0s[0].shape}")
+            self.print_flag = False
 
         reprojector = self.logic_module.get("PANORAMA")
-        print(f"Resolution of the frames: {im0s[0].shape} with original shape: {original_images_bgr[0].shape}")
+
         # ── Pass 1: generate all active views across the whole batch ─────────
         # all_view_items: flat list of (view_bgr, bni, v_id)
         all_view_items: List = []
@@ -508,6 +513,10 @@ class OptimizedStreamer(Streamer):
         cropped_original_images_bgr = stage_a.get("cropped_original_images_bgr", original_images_bgr)
         mfgs = stage_a["mfgs"]
         frame_ids = stage_a["frame_ids"]
+        
+        if self.print_flag: 
+            print(f"Original resolution {original_images_bgr[0].shape} | Cropped Resolution {im0s[0].shape}")
+            self.print_flag = False
 
         for i, keep_frame in enumerate(mfgs):
             if not keep_frame:
