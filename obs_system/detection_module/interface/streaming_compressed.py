@@ -900,15 +900,16 @@ class OptimizedStreamer(Streamer):
                     interval_frames=recalibration_interval,
                 )
 
-            if not getattr(self.source_type, "stream", False):
-                empty_image = f"{EMPTY_IMAGE_PATH}"
-                if not os.path.exists(empty_image):
-                    raise FileNotFoundError(f"Empty image path for background subtraction does not exist: {empty_image}")
+            # Unnecessary now. 
+            # if not getattr(self.source_type, "stream", False):
+                # empty_image = f"{EMPTY_IMAGE_PATH}"
+                # if not os.path.exists(empty_image):
+                #     raise FileNotFoundError(f"Empty image path for background subtraction does not exist: {empty_image}")
+                # empty_image = cv2.imread(empty_image)
+                # self.logic_module['SUBTRACTOR'].warm_up(empty_image, trials=TRIALS)
+                # self._sync_subtractor_warmup_state()
+                
 
-                empty_image = cv2.imread(empty_image)
-                self.logic_module['SUBTRACTOR'].warm_up(empty_image, trials=TRIALS)
-                self._sync_subtractor_warmup_state()
-            
             # Panorama mode overrides tiling: views are generated internally.
             use_panorama = (
                 bool(getattr(self.args, "panorama", False))
