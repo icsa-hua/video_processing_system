@@ -87,7 +87,7 @@ MOTION_MORPH_KERNEL = 5
 MOTION_GATE_FILTERED_SCORE_THRESHOLD = 0.002
 
 #--------- Unstable Motion Map (Step 2) ----------
-ENABLE_UNSTABLE_MOTION_MAP = True
+ENABLE_UNSTABLE_MOTION_MAP = False
 # Fraction of warmup frames in which a pixel must fire to be labelled "unstable"
 UNSTABLE_MOTION_THRESHOLD = 0.40
 # Contribution weight of an unstable pixel toward the motion score (0 = fully suppressed)
@@ -106,17 +106,17 @@ DRIVABLE_CONFIDENCE_THRESHOLD = 0.25
 
 #--------- Panorama Perspective Reprojection ----------
 # Number of tangent/pinhole views to generate from an equirectangular panorama
-PANORAMA_N_VIEWS = 3
+PANORAMA_N_VIEWS = 2
 # Output size (width, height) for each perspective view fed to YOLO
 PANORAMA_VIEW_SIZE = (640, 640)
 # Horizontal FOV in degrees for each perspective view (pinhole tangent-plane view)
 PANORAMA_VIEW_FOV_DEG = 80.0
 # Pitch offset for all views in degrees (negative = tilt down toward road)
-PANORAMA_PITCH_DEG = 0.0
+PANORAMA_PITCH_DEG = -10.0
 # Assumed total horizontal angular span of the panorama image in degrees
 PANORAMA_HFOV_DEG = 180.0
 # Assumed total vertical angular span of the panorama image in degrees
-PANORAMA_VFOV_DEG = 60.0
+PANORAMA_VFOV_DEG = 90.0
 # Fraction of a view's panorama coverage that must contain motion to activate the view
 PANORAMA_MIN_MOTION_FRACTION = 0.005
 # Cross-view NMS IoU threshold (applied after back-projecting all view detections to panorama space)
@@ -132,9 +132,9 @@ TILE_ACTIVATION_MOTION_MIN_RATIO = 0.02
 
 #--------- Tile / Panorama Kalman Detection Smoother ----------
 # Maximum frames a Kalman track survives without a matching detection.
-TILE_KALMAN_MAX_AGE = 3
+TILE_KALMAN_MAX_AGE = 5
 # Minimum detections before a track contributes Kalman-predicted boxes.
-TILE_KALMAN_MIN_HITS = 2
+TILE_KALMAN_MIN_HITS = 1
 # Minimum IoU to associate a detection with a Kalman-predicted track position.
 TILE_KALMAN_IOU_THRESHOLD = 0.35
 
