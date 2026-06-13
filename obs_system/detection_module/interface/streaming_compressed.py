@@ -364,7 +364,7 @@ class OptimizedStreamer(Streamer):
         fg_masks = stage_a.get("fg_masks") or []
 
         reprojector = self.logic_module.get("PANORAMA")
-
+        print(f"Resolution of the frames: {im0s[0].shape} with original shape: {original_images_bgr[0].shape}")
         # ── Pass 1: generate all active views across the whole batch ─────────
         # all_view_items: flat list of (view_bgr, bni, v_id)
         all_view_items: List = []
