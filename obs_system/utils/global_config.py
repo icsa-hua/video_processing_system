@@ -38,7 +38,7 @@ MIN_OBJ_AREA = 0.003
 EMPTY_IMAGE_PATH = "samples/highway_rescaled.png" 
 
 #--------- Frame Batching ---------
-BATCH_SIZE = 4
+BATCH_SIZE = 8
 WARM_UP_SESSIONS = 8
 FIXED_WIDTH = 1245
 FIXED_HEIGHT = 1088
@@ -105,26 +105,26 @@ DRIVABLE_DETECTION_WEIGHT = 0.25
 DRIVABLE_TRACK_WEIGHT = 0.15
 DRIVABLE_UNSTABLE_NEGATIVE_WEIGHT = 0.10
 # Pixels below this confidence are treated as "not reliably drivable"
-DRIVABLE_CONFIDENCE_THRESHOLD = 0.25
+DRIVABLE_CONFIDENCE_THRESHOLD = 0.35
 
 
 #--------- Panorama Perspective Reprojection ----------
 # Number of tangent/pinhole views to generate from an equirectangular panorama
-PANORAMA_N_VIEWS = 2
+PANORAMA_N_VIEWS = 4
 # Output size (width, height) for each perspective view fed to YOLO
 PANORAMA_VIEW_SIZE = (640, 640)
 # Horizontal FOV in degrees for each perspective view (pinhole tangent-plane view)
-PANORAMA_VIEW_FOV_DEG = 80.0
+PANORAMA_VIEW_FOV_DEG = 75.0
 # Pitch offset for all views in degrees (negative = tilt down toward road)
-PANORAMA_PITCH_DEG = -12.0
+PANORAMA_PITCH_DEG = 10.0
 # Assumed total horizontal angular span of the panorama image in degrees
 PANORAMA_HFOV_DEG = 180.0
 # Assumed total vertical angular span of the panorama image in degrees
-PANORAMA_VFOV_DEG = 90.0
+PANORAMA_VFOV_DEG = 70.0
 # Fraction of a view's panorama coverage that must contain motion to activate the view
-PANORAMA_MIN_MOTION_FRACTION = 0.005
+PANORAMA_MIN_MOTION_FRACTION = 0.001
 # Cross-view NMS IoU threshold (applied after back-projecting all view detections to panorama space)
-PANORAMA_NMS_IOU = 0.35
+PANORAMA_NMS_IOU = 0.45
 
 #--------- Tile Activation Persistence Window ----------
 # Set to False to disable per-tile motion gating and fall back to whole-frame inference.
