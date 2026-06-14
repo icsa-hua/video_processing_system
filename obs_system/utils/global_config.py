@@ -148,7 +148,7 @@ TILE_KALMAN_IOU_THRESHOLD = 0.35
 ROAD_IMPOSSIBLE_CLASSES = frozenset({
     "boat", "ship", "surfboard", "snowboard", "skis",
     "train", "airplane", "aeroplane", "helicopter",
-    "submarine", "kite",
+    "submarine", "kite", "bird",
 })
 
 

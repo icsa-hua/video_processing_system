@@ -1129,7 +1129,13 @@ class OptimizedStreamer(Streamer):
                 self._note_emitted_result(len(empty_preds))
                 yield empty_preds
                 self._enqueue_async_sink(("mqtt_no_detection", empty_preds, frame_ids), stage="mqtt_ms", frame_ids=frame_ids)
-                self._publish_no_motion_preview(original_images_bgr, preview_queue, producer_flag)
+                _nm_frame_bundles = [
+                    {"frame_id": fid, "orig_img": im0s[i], "bni": i, "empty": True}
+                    for i, fid in enumerate(frame_ids)
+                ]
+                self._stage_d_dispatch_optional_sinks(
+                    empty_preds, _nm_frame_bundles, paths, original_images_bgr, preview_queue, producer_flag
+                )
                 if self.args.plot_performance:
                     t_now = time.perf_counter()
                     scores = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None)
@@ -1217,6 +1223,12 @@ class OptimizedStreamer(Streamer):
                         'frames_in_batch': int(len(im0s)),
                     })
                     batch_idx += 1
+                if getattr(self, "_tile_kalman", None) is not None:
+                    _zero_b = np.zeros((0, 4), np.float32)
+                    _zero_s = np.zeros((0,), np.float32)
+                    _zero_c = np.zeros((0,), np.int64)
+                    for _ in im0s:
+                        self._tile_kalman.update(_zero_b, _zero_s, _zero_c)
                 self.step_attention_state()
                 continue
 
@@ -1620,7 +1632,13 @@ class OptimizedStreamer(Streamer):
                     stage="mqtt_ms",
                     frame_ids=frame_ids,
                 )
-                self._publish_no_motion_preview(original_images_bgr, preview_queue, producer_flag)
+                _nm_frame_bundles_t = [
+                    {"frame_id": fid, "orig_img": im0s[i], "bni": i, "empty": True}
+                    for i, fid in enumerate(frame_ids)
+                ]
+                self._stage_d_dispatch_optional_sinks(
+                    empty_preds, _nm_frame_bundles_t, paths, original_images_bgr, preview_queue, producer_flag
+                )
                 if self.args.plot_performance:
                     t_now = time.perf_counter()
                     scores = getattr(self.logic_module.get("SUBTRACTOR", None), "last_motion_scores", None)
@@ -1658,6 +1676,12 @@ class OptimizedStreamer(Streamer):
                         "inference_ran": 0, "frames_in_batch": int(len(im0s)),
                     })
                     batch_idx += 1
+                if getattr(self, "_tile_kalman", None) is not None:
+                    _zero_b = np.zeros((0, 4), np.float32)
+                    _zero_s = np.zeros((0,), np.float32)
+                    _zero_c = np.zeros((0,), np.int64)
+                    for _ in im0s:
+                        self._tile_kalman.update(_zero_b, _zero_s, _zero_c)
                 self.step_attention_state()
                 continue
 
