@@ -537,7 +537,7 @@ class Subtractor(EventExtractorInterface):
             if self._last_calibration_frame is not None:
                 self.__apply_calibration(
                     self._last_calibration_frame,
-                    save_img=True,
+                    save_img=False,
                     skip_static_merge=True,
                 )
                 # OR-merge into the running vehicle-gated accumulation so each

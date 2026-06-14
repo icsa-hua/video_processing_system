@@ -114,9 +114,9 @@ class _KalmanBox:
         z = _xyxy_to_z(box)
         y = z - self.H @ self.x
         S = self.H @ self.P @ self.H.T + self.R
-        K = self.P @ self.H.T @ np.linalg.inv(S)
-        self.x = self.x + K @ y
-        self.P = (np.eye(self.P.shape[0], dtype=np.float32) - K @ self.H) @ self.P
+        K = (self.P @ self.H.T @ np.linalg.inv(S)).astype(np.float32)
+        self.x = (self.x + K @ y).astype(np.float32)
+        self.P = ((np.eye(self.P.shape[0], dtype=np.float32) - K @ self.H) @ self.P).astype(np.float32)
         self.time_since_update = 0
         self.hits += 1
         self.score = 0.6 * self.score + 0.4 * float(score)
