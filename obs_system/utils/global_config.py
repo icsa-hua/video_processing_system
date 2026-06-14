@@ -94,7 +94,7 @@ UNSTABLE_MOTION_THRESHOLD = 0.40
 UNSTABLE_MOTION_SUPPRESSION_WEIGHT = 0.20
 
 #--------- Drivable-Area Confidence Map (Step 3) ----------
-ENABLE_DRIVABLE_CONFIDENCE_MAP = True
+ENABLE_DRIVABLE_CONFIDENCE_MAP = False
 # Per-source contribution weights (must sum <= 1.0; remainder left to runtime learning)
 DRIVABLE_STATIC_WEIGHT = 0.50
 DRIVABLE_DETECTION_WEIGHT = 0.25
@@ -112,7 +112,7 @@ PANORAMA_VIEW_SIZE = (640, 640)
 # Horizontal FOV in degrees for each perspective view (pinhole tangent-plane view)
 PANORAMA_VIEW_FOV_DEG = 80.0
 # Pitch offset for all views in degrees (negative = tilt down toward road)
-PANORAMA_PITCH_DEG = -10.0
+PANORAMA_PITCH_DEG = -12.0
 # Assumed total horizontal angular span of the panorama image in degrees
 PANORAMA_HFOV_DEG = 180.0
 # Assumed total vertical angular span of the panorama image in degrees
