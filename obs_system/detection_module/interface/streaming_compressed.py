@@ -178,12 +178,20 @@ class OptimizedStreamer(Streamer):
                     timeline_logger.log_span(batch_idx, "roi", _t0_rel, _t1_rel)
                     res_h, res_w = im0s[0].shape[:2] if len(im0s) else (0, 0)
 
+        with StepContext(name="FishEyE Processing (Defish)", catch=(RuntimeError,), verbose=self.args.verbose):
+            if self.logic_module["FEP"] is not None:
+                Streamer.logger.debug("FEP enabled")
+                t_defish0 = time.perf_counter()
+                im0s = self.logic_module["FEP"]._defish(im0s)
+                defish_ms = (time.perf_counter() - t_defish0) * 1e3
+                self._record_stage_time("defish_ms", defish_ms, frame_ids=frame_ids)
+
         with StepContext(name="BackGround Subtractor  (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
             if self.args.plot_performance:
                 _t0 = time.perf_counter()
                 _t0_rel = _t0 - stream_start
             subtractor_inst = self.logic_module["SUBTRACTOR"]
-            mfgs, lanes_final = subtractor_inst.detect(im0s, save_img=True)
+            mfgs, lanes_final = subtractor_inst.detect(im0s, save_img=False)
             if self.args.plot_performance:
                 mog2_ms = (time.perf_counter() - _t0) * 1e3
                 self._record_stage_time("mog2_ms", mog2_ms, frame_ids=frame_ids)
@@ -201,14 +209,6 @@ class OptimizedStreamer(Streamer):
 
         if self.should_force_inference_all_frames():
             mfgs = [True] * len(mfgs)
-
-        with StepContext(name="FishEyE Processing (Defish)", catch=(RuntimeError,), verbose=self.args.verbose):
-            if self.logic_module["FEP"] is not None:
-                Streamer.logger.debug("FEP enabled")
-                t_defish0 = time.perf_counter()
-                im0s = self.logic_module["FEP"]._defish(im0s)
-                defish_ms = (time.perf_counter() - t_defish0) * 1e3
-                self._record_stage_time("defish_ms", defish_ms, frame_ids=frame_ids)
 
         fg_masks = getattr(subtractor_inst, "_last_batch_fg_masks", None) or []
 

@@ -4,7 +4,10 @@ import numpy as np
 
 from abc import ABC, abstractmethod
 from typing import Dict, Tuple
-from obs_system.utils.global_config import DEFISH_ALPHA, DEFISH_BETA, DISTORTION_STRENGTH 
+from obs_system.utils.global_config import (
+    DEFISH_ALPHA, DEFISH_BETA, DISTORTION_STRENGTH,
+    DEFISH_MODEL, DEFISH_FISHEYE_FOV_DEG, DEFISH_OUTPUT_FOV_DEG,
+)
 
 
 class FishEyeProjection(EventExtractorInterface): 
@@ -29,6 +32,7 @@ class FishEyeProjection(EventExtractorInterface):
         self.__cx = cx 
         self.__cy = cy 
         self.__map_cache:Dict[Tuple[int, int, float, float, float, float], Tuple[np.ndarray, np.ndarray, int, int,]] = {}
+        self.__equidistant_cache: Dict[Tuple, Tuple[np.ndarray, np.ndarray]] = {}
 
 
     def _build(self, 
@@ -204,74 +208,153 @@ class FishEyeProjection(EventExtractorInterface):
 
 
 
-    def __build_maps(self, w:int, h:int, k:float, cx:float, cy:float): 
-        sx = max(cx, 1.0) 
-        sy = max(cy, 1.0) 
-        x = (np.arange(w, dtype=np.float32)-cx) / sx 
-        y = (np.arange(h, dtype=np.float32)-cy) / sy 
-        xv, yv = np.meshgrid(x, y, copy=False) 
+    def __build_maps(self, w:int, h:int, k:float, cx:float, cy:float):
+        sx = max(cx, 1.0)
+        sy = max(cy, 1.0)
+        x = (np.arange(w, dtype=np.float32)-cx) / sx
+        y = (np.arange(h, dtype=np.float32)-cy) / sy
+        xv, yv = np.meshgrid(x, y, copy=False)
 
-        r2 = xv * xv + yv * yv 
-        scale = 1.0 + k * r2 
-        np.maximum(scale, 1e-6, out=scale) 
+        r2 = xv * xv + yv * yv
+        scale = 1.0 + k * r2
+        np.maximum(scale, 1e-6, out=scale)
 
-        src_x = (xv * scale) * sx + cx 
-        src_y = (yv * scale) * sy + cy 
+        src_x = (xv * scale) * sx + cx
+        src_y = (yv * scale) * sy + cy
         return src_x.astype(np.float32), src_y.astype(np.float32)
 
-    
-    def __get_cropped_maps(self, w:int, h:int, k:float, cx:float, cy:float): 
-        key = (w, h, float(k), float(cx), float(cy), float(self.__crop))
-        cached = self.__map_cache.get(key) 
-        if cached is not None: 
-            return cached 
 
-        map_x_full, map_y_full = self.__build_maps(w,h,k,cx,cy) 
-    
-        if self.__crop > 0.0: 
-            ch = int(round(h*self.__crop)) 
+    def __get_cropped_maps(self, w:int, h:int, k:float, cx:float, cy:float):
+        key = (w, h, float(k), float(cx), float(cy), float(self.__crop))
+        cached = self.__map_cache.get(key)
+        if cached is not None:
+            return cached
+
+        map_x_full, map_y_full = self.__build_maps(w, h, k, cx, cy)
+
+        if self.__crop > 0.0:
+            ch = int(round(h*self.__crop))
             cw = int(round(w*self.__crop))
-            
-            y0, y1 = ch, h-ch 
-            x0, x1 = cw, w-cw 
-            map_x = map_x_full[y0:y1, x0:x1] 
-            map_y = map_y_full[y0:y1, x0:x1] 
-            out_w, out_h = (x1-x0), (y1-y0) 
-        else: 
-            map_x, map_y = map_x_full, map_y_full 
+            y0, y1 = ch, h-ch
+            x0, x1 = cw, w-cw
+            map_x = map_x_full[y0:y1, x0:x1]
+            map_y = map_y_full[y0:y1, x0:x1]
+            out_w, out_h = (x1-x0), (y1-y0)
+        else:
+            map_x, map_y = map_x_full, map_y_full
             out_w, out_h = w, h
 
         self.__map_cache[key] = (map_x, map_y, out_w, out_h)
         return self.__map_cache[key]
 
 
+    def __build_equidistant_maps(
+        self,
+        w: int,
+        h: int,
+        cx: float,
+        cy: float,
+        fisheye_fov_deg: float,
+        output_fov_deg: float,
+    ) -> tuple:
+        """
+        Build remap arrays for equidistant circular fisheye undistortion.
+
+        For a circular fisheye with equidistant projection r = f_fish * theta:
+          - f_fish is derived from the fisheye circle radius and the total lens FOV.
+          - Each output pixel is treated as a rectilinear ray; the angle theta from
+            the optical axis is computed, then mapped back to the source radius.
+
+        The output has the same (w, h) as the input — no cropping — so downstream
+        coordinate systems (ROI translation, motion-gate tile mapping) are unaffected.
+        Pixels outside the fisheye circle sample from beyond the lens boundary and
+        appear black (BORDER_CONSTANT = 0).
+        """
+        # Fisheye: r_src = f_fish * theta, theta in [0, fisheye_fov / 2]
+        theta_max = np.deg2rad(fisheye_fov_deg / 2.0)
+        fisheye_radius = min(w, h) / 2.0
+        f_fish = fisheye_radius / theta_max  # px per radian
+
+        # Output pinhole focal length from desired output FOV
+        output_half_fov = np.deg2rad(output_fov_deg / 2.0)
+        f_out = (min(w, h) / 2.0) / np.tan(output_half_fov)
+
+        # Per-pixel direction in rectilinear output space
+        uu = np.arange(w, dtype=np.float64) - cx
+        vv = np.arange(h, dtype=np.float64) - cy
+        uu_grid, vv_grid = np.meshgrid(uu, vv)
+
+        x_n = uu_grid / f_out
+        y_n = vv_grid / f_out
+        r_n = np.sqrt(x_n ** 2 + y_n ** 2)
+
+        # Angle from optical axis (rectilinear pinhole)
+        theta = np.arctan(r_n)
+
+        # Azimuth angle
+        phi = np.arctan2(y_n, x_n)
+
+        # Equidistant source radius
+        r_src = f_fish * theta
+
+        src_x = (cx + r_src * np.cos(phi)).astype(np.float32)
+        src_y = (cy + r_src * np.sin(phi)).astype(np.float32)
+        return src_x, src_y
+
+
+    def __get_equidistant_maps(
+        self,
+        w: int,
+        h: int,
+        cx: float,
+        cy: float,
+        fisheye_fov_deg: float,
+        output_fov_deg: float,
+    ) -> tuple:
+        key = (w, h, cx, cy, fisheye_fov_deg, output_fov_deg)
+        cached = self.__equidistant_cache.get(key)
+        if cached is not None:
+            return cached
+        maps = self.__build_equidistant_maps(w, h, cx, cy, fisheye_fov_deg, output_fov_deg)
+        self.__equidistant_cache[key] = maps
+        return maps
+
 
     def _defish(self, imgs, k=DISTORTION_STRENGTH, border=cv2.BORDER_CONSTANT, apply_gain:bool=True):
-        """Simple fisheye correction without calibration.
-        Args:
-            img: input BGR image
-            k: distortion strength (-0.2 to -0.6 typical for fisheye)
         """
-    
-        out = [] 
-        if not imgs: 
-            return out 
+        Undistort fisheye images.
 
-        for img in imgs: 
-            h, w = img.shape[:2] 
-            cx = w / 2.0 if self.__cx is None else float(self.__cx) 
-            cy = h / 2.0 if self.__cy is None else float(self.__cy) 
+        When DEFISH_MODEL == "equidistant" (default), uses a proper equidistant
+        circular-fisheye model parameterised by DEFISH_FISHEYE_FOV_DEG and
+        DEFISH_OUTPUT_FOV_DEG. This is correct for cameras that produce a circular
+        image with a fisheye projection (r = f * theta).
 
-            map_x, map_y, out_w, out_y = self.__get_cropped_maps(w,h,k,cx,cy) 
+        When DEFISH_MODEL == "barrel", falls back to the polynomial radial model
+        (scale = 1 + k * r²) which was the original behaviour.
+        """
+        out = []
+        if not imgs:
+            return out
 
-            undist = cv2.remap(img, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode= border)
+        for img in imgs:
+            h, w = img.shape[:2]
+            cx = w / 2.0 if self.__cx is None else float(self.__cx)
+            cy = h / 2.0 if self.__cy is None else float(self.__cy)
 
-            if apply_gain and (DEFISH_ALPHA != 1.0 and DEFISH_BETA != 0.0): 
-                undist = cv2.convertScaleAbs(undist, alpha=DEFISH_ALPHA, beta=DEFISH_BETA)
+            if DEFISH_MODEL == "equidistant":
+                map_x, map_y = self.__get_equidistant_maps(
+                    w, h, cx, cy, DEFISH_FISHEYE_FOV_DEG, DEFISH_OUTPUT_FOV_DEG
+                )
+                undist = cv2.remap(img, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=border)
+            else:
+                map_x, map_y, _, _ = self.__get_cropped_maps(w, h, k, cx, cy)
+                undist = cv2.remap(img, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=border)
+                if apply_gain and (DEFISH_ALPHA != 1.0 and DEFISH_BETA != 0.0):
+                    undist = cv2.convertScaleAbs(undist, alpha=DEFISH_ALPHA, beta=DEFISH_BETA)
 
             out.append(undist)
 
-        return out 
+        return out
 
 
 

@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 #---------- Detection Thresholds ------------
-CONF_THR = 0.25 
+CONF_THR = 0.45 
 NMS_IOU = 0.45 
 CLASS_AGNOSTIC = True 
 
@@ -16,12 +16,16 @@ TILE_OVERLAP = 0.05
 TILE_NMS_IOU = 0.50
 TILE_THR = 3
 
-#--------- Defish Parameters --------- 
+#--------- Defish Parameters ---------
 DEFISH_K = 0.35
-DEFISH_CROP = 0.05 
+DEFISH_CROP = 0.05
 DISTORTION_STRENGTH = -0.20
 DEFISH_ALPHA = 0.5
 DEFISH_BETA = 10
+# Equidistant circular fisheye model ("barrel" = old polynomial, "equidistant" = circular fisheye)
+DEFISH_MODEL = "equidistant"
+DEFISH_FISHEYE_FOV_DEG = 360.0   # total angular span of the fisheye lens (360 = full circle)
+DEFISH_OUTPUT_FOV_DEG = 140.0    # rectilinear output FOV fed to YOLO; lower = less distortion at edges
 
 #--------- Motion Gating ----------
 TRIALS = 10 
@@ -87,7 +91,7 @@ MOTION_MORPH_KERNEL = 5
 MOTION_GATE_FILTERED_SCORE_THRESHOLD = 0.002
 
 #--------- Unstable Motion Map (Step 2) ----------
-ENABLE_UNSTABLE_MOTION_MAP = False
+ENABLE_UNSTABLE_MOTION_MAP = True
 # Fraction of warmup frames in which a pixel must fire to be labelled "unstable"
 UNSTABLE_MOTION_THRESHOLD = 0.40
 # Contribution weight of an unstable pixel toward the motion score (0 = fully suppressed)
