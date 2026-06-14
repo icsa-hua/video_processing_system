@@ -38,7 +38,7 @@ MIN_OBJ_AREA = 0.003
 EMPTY_IMAGE_PATH = "samples/highway_rescaled.png" 
 
 #--------- Frame Batching ---------
-BATCH_SIZE = 8
+BATCH_SIZE = 16
 WARM_UP_SESSIONS = 8
 FIXED_WIDTH = 1245
 FIXED_HEIGHT = 1088
@@ -72,7 +72,7 @@ RED = (0, 0, 255)
 # Must stay BELOW sv.ByteTrack.track_activation_threshold (default 0.25) so the blobs
 # enter only the second-round matching pass — reinforcing existing tracks but never
 # spawning new ones. This is the allow_spawn=False behaviour from CarDet_Dummy_EdgeAI.
-MOTION_BOX_CONFIDENCE = 0.15
+MOTION_BOX_CONFIDENCE = 0.25
 # Blob area as fraction of the fg_mask (downscale) total pixels
 MOTION_BOX_MIN_AREA_RATIO = 0.003
 MOTION_BOX_MAX_AREA_RATIO = 0.40
@@ -132,7 +132,7 @@ TILE_ACTIVATION_ENABLED = True
 # Frames a tile stays active after its last motion trigger or detection hit.
 TILE_ACTIVATION_PERSIST_FRAMES = 5
 # Minimum fraction of a tile's FG-mask region that must be foreground to trigger it.
-TILE_ACTIVATION_MOTION_MIN_RATIO = 0.02
+TILE_ACTIVATION_MOTION_MIN_RATIO = 0.025
 
 #--------- Tile / Panorama Kalman Detection Smoother ----------
 # Maximum frames a Kalman track survives without a matching detection.
@@ -140,7 +140,7 @@ TILE_KALMAN_MAX_AGE = 5
 # Minimum detections before a track contributes Kalman-predicted boxes.
 TILE_KALMAN_MIN_HITS = 1
 # Minimum IoU to associate a detection with a Kalman-predicted track position.
-TILE_KALMAN_IOU_THRESHOLD = 0.35
+TILE_KALMAN_IOU_THRESHOLD = 0.45
 
 #--------- Road-Scene Class Filter ----------
 # Classes that cannot appear in a road traffic scene — removed from all detections.
@@ -148,7 +148,7 @@ TILE_KALMAN_IOU_THRESHOLD = 0.35
 ROAD_IMPOSSIBLE_CLASSES = frozenset({
     "boat", "ship", "surfboard", "snowboard", "skis",
     "train", "airplane", "aeroplane", "helicopter",
-    "submarine", "kite",
+    "submarine", "kite", "bird"
 })
 
 
