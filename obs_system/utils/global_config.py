@@ -12,7 +12,7 @@ CLASS_AGNOSTIC = True
 
 #---------- Image Tiling parameters ---------
 TILE_SIZE = 640
-TILE_OVERLAP = 0.05
+TILE_OVERLAP = 0.20
 TILE_NMS_IOU = 0.50
 TILE_THR = 3
 
