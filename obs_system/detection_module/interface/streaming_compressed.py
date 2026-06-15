@@ -600,6 +600,17 @@ class OptimizedStreamer(Streamer):
                 scores_t = scores_t[road_mask]
                 classes_t = classes_t[road_mask]
 
+                view_yaw_deg = None
+                if hasattr(fep, "view_yaws_deg") and 0 <= int(v_id) < len(fep.view_yaws_deg):
+                    view_yaw_deg = int(round(float(fep.view_yaws_deg[int(v_id)]))) % 360
+                if view_yaw_deg in FISHEYE_LOWER_VIEW_YAWS_DEG:
+                    conf_mask = scores_t >= float(FISHEYE_LOWER_VIEW_CONF_THR)
+                    if not conf_mask.any():
+                        continue
+                    boxes_t = boxes_t[conf_mask]
+                    scores_t = scores_t[conf_mask]
+                    classes_t = classes_t[conf_mask]
+
                 boxes_np = boxes_t.cpu().numpy().astype(np.float32)
                 boxes_fish = fep.backproject_view_boxes(boxes_np, v_id)
 
