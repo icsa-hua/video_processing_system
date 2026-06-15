@@ -12,7 +12,7 @@ CLASS_AGNOSTIC = True
 
 #---------- Image Tiling parameters ---------
 TILE_SIZE = 640
-TILE_OVERLAP = 0.20
+TILE_OVERLAP = 0.30
 TILE_NMS_IOU = 0.50
 TILE_THR = 3
 
@@ -24,8 +24,8 @@ DEFISH_ALPHA = 0.5
 DEFISH_BETA = 10
 # Equidistant circular fisheye model ("barrel" = old polynomial, "equidistant" = circular fisheye)
 DEFISH_MODEL = "equidistant"
-DEFISH_FISHEYE_FOV_DEG = 360.0   # total angular span of the fisheye lens (360 = full circle)
-DEFISH_OUTPUT_FOV_DEG = 140.0    # rectilinear output FOV fed to YOLO; lower = less distortion at edges
+DEFISH_FISHEYE_FOV_DEG = 180.0   # total angular span of the fisheye lens (360 = full circle)
+DEFISH_OUTPUT_FOV_DEG = 90.0    # rectilinear output FOV fed to YOLO; lower = less distortion at edges
 
 #--------- Motion Gating ----------
 TRIALS = 10 
