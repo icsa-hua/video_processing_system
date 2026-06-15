@@ -1138,13 +1138,14 @@ class OptimizedStreamer(Streamer):
                 self._note_emitted_result(len(empty_preds))
                 yield empty_preds
                 self._enqueue_async_sink(("mqtt_no_detection", empty_preds, frame_ids), stage="mqtt_ms", frame_ids=frame_ids)
-                _nm_frame_bundles = [
-                    {"frame_id": fid, "orig_img": im0s[i], "bni": i, "empty": True}
-                    for i, fid in enumerate(frame_ids)
-                ]
-                self._stage_d_dispatch_optional_sinks(
-                    empty_preds, _nm_frame_bundles, paths, original_images_bgr, preview_queue, producer_flag
-                )
+                self._publish_no_motion_preview(original_images_bgr, preview_queue, producer_flag)
+                if self.args.save:
+                    for i, fid in enumerate(frame_ids):
+                        p = Path(paths[i])
+                        save_path = str(self.save_dir / p.name)
+                        frame_count = int(getattr(self.dataset, "count", fid))
+                        orig_rgb = cv2.cvtColor(original_images_bgr[i], cv2.COLOR_BGR2RGB)
+                        self.save_queue.put(("save_frame", save_path, frame_count, orig_rgb))
                 if self.args.plot_performance:
                     t_now = time.perf_counter()
                     scores = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None)
@@ -1641,13 +1642,14 @@ class OptimizedStreamer(Streamer):
                     stage="mqtt_ms",
                     frame_ids=frame_ids,
                 )
-                _nm_frame_bundles_t = [
-                    {"frame_id": fid, "orig_img": im0s[i], "bni": i, "empty": True}
-                    for i, fid in enumerate(frame_ids)
-                ]
-                self._stage_d_dispatch_optional_sinks(
-                    empty_preds, _nm_frame_bundles_t, paths, original_images_bgr, preview_queue, producer_flag
-                )
+                self._publish_no_motion_preview(original_images_bgr, preview_queue, producer_flag)
+                if self.args.save:
+                    for i, fid in enumerate(frame_ids):
+                        p = Path(paths[i])
+                        save_path = str(self.save_dir / p.name)
+                        frame_count = int(getattr(self.dataset, "count", fid))
+                        orig_rgb = cv2.cvtColor(original_images_bgr[i], cv2.COLOR_BGR2RGB)
+                        self.save_queue.put(("save_frame", save_path, frame_count, orig_rgb))
                 if self.args.plot_performance:
                     t_now = time.perf_counter()
                     scores = getattr(self.logic_module.get("SUBTRACTOR", None), "last_motion_scores", None)
