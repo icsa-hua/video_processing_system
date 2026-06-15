@@ -64,45 +64,32 @@
       "max_components": 20
     }
   },
-  "jetson_2":{
-    "x1": 200,
-    "y1": 200, 
-    "x2": 1800,
-    "y2": 700,
-    "reference_width": 2048,
-    "reference_height": 1080, 
-    "motion": {
-    	"var_threshold": 48, 
-	"gate_score_threshold": 0.003, 
-	"max_components": 20
-    }
-  }, 
-  "jetson_3": {
-	  "x1": 0,
-	  "y1": 0,
-	  "x2": 1500,
-	  "y2": 500,
-	  "reference_width": 1920,
-	  "reference_height": 720,
-	  "motion": {
-		  "var_threshold": 48,
-		  "gate_score_threshold": 0.003,
-		  "max_components": 20
-	  }
+
+  "jetson_3_recording": {
+          "x1": 0,
+          "y1": 0,
+          "x2": 1500,
+          "y2": 500,
+          "reference_width": 1920,
+          "reference_height": 720,
+          "motion": {
+                  "var_threshold": 48,
+                  "gate_score_threshold": 0.003,
+                  "max_components": 20
+          }
   },
-  "new_jetson2":{
+  "jetson_2_recording":{
     "x1": 0,
-    "y1": 0, 
+    "y1": 0,
     "x2": 2048,
     "y2": 1080,
     "reference_width": 2048,
-    "reference_height": 1080, 
+    "reference_height": 1080,
     "motion": {
-    	"var_threshold": 48, 
-	"gate_score_threshold": 0.003, 
-	"max_components": 20
+        "var_threshold": 48,
+        "gate_score_threshold": 0.003,
+        "max_components": 20
     }
   }
-
 
 }
