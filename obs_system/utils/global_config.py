@@ -12,7 +12,7 @@ CLASS_AGNOSTIC = True
 
 #---------- Image Tiling parameters ---------
 TILE_SIZE = 640
-TILE_OVERLAP = 0.20
+TILE_OVERLAP = 0.30
 TILE_NMS_IOU = 0.50
 TILE_THR = 3
 
@@ -30,7 +30,7 @@ DEFISH_OUTPUT_FOV_DEG = 90.0     # legacy single-view rectilinear output FOV
 #--------- Fisheye Tangent-View Reprojection ----------
 FISHEYE_N_VIEWS = 6
 FISHEYE_VIEW_SIZE = (640, 640)
-FISHEYE_VIEW_FOV_DEG = 80.0
+FISHEYE_VIEW_FOV_DEG = 70.0
 FISHEYE_VIEW_TILT_DEG = 55.0
 FISHEYE_VIEW_YAWS_DEG = [0, 60, 120, 180, 240, 300]
 FISHEYE_VIEW_MIN_MOTION_FRACTION = 0.005
@@ -81,7 +81,7 @@ RED = (0, 0, 255)
 # Must stay BELOW sv.ByteTrack.track_activation_threshold (default 0.25) so the blobs
 # enter only the second-round matching pass — reinforcing existing tracks but never
 # spawning new ones. This is the allow_spawn=False behaviour from CarDet_Dummy_EdgeAI.
-MOTION_BOX_CONFIDENCE = 0.15
+MOTION_BOX_CONFIDENCE = 0.25
 # Blob area as fraction of the fg_mask (downscale) total pixels
 MOTION_BOX_MIN_AREA_RATIO = 0.003
 MOTION_BOX_MAX_AREA_RATIO = 0.40
@@ -114,26 +114,26 @@ DRIVABLE_DETECTION_WEIGHT = 0.25
 DRIVABLE_TRACK_WEIGHT = 0.15
 DRIVABLE_UNSTABLE_NEGATIVE_WEIGHT = 0.10
 # Pixels below this confidence are treated as "not reliably drivable"
-DRIVABLE_CONFIDENCE_THRESHOLD = 0.25
+DRIVABLE_CONFIDENCE_THRESHOLD = 0.35
 
 
 #--------- Panorama Perspective Reprojection ----------
 # Number of tangent/pinhole views to generate from an equirectangular panorama
-PANORAMA_N_VIEWS = 2
+PANORAMA_N_VIEWS = 4
 # Output size (width, height) for each perspective view fed to YOLO
 PANORAMA_VIEW_SIZE = (640, 640)
 # Horizontal FOV in degrees for each perspective view (pinhole tangent-plane view)
-PANORAMA_VIEW_FOV_DEG = 80.0
+PANORAMA_VIEW_FOV_DEG = 75.0
 # Pitch offset for all views in degrees (negative = tilt down toward road)
-PANORAMA_PITCH_DEG = -10.0
+PANORAMA_PITCH_DEG = 10.0
 # Assumed total horizontal angular span of the panorama image in degrees
 PANORAMA_HFOV_DEG = 180.0
 # Assumed total vertical angular span of the panorama image in degrees
-PANORAMA_VFOV_DEG = 90.0
+PANORAMA_VFOV_DEG = 70.0
 # Fraction of a view's panorama coverage that must contain motion to activate the view
-PANORAMA_MIN_MOTION_FRACTION = 0.005
+PANORAMA_MIN_MOTION_FRACTION = 0.001
 # Cross-view NMS IoU threshold (applied after back-projecting all view detections to panorama space)
-PANORAMA_NMS_IOU = 0.35
+PANORAMA_NMS_IOU = 0.45
 
 #--------- Tile Activation Persistence Window ----------
 # Set to False to disable per-tile motion gating and fall back to whole-frame inference.
@@ -141,7 +141,7 @@ TILE_ACTIVATION_ENABLED = True
 # Frames a tile stays active after its last motion trigger or detection hit.
 TILE_ACTIVATION_PERSIST_FRAMES = 5
 # Minimum fraction of a tile's FG-mask region that must be foreground to trigger it.
-TILE_ACTIVATION_MOTION_MIN_RATIO = 0.02
+TILE_ACTIVATION_MOTION_MIN_RATIO = 0.025
 
 #--------- Tile / Panorama Kalman Detection Smoother ----------
 # Maximum frames a Kalman track survives without a matching detection.
@@ -149,7 +149,7 @@ TILE_KALMAN_MAX_AGE = 5
 # Minimum detections before a track contributes Kalman-predicted boxes.
 TILE_KALMAN_MIN_HITS = 1
 # Minimum IoU to associate a detection with a Kalman-predicted track position.
-TILE_KALMAN_IOU_THRESHOLD = 0.35
+TILE_KALMAN_IOU_THRESHOLD = 0.45
 
 #--------- Road-Scene Class Filter ----------
 # Classes that cannot appear in a road traffic scene — removed from all detections.
