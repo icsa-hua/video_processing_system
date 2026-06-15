@@ -42,7 +42,7 @@ from ultralytics.utils import DEFAULT_CFG
 logger = get_logger("obs_system." + __name__)
 
 DEFAULT_VIDEO_SOURCE = "samples/MVI_39401.mp4"
-DEFAULT_MODEL = "assets/compressed_models/edi_jetson_model.engine"
+DEFAULT_MODEL = "assets/compressed_models/yolov8s.engine"
 DEFAULT_OUTPUT_DIR = "experiment_results"
 MQTT_ARCHIVE_PATH = Path("assets/mqtt/saved_publishes.cbor")
 HAZARD_CSV_PATH = Path("assets/hazard_events/hazard_events.csv")
