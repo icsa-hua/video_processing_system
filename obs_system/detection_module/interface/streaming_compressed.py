@@ -180,10 +180,12 @@ class OptimizedStreamer(Streamer):
         with StepContext(name="FishEyE Processing (Defish)", catch=(RuntimeError,), verbose=self.args.verbose):
             if self.logic_module["FEP"] is not None:
                 Streamer.logger.debug("FEP enabled")
-                t_defish0 = time.perf_counter()
-                im0s = self.logic_module["FEP"]._defish(im0s)
-                defish_ms = (time.perf_counter() - t_defish0) * 1e3
-                self._record_stage_time("defish_ms", defish_ms, frame_ids=frame_ids)
+                fep = self.logic_module["FEP"]
+                if not bool(getattr(fep, "use_tangent_views", False)):
+                    t_defish0 = time.perf_counter()
+                    im0s = fep._defish(im0s)
+                    defish_ms = (time.perf_counter() - t_defish0) * 1e3
+                    self._record_stage_time("defish_ms", defish_ms, frame_ids=frame_ids)
 
         with StepContext(name="BackGround Subtractor  (Motion-Gating)", catch=(RuntimeError, Exception), verbose=self.args.verbose):
             if self.args.plot_performance:
@@ -211,6 +213,17 @@ class OptimizedStreamer(Streamer):
 
         fg_masks = getattr(subtractor_inst, "_last_batch_fg_masks", None) or []
 
+        # When FEP is active im0s has been remapped; YOLO boxes will be in that
+        # undistorted coordinate space, so all display / postprocess paths must
+        # also use the undistorted frames.  When FEP is off the two lists are
+        # identical content (no copy needed).
+        fep_active = (
+            self.logic_module is not None
+            and self.logic_module.get("FEP") is not None
+            and not bool(getattr(self.logic_module.get("FEP"), "use_tangent_views", False))
+        )
+        display_images_bgr = list(im0s) if fep_active else original_images_bgr
+
         return {
             "paths": paths,
             "im0s": im0s,
@@ -218,6 +231,7 @@ class OptimizedStreamer(Streamer):
             "frame_read_ms": frame_read_ms,
             "original_images_bgr": original_images_bgr,
             "cropped_original_images_bgr": cropped_original_images_bgr,
+            "display_images_bgr": display_images_bgr,
             "mfgs": mfgs,
             "fg_masks": fg_masks,
             "roi_ms": roi_ms,
@@ -359,6 +373,7 @@ class OptimizedStreamer(Streamer):
         """
         im0s = stage_a["im0s"]
         original_images_bgr = stage_a["original_images_bgr"]
+        display_images_bgr = stage_a.get("display_images_bgr", original_images_bgr)
         mfgs = stage_a["mfgs"]
         frame_ids = stage_a["frame_ids"]
         fg_masks = stage_a.get("fg_masks") or []
@@ -443,7 +458,7 @@ class OptimizedStreamer(Streamer):
         # ── Pass 3: per-frame NMS + ROI back-translation ─────────────────────
         frames: List[FrameDetections] = []
         for bni, (keep_frame, fid) in enumerate(zip(mfgs, frame_ids)):
-            orig_img = original_images_bgr[bni]
+            orig_img = display_images_bgr[bni]
             if self.args.save or self.args.show:
                 orig_img = cv2.cvtColor(orig_img, cv2.COLOR_BGR2RGB)
             fg_mask_bni = fg_masks[bni] if bni < len(fg_masks) else None
@@ -502,9 +517,161 @@ class OptimizedStreamer(Streamer):
             "nms_ms": total_nms_ms,
         }
 
+    def _stage_b_fisheye_view_inference(self, stage_a, model, profilers, activities, stream_start, timeline_logger, batch_idx):
+        """
+        Fisheye tangent-view Stage B.
+
+        Generates pinhole views from each motion-passed fisheye frame, runs YOLO
+        over a flat microbatched view list, back-projects detections to the
+        fisheye frame, then applies cross-view NMS per source frame.
+        """
+        im0s = stage_a["im0s"]
+        original_images_bgr = stage_a["original_images_bgr"]
+        display_images_bgr = stage_a.get("display_images_bgr", original_images_bgr)
+        mfgs = stage_a["mfgs"]
+        frame_ids = stage_a["frame_ids"]
+        fg_masks = stage_a.get("fg_masks") or []
+
+        fep = self.logic_module.get("FEP")
+
+        all_view_items: List = []
+        total_preprocess_ms = 0.0
+        total_inference_ms = 0.0
+        total_nms_ms = 0.0
+
+        t_view0 = time.perf_counter()
+        for bni, (keep_frame, fisheye_bgr) in enumerate(zip(mfgs, im0s)):
+            if not keep_frame or fep is None:
+                continue
+            fg_mask = fg_masks[bni] if bni < len(fg_masks) else None
+            for view_img, v_id, has_motion in fep.get_views(fisheye_bgr, fg_mask_small=fg_mask):
+                if has_motion and view_img is not None:
+                    all_view_items.append((view_img, bni, v_id))
+        total_preprocess_ms += (time.perf_counter() - t_view0) * 1e3
+
+        frame_acc: dict = {}
+        micro = BATCH_SIZE
+        for mb_start in range(0, max(1, len(all_view_items)), micro):
+            mb = all_view_items[mb_start: mb_start + micro]
+            if not mb:
+                break
+
+            view_imgs_mb = [item[0] for item in mb]
+            bni_mb = [item[1] for item in mb]
+            vid_mb = [item[2] for item in mb]
+
+            t_pre0 = time.perf_counter()
+            with profilers[0]:
+                view_tensors = self.preprocess(view_imgs_mb)
+            total_preprocess_ms += (time.perf_counter() - t_pre0) * 1e3
+
+            t_inf0 = time.perf_counter()
+            with profilers[1]:
+                raw_out = self.model(view_tensors, orig_imgs=None, debug=False)
+            total_inference_ms += (time.perf_counter() - t_inf0) * 1e3
+
+            if isinstance(raw_out, tuple) and len(raw_out) == 2 and isinstance(raw_out[0], tuple):
+                (i_boxes, i_scores, i_classes), event = raw_out
+            else:
+                i_boxes, i_scores, i_classes = raw_out
+                event = None
+
+            if event is not None and torch.cuda.is_available():
+                torch.cuda.current_stream().wait_event(event)
+
+            for bni, v_id, boxes, scores, classes in zip(bni_mb, vid_mb, i_boxes, i_scores, i_classes):
+                boxes_t = boxes if torch.is_tensor(boxes) else torch.as_tensor(boxes, dtype=torch.float32)
+                if boxes_t.numel() == 0:
+                    continue
+
+                scores_t = (scores if torch.is_tensor(scores) else torch.as_tensor(scores)).to(torch.float32)
+                classes_t = (classes if torch.is_tensor(classes) else torch.as_tensor(classes)).to(torch.int64)
+                boxes_t = boxes_t.to(torch.float32)
+
+                road_mask = self._get_road_filter_mask(classes_t)
+                if not road_mask.any():
+                    continue
+                boxes_t = boxes_t[road_mask]
+                scores_t = scores_t[road_mask]
+                classes_t = classes_t[road_mask]
+
+                boxes_np = boxes_t.cpu().numpy().astype(np.float32)
+                boxes_fish = fep.backproject_view_boxes(boxes_np, v_id)
+
+                valid = (boxes_fish[:, 2] > boxes_fish[:, 0]) & (boxes_fish[:, 3] > boxes_fish[:, 1])
+                if not valid.any():
+                    continue
+
+                entry = frame_acc.setdefault(bni, {"boxes": [], "scores": [], "classes": []})
+                entry["boxes"].append(boxes_fish[valid])
+                entry["scores"].append(scores_t.cpu().numpy()[valid])
+                entry["classes"].append(classes_t.cpu().numpy()[valid])
+
+        frames: List[FrameDetections] = []
+        for bni, (keep_frame, fid) in enumerate(zip(mfgs, frame_ids)):
+            orig_img = display_images_bgr[bni]
+            if self.args.save or self.args.show:
+                orig_img = cv2.cvtColor(orig_img, cv2.COLOR_BGR2RGB)
+            fg_mask_bni = fg_masks[bni] if bni < len(fg_masks) else None
+
+            if not keep_frame:
+                frames.append(FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img))
+                continue
+
+            if bni not in frame_acc or not frame_acc[bni]["boxes"]:
+                fd = FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img)
+                frames.append(self._merge_motion_boxes(fd, fg_mask_bni, im0s[bni].shape[:2]))
+                continue
+
+            accum = frame_acc[bni]
+            all_boxes = np.concatenate(accum["boxes"], axis=0).astype(np.float32)
+            all_scores = np.concatenate(accum["scores"], axis=0).astype(np.float32)
+            all_classes = np.concatenate(accum["classes"], axis=0).astype(np.int64)
+
+            boxes_t_all = torch.as_tensor(all_boxes, dtype=torch.float32)
+            scores_t_all = torch.as_tensor(all_scores, dtype=torch.float32)
+            classes_t_all = torch.as_tensor(all_classes, dtype=torch.int64)
+
+            t_nms0 = time.perf_counter()
+            keep_idx = batched_nms(boxes_t_all, scores_t_all, classes_t_all.long(), iou_threshold=FISHEYE_VIEW_NMS_IOU)
+            total_nms_ms += (time.perf_counter() - t_nms0) * 1e3
+
+            boxes_t_all = boxes_t_all[keep_idx]
+            scores_t_all = scores_t_all[keep_idx]
+            classes_t_all = classes_t_all[keep_idx]
+
+            if self.use_roi and boxes_t_all.numel() > 0:
+                boxes_t_all = self.logic_module["ROI"].translate_bounding_boxes(
+                    results=boxes_t_all,
+                    orig_img_shape=self.original_imgsz,
+                )
+
+            if boxes_t_all.numel() == 0:
+                fd = FrameDetections.empty(frame_id=fid, batch_index=bni, orig_img=orig_img)
+                frames.append(self._merge_motion_boxes(fd, fg_mask_bni, im0s[bni].shape[:2]))
+                continue
+
+            fd = FrameDetections(
+                frame_id=fid,
+                batch_index=bni,
+                orig_img=orig_img,
+                boxes=boxes_t_all,
+                scores=scores_t_all,
+                classes=classes_t_all,
+            )
+            frames.append(self._merge_motion_boxes(fd, fg_mask_bni, im0s[bni].shape[:2]))
+
+        return {
+            "detections": DetectionBatch(frames=frames),
+            "preprocess_ms": total_preprocess_ms,
+            "inference_ms": total_inference_ms,
+            "nms_ms": total_nms_ms,
+        }
+
     def _stage_b_inference_and_nms(self, stage_a, model, profilers, activities, stream_start, timeline_logger, batch_idx):
         im0s = stage_a["im0s"]
         original_images_bgr = stage_a["original_images_bgr"]
+        display_images_bgr = stage_a.get("display_images_bgr", original_images_bgr)
         cropped_original_images_bgr = stage_a.get("cropped_original_images_bgr", original_images_bgr)
         mfgs = stage_a["mfgs"]
         frame_ids = stage_a["frame_ids"]
@@ -513,6 +680,7 @@ class OptimizedStreamer(Streamer):
             if not keep_frame:
                 im0s[i] = empty_image(im0s[i])
                 original_images_bgr[i] = empty_image(original_images_bgr[i])
+                display_images_bgr[i] = empty_image(display_images_bgr[i])
 
         if self.args.plot_performance:
             _t0 = time.perf_counter()
@@ -568,7 +736,7 @@ class OptimizedStreamer(Streamer):
         frames: List[FrameDetections] = []
         nms_ms = 0.0
         for bni, fid in enumerate(frame_ids):
-            orig_img = original_images_bgr[bni]
+            orig_img = display_images_bgr[bni]
             if self.args.save or self.args.show:
                 orig_img = cv2.cvtColor(orig_img, cv2.COLOR_BGR2RGB)
             boxes = i_boxes[bni]
@@ -916,18 +1084,24 @@ class OptimizedStreamer(Streamer):
                 and self.logic_module is not None
                 and self.logic_module.get("PANORAMA") is not None
             )
+            use_fisheye_views = (
+                not use_panorama
+                and self.logic_module is not None
+                and self.logic_module.get("FEP") is not None
+                and bool(getattr(self.logic_module.get("FEP"), "use_tangent_views", False))
+            )
 
             # UI/CLI force_tiles takes highest priority; otherwise auto-detect from image size.
             # A class-level force_streaming_no_tiles=True is overridden by the explicit flag.
             force_tiles_flag = bool(getattr(self.args, "force_tiles", False))
             force_no_tiles = bool(getattr(self, "force_streaming_no_tiles", False)) and not force_tiles_flag
             auto_tile = (self.orig_width // TILE_SIZE) > TILE_THR or (self.orig_height // TILE_SIZE) >= TILE_THR
-            use_tiles = (not use_panorama) and (force_tiles_flag or (auto_tile and not force_no_tiles))
+            use_tiles = (not use_panorama) and (not use_fisheye_views) and (force_tiles_flag or (auto_tile and not force_no_tiles))
 
             # Kalman smoother is active only when multiple tile/view detections are merged
-            # per frame (tile mode or panorama mode). The regular single-pass path relies
-            # solely on ByteTracker for temporal stability.
-            if use_panorama or use_tiles:
+            # per frame. The regular single-pass path relies solely on ByteTracker
+            # for temporal stability.
+            if use_panorama or use_fisheye_views or use_tiles:
                 self._tile_kalman: Optional[TileDetectionSmoother] = TileDetectionSmoother(
                     max_age=TILE_KALMAN_MAX_AGE,
                     min_hits=TILE_KALMAN_MIN_HITS,
@@ -951,6 +1125,21 @@ class OptimizedStreamer(Streamer):
                     "Run Inference in Panorama Mode (%dx%d, %d views)",
                     self.orig_width, self.orig_height,
                     self.logic_module["PANORAMA"].n_views,
+                )
+                return self._stream_inference_impl(
+                    model=model,
+                    producer_flag=producer_flag,
+                    preview_queue=preview_queue,
+                    profilers=profilers,
+                    activities=activities,
+                    start_time=start_time,
+                )
+
+            if use_fisheye_views:
+                Streamer.logger.info(
+                    "Run Inference in Fisheye Tangent-View Mode (%dx%d, %d views)",
+                    self.orig_width, self.orig_height,
+                    self.logic_module["FEP"].n_views,
                 )
                 return self._stream_inference_impl(
                     model=model,
@@ -1102,6 +1291,7 @@ class OptimizedStreamer(Streamer):
             im0s = stage_a["im0s"]
             frame_ids = stage_a["frame_ids"]
             original_images_bgr = stage_a["original_images_bgr"]
+            display_images_bgr = stage_a.get("display_images_bgr", original_images_bgr)
             roi_ms = stage_a["roi_ms"]
             mog2_ms = stage_a["mog2_ms"]
             defish_ms = stage_a["defish_ms"]
@@ -1238,8 +1428,16 @@ class OptimizedStreamer(Streamer):
                 and self.logic_module is not None
                 and self.logic_module.get("PANORAMA") is not None
             )
+            _use_fisheye_views = (
+                not _use_panorama
+                and self.logic_module is not None
+                and self.logic_module.get("FEP") is not None
+                and bool(getattr(self.logic_module.get("FEP"), "use_tangent_views", False))
+            )
             if _use_panorama:
                 stage_b = self._stage_b_panorama_inference(stage_a, model, profilers, activities, stream_start, timeline_logger, batch_idx)
+            elif _use_fisheye_views:
+                stage_b = self._stage_b_fisheye_view_inference(stage_a, model, profilers, activities, stream_start, timeline_logger, batch_idx)
             else:
                 stage_b = self._stage_b_inference_and_nms(stage_a, model, profilers, activities, stream_start, timeline_logger, batch_idx)
             preprocess_ms = stage_b["preprocess_ms"]
@@ -1247,21 +1445,21 @@ class OptimizedStreamer(Streamer):
             nms_ms = stage_b["nms_ms"]
             detection_batch = stage_b["detections"]
 
-            # Kalman smoother: fills tile-boundary / view-overlap gaps for
-            # panorama mode only.  The regular no-tiles path relies on ByteTracker.
-            if _use_panorama and getattr(self, "_tile_kalman", None) is not None:
+            # Kalman smoother fills tile-boundary / view-overlap gaps. The regular
+            # no-tiles path relies on ByteTracker.
+            if (_use_panorama or _use_fisheye_views) and getattr(self, "_tile_kalman", None) is not None:
                 detection_batch = self._apply_kalman_smoother(detection_batch)
 
             postprocess_total_t0 = time.perf_counter()
             if self.args.plot_performance:
                 _tpost = time.perf_counter()
                 _tpost_rel = _tpost - stream_start
-            frame_bundles, preds = self._stage_c_tracking_and_hazard_logic(detection_batch, original_images_bgr, profilers)
+            frame_bundles, preds = self._stage_c_tracking_and_hazard_logic(detection_batch, display_images_bgr, profilers)
             frame_log_rows = self._stage_d_dispatch_optional_sinks(
                 preds,
                 frame_bundles,
                 paths,
-                original_images_bgr,
+                display_images_bgr,
                 preview_queue,
                 producer_flag,
             )
@@ -1598,6 +1796,7 @@ class OptimizedStreamer(Streamer):
             im0s = stage_a["im0s"]
             frame_ids = stage_a["frame_ids"]
             original_images_bgr = stage_a["original_images_bgr"]
+            display_images_bgr = stage_a.get("display_images_bgr", original_images_bgr)
             roi_ms = stage_a["roi_ms"]
             mog2_ms = stage_a["mog2_ms"]
             defish_ms = stage_a["defish_ms"]
@@ -1821,7 +2020,7 @@ class OptimizedStreamer(Streamer):
             # Assemble DetectionBatch: global NMS per frame, optional ROI back-projection
             frames_dets: List[FrameDetections] = []
             for bni_a, (fid, keep_frame) in enumerate(zip(frame_ids, mfgs)):
-                orig_img = original_images_bgr[bni_a]
+                orig_img = display_images_bgr[bni_a]
                 if self.args.save or self.args.show:
                     orig_img = cv2.cvtColor(orig_img, cv2.COLOR_BGR2RGB)
                 fg_mask_bni = fg_masks_b[bni_a] if bni_a < len(fg_masks_b) else None
@@ -1898,10 +2097,10 @@ class OptimizedStreamer(Streamer):
                 _tpost_rel = _tpost - stream_start
 
             frame_bundles, preds = self._stage_c_tracking_and_hazard_logic(
-                detection_batch, original_images_bgr, profilers
+                detection_batch, display_images_bgr, profilers
             )
             frame_log_rows = self._stage_d_dispatch_optional_sinks(
-                preds, frame_bundles, paths, original_images_bgr, preview_queue, producer_flag
+                preds, frame_bundles, paths, display_images_bgr, preview_queue, producer_flag
             )
 
             per_frame_pre = preprocess_ms / max(n_microbatches, 1)
