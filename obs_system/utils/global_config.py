@@ -24,8 +24,18 @@ DEFISH_ALPHA = 0.5
 DEFISH_BETA = 10
 # Equidistant circular fisheye model ("barrel" = old polynomial, "equidistant" = circular fisheye)
 DEFISH_MODEL = "equidistant"
-DEFISH_FISHEYE_FOV_DEG = 180.0   # total angular span of the fisheye lens (360 = full circle)
-DEFISH_OUTPUT_FOV_DEG = 90.0    # rectilinear output FOV fed to YOLO; lower = less distortion at edges
+
+DEFISH_FISHEYE_FOV_DEG = 180.0   # total angular span of the fisheye lens
+DEFISH_OUTPUT_FOV_DEG = 90.0     # legacy single-view rectilinear output FOV
+
+#--------- Fisheye Tangent-View Reprojection ----------
+FISHEYE_N_VIEWS = 6
+FISHEYE_VIEW_SIZE = (640, 640)
+FISHEYE_VIEW_FOV_DEG = 80.0
+FISHEYE_VIEW_TILT_DEG = 55.0
+FISHEYE_VIEW_YAWS_DEG = [0, 60, 120, 180, 240, 300]
+FISHEYE_VIEW_MIN_MOTION_FRACTION = 0.005
+FISHEYE_VIEW_NMS_IOU = 0.35
 
 #--------- Motion Gating ----------
 TRIALS = 10 

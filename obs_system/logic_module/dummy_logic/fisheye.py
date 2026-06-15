@@ -3,10 +3,13 @@ import cv2
 import numpy as np 
 
 from abc import ABC, abstractmethod
-from typing import Dict, Tuple
+from typing import Dict, List, Optional, Tuple
 from obs_system.utils.global_config import (
     DEFISH_ALPHA, DEFISH_BETA, DISTORTION_STRENGTH,
     DEFISH_MODEL, DEFISH_FISHEYE_FOV_DEG, DEFISH_OUTPUT_FOV_DEG,
+    FISHEYE_N_VIEWS, FISHEYE_VIEW_SIZE, FISHEYE_VIEW_FOV_DEG,
+    FISHEYE_VIEW_TILT_DEG, FISHEYE_VIEW_YAWS_DEG,
+    FISHEYE_VIEW_MIN_MOTION_FRACTION,
 )
 
 
@@ -26,13 +29,42 @@ class FishEyeProjection(EventExtractorInterface):
             u_fish  = distort_fisheye(x_norm; K, D)
     """
 
-    def __init__(self, fog_deg:float=90.0, crop=0.1, cx=None, cy=None)->None: 
+    def __init__(
+        self,
+        fog_deg: float = 90.0,
+        crop=0.1,
+        cx=None,
+        cy=None,
+        use_tangent_views: bool = True,
+        n_views: int = FISHEYE_N_VIEWS,
+        view_size: Tuple[int, int] = FISHEYE_VIEW_SIZE,
+        view_fov_deg: float = FISHEYE_VIEW_FOV_DEG,
+        view_tilt_deg: float = FISHEYE_VIEW_TILT_DEG,
+        view_yaws_deg: Optional[List[float]] = None,
+        min_motion_fraction: float = FISHEYE_VIEW_MIN_MOTION_FRACTION,
+    )->None:
         self.__fog_def = fog_deg
         self.__crop=crop 
         self.__cx = cx 
         self.__cy = cy 
         self.__map_cache:Dict[Tuple[int, int, float, float, float, float], Tuple[np.ndarray, np.ndarray, int, int,]] = {}
         self.__equidistant_cache: Dict[Tuple, Tuple[np.ndarray, np.ndarray]] = {}
+        self.use_tangent_views = bool(use_tangent_views)
+        self.n_views = max(1, int(n_views))
+        self.view_w, self.view_h = int(view_size[0]), int(view_size[1])
+        self.view_fov_deg = float(view_fov_deg)
+        self.view_tilt_deg = float(view_tilt_deg)
+        yaws = FISHEYE_VIEW_YAWS_DEG if view_yaws_deg is None else view_yaws_deg
+        if len(yaws) < self.n_views:
+            raise ValueError("view_yaws_deg must contain at least n_views entries")
+        self.view_yaws_deg = [float(y) for y in yaws[:self.n_views]]
+        self.min_motion_fraction = float(min_motion_fraction)
+        self._fish_w: int = 0
+        self._fish_h: int = 0
+        self._tangent_map_x: List[np.ndarray] = []
+        self._tangent_map_y: List[np.ndarray] = []
+        self._tangent_map1_int: List[np.ndarray] = []
+        self._tangent_map2_int: List[np.ndarray] = []
 
 
     def _build(self, 
@@ -109,6 +141,195 @@ class FishEyeProjection(EventExtractorInterface):
         assert 0 <= view_id < self._V
         return cv2.remap(frame_bgr, self._map1[view_id], self._map2[view_id],
                          interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+
+
+    @staticmethod
+    def _bilinear_sample(map2d: np.ndarray, u: np.ndarray, v: np.ndarray) -> np.ndarray:
+        h, w = map2d.shape
+        u0 = np.clip(np.floor(u).astype(np.int32), 0, w - 2)
+        v0 = np.clip(np.floor(v).astype(np.int32), 0, h - 2)
+        u1 = u0 + 1
+        v1 = v0 + 1
+        wu = (u - u0).astype(np.float32)
+        wv = (v - v0).astype(np.float32)
+        return (
+            (1.0 - wu) * (1.0 - wv) * map2d[v0, u0]
+            + wu * (1.0 - wv) * map2d[v0, u1]
+            + (1.0 - wu) * wv * map2d[v1, u0]
+            + wu * wv * map2d[v1, u1]
+        )
+
+
+    def _build_tangent_maps(self, fish_w: int, fish_h: int) -> None:
+        """
+        Build pinhole/tangent view maps for a circular equidistant fisheye.
+
+        Source convention:
+          - source image centre is the fisheye optical axis
+          - yaw 0° points right; positive yaw rotates counter-clockwise
+          - image y points down, so positive spherical y projects upward
+        """
+        self._fish_w = int(fish_w)
+        self._fish_h = int(fish_h)
+        self._tangent_map_x.clear()
+        self._tangent_map_y.clear()
+        self._tangent_map1_int.clear()
+        self._tangent_map2_int.clear()
+
+        cx = self._fish_w / 2.0 if self.__cx is None else float(self.__cx)
+        cy = self._fish_h / 2.0 if self.__cy is None else float(self.__cy)
+        theta_max = np.deg2rad(DEFISH_FISHEYE_FOV_DEG / 2.0)
+        fisheye_radius = min(self._fish_w, self._fish_h) / 2.0
+        f_fish = fisheye_radius / max(theta_max, 1e-9)
+
+        f_view = (self.view_w / 2.0) / np.tan(np.deg2rad(self.view_fov_deg) / 2.0)
+        cx_v, cy_v = self.view_w / 2.0, self.view_h / 2.0
+        uu, vv = np.meshgrid(
+            np.arange(self.view_w, dtype=np.float64),
+            np.arange(self.view_h, dtype=np.float64),
+        )
+        local_x = (uu - cx_v) / f_view
+        local_y = (vv - cy_v) / f_view
+
+        world_up = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        tilt = np.deg2rad(self.view_tilt_deg)
+
+        for yaw_deg in self.view_yaws_deg:
+            yaw = np.deg2rad(yaw_deg)
+            view_forward = np.array(
+                [
+                    np.cos(yaw) * np.sin(tilt),
+                    np.sin(yaw) * np.sin(tilt),
+                    np.cos(tilt),
+                ],
+                dtype=np.float64,
+            )
+            view_forward /= np.linalg.norm(view_forward)
+
+            view_right = np.cross(world_up, view_forward)
+            norm_right = np.linalg.norm(view_right)
+            if norm_right < 1e-9:
+                view_right = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+            else:
+                view_right /= norm_right
+
+            view_down = -np.cross(view_forward, view_right)
+            view_down /= np.linalg.norm(view_down)
+
+            rays_x = view_forward[0] + local_x * view_right[0] + local_y * view_down[0]
+            rays_y = view_forward[1] + local_x * view_right[1] + local_y * view_down[1]
+            rays_z = view_forward[2] + local_x * view_right[2] + local_y * view_down[2]
+            ray_norm = np.sqrt(rays_x * rays_x + rays_y * rays_y + rays_z * rays_z)
+            rays_x /= ray_norm
+            rays_y /= ray_norm
+            rays_z /= ray_norm
+
+            theta = np.arccos(np.clip(rays_z, -1.0, 1.0))
+            phi = np.arctan2(rays_y, rays_x)
+            radius = f_fish * theta
+
+            map_x = (cx + radius * np.cos(phi)).astype(np.float32)
+            map_y = (cy - radius * np.sin(phi)).astype(np.float32)
+
+            outside = theta > theta_max
+            if np.any(outside):
+                map_x[outside] = -1.0
+                map_y[outside] = -1.0
+
+            self._tangent_map_x.append(map_x)
+            self._tangent_map_y.append(map_y)
+            map1, map2 = cv2.convertMaps(map_x, map_y, cv2.CV_16SC2)
+            self._tangent_map1_int.append(map1)
+            self._tangent_map2_int.append(map2)
+
+
+    def _ensure_tangent_maps(self, fish_w: int, fish_h: int) -> None:
+        if self._fish_w != int(fish_w) or self._fish_h != int(fish_h):
+            self._build_tangent_maps(fish_w, fish_h)
+
+
+    def _view_has_motion(self, fg_mask_small: np.ndarray, view_id: int) -> bool:
+        if fg_mask_small is None or fg_mask_small.size == 0:
+            return True
+
+        mask_h, mask_w = fg_mask_small.shape[:2]
+        sx = float(mask_w) / max(float(self._fish_w), 1.0)
+        sy = float(mask_h) / max(float(self._fish_h), 1.0)
+        map_x = (self._tangent_map_x[view_id] * sx).astype(np.float32)
+        map_y = (self._tangent_map_y[view_id] * sy).astype(np.float32)
+        view_mask = cv2.remap(
+            fg_mask_small,
+            map_x,
+            map_y,
+            interpolation=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
+        total = int(view_mask.size)
+        if total == 0:
+            return False
+        return float(cv2.countNonZero(view_mask)) / float(total) >= self.min_motion_fraction
+
+
+    def get_views(
+        self,
+        fisheye_bgr: np.ndarray,
+        fg_mask_small: Optional[np.ndarray] = None,
+    ) -> List[Tuple[Optional[np.ndarray], int, bool]]:
+        """
+        Return tangent/pinhole views for YOLO.
+
+        Inactive views are returned with ``view_bgr=None`` so callers can avoid
+        paying image remap cost when the motion gate proves the sector is idle.
+        """
+        h, w = fisheye_bgr.shape[:2]
+        self._ensure_tangent_maps(w, h)
+
+        result: List[Tuple[Optional[np.ndarray], int, bool]] = []
+        for v_id in range(self.n_views):
+            has_motion = self._view_has_motion(fg_mask_small, v_id) if fg_mask_small is not None else True
+            if not has_motion:
+                result.append((None, v_id, False))
+                continue
+
+            view = cv2.remap(
+                fisheye_bgr,
+                self._tangent_map1_int[v_id],
+                self._tangent_map2_int[v_id],
+                interpolation=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=0,
+            )
+            result.append((view, v_id, True))
+
+        return result
+
+
+    def backproject_view_boxes(self, boxes_xyxy: np.ndarray, view_id: int) -> np.ndarray:
+        if boxes_xyxy.size == 0 or not (0 <= view_id < self.n_views):
+            return np.zeros((0, 4), dtype=np.float32)
+
+        boxes_xyxy = np.asarray(boxes_xyxy, dtype=np.float32)
+        n = len(boxes_xyxy)
+        x1, y1, x2, y2 = (
+            boxes_xyxy[:, 0], boxes_xyxy[:, 1],
+            boxes_xyxy[:, 2], boxes_xyxy[:, 3],
+        )
+        cu = np.concatenate([x1, x2, x2, x1])
+        cv_ = np.concatenate([y1, y1, y2, y2])
+        cu = np.clip(cu, 0.0, self.view_w - 1).astype(np.float64)
+        cv_ = np.clip(cv_, 0.0, self.view_h - 1).astype(np.float64)
+
+        fish_x = self._bilinear_sample(self._tangent_map_x[view_id], cu, cv_)
+        fish_y = self._bilinear_sample(self._tangent_map_y[view_id], cu, cv_)
+        fish_x = fish_x.reshape(4, n)
+        fish_y = fish_y.reshape(4, n)
+
+        out_x1 = np.clip(fish_x.min(axis=0), 0.0, self._fish_w - 1)
+        out_y1 = np.clip(fish_y.min(axis=0), 0.0, self._fish_h - 1)
+        out_x2 = np.clip(fish_x.max(axis=0), 0.0, self._fish_w - 1)
+        out_y2 = np.clip(fish_y.max(axis=0), 0.0, self._fish_h - 1)
+        return np.stack([out_x1, out_y1, out_x2, out_y2], axis=1).astype(np.float32)
     
 
     def backproject_boxes(
@@ -355,6 +576,3 @@ class FishEyeProjection(EventExtractorInterface):
             out.append(undist)
 
         return out
-
-
-
