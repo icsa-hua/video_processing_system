@@ -622,8 +622,22 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Benchmark the unified streamer with and without tiles across PT, ONNX, "
-            "and TensorRT backends, while keeping a small desktop-only full-pipeline subset."
-        )
+            "and TensorRT backends, while keeping a small desktop-only full-pipeline subset. "
+            "The primary axis of comparison is tiling (full-frame vs. forced-tile). "
+            "Pass --fep only for fisheye-camera sources."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  Standard camera:\n"
+            "    python -m scripts.experiment_unified_backend_tiles --video-source samples/MVI_39401.mp4\n\n"
+            "  Fisheye camera:\n"
+            "    python -m scripts.experiment_unified_backend_tiles --video-source samples/fisheye.mp4 --fep\n\n"
+            "  Custom engine model:\n"
+            "    python -m scripts.experiment_unified_backend_tiles \\\n"
+            "        --video-source samples/MVI_39401.mp4 \\\n"
+            "        --engine-model assets/compressed_models/custom.engine"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--video-source", default=DEFAULT_VIDEO_SOURCE, help="Input video path or stream URL.")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Directory where summaries and run logs are written.")
@@ -633,7 +647,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--engine-model", default=DEFAULT_ENGINE_MODEL, help="Path to the TensorRT engine.")
     parser.add_argument("--roi", action=argparse.BooleanOptionalAction, default=True, help="Enable ROI cropping.")
     parser.add_argument("--roi-profile", default="", help="Optional ROI profile key from obs_system/utils/roi_profiles.json.")
-    parser.add_argument("--fep", action=argparse.BooleanOptionalAction, default=False, help="Enable fisheye reprojection.")
+    parser.add_argument("--fep", action=argparse.BooleanOptionalAction, default=False, help="Enable fisheye equalization and reprojection. Use only for fisheye-camera sources.")
     parser.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=False, help="Verbose streamer logging.")
     parser.add_argument("--stream-limit-hours", type=float, default=0.0, help="Live-stream runtime cap in hours. Use 0 to disable.")
     parser.add_argument("--lane-recalibration-interval-frames", type=int, default=0, help="For live streams, rerun lane calibration after this many frames. Use 0 to disable.")

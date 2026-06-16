@@ -133,10 +133,11 @@ ABLATION_SPECS: list[AblationSpec] = [
         config_updates={"force_tiles": True},
     ),
     AblationSpec(
-        key="no_panorama_reprojection",
-        label="No panorama reprojection",
-        purpose="Measure panorama reprojection overhead",
-        config_updates={"panorama": False},
+        key="no_fep",
+        label="No fisheye correction",
+        purpose="Measure fisheye equalization overhead",
+        config_updates={"fep": False},
+        notes="Only active when --fep is passed. Relevant for fisheye cameras only.",
     ),
 ]
 
@@ -425,28 +426,19 @@ def _build_limitation_panel(
     original_bgr: np.ndarray | None,
     processed_bgr: np.ndarray | None,
     roi_bgr: np.ndarray | None,
-    fg_mask: np.ndarray | None,
     config: PipelineConfig,
 ) -> np.ndarray:
-    if config.panorama and streamer.logic_module is not None and streamer.logic_module.get("PANORAMA") is not None and processed_bgr is not None:
-        reprojector = streamer.logic_module["PANORAMA"]
-        views = [view for view, _vid, _has_motion in reprojector.get_views(processed_bgr, fg_mask_small=fg_mask)[:3]]
-        raw_panel = processed_bgr.copy()
-        raw_panel = _draw_multiline_text(raw_panel, "Raw panorama geometry before reprojection", origin=(18, 62), max_width_chars=24)
-        montage = _stack_horizontal([raw_panel] + views)
-        return _panel_title(montage, "F. Panorama Limitation / Reprojection")
-
     if config.fep and streamer.logic_module is not None and streamer.logic_module.get("FEP") is not None and processed_bgr is not None:
         source_view = roi_bgr if roi_bgr is not None else original_bgr
         if source_view is None:
             source_view = processed_bgr
         raw_panel = _draw_multiline_text(source_view.copy(), "Pre-correction view", origin=(18, 62), max_width_chars=22)
         corrected_panel = _draw_multiline_text(processed_bgr.copy(), "Defished inference input", origin=(18, 62), max_width_chars=22)
-        return _panel_title(_stack_horizontal([raw_panel, corrected_panel]), "F. Fisheye Limitation / Correction")
+        return _panel_title(_stack_horizontal([raw_panel, corrected_panel]), "F. Fisheye Correction")
 
     return _make_text_panel(
-        "F. Panorama / Fisheye Limitation",
-        "Panorama reprojection and fisheye correction were not enabled for this run. Use --panorama or --fep to capture this diagnostic panel.",
+        "F. Fisheye Correction",
+        "Fisheye correction was not enabled for this run. Pass --fep to capture this diagnostic panel (fisheye cameras only).",
     )
 
 
@@ -468,7 +460,6 @@ def _build_qualitative_figure(
             artifacts.get("original_bgr"),
             artifacts.get("processed_bgr"),
             artifacts.get("roi_bgr"),
-            artifacts.get("fg_mask"),
             config,
         ),
     ]
@@ -523,7 +514,6 @@ def _configure_streamer_args(streamer: Any, config: PipelineConfig, run_dir: Pat
     streamer.args.jetson_hazard_scale = float(config.jetson_hazard_scale)
     streamer.args.jetson_cpu_threads = int(config.jetson_cpu_threads)
     streamer.args.force_tiles = bool(config.force_tiles)
-    streamer.args.panorama = bool(config.panorama)
 
 
 def _summarize_output_load(
@@ -588,10 +578,8 @@ def _skip_reason(spec: AblationSpec, base_config: PipelineConfig) -> str | None:
         return "baseline MQTT is disabled"
     if spec.key in {"no_saving", "no_mqtt_no_saving"} and not base_config.save:
         return "baseline saving is disabled"
-    if spec.key == "no_panorama_reprojection" and not base_config.panorama:
-        return "baseline panorama mode is disabled"
-    if spec.key in {"full_frame_only_no_tiling", "tiling_enabled"} and base_config.panorama:
-        return "panorama mode overrides the tiling/full-frame branch"
+    if spec.key == "no_fep" and not base_config.fep:
+        return "baseline fisheye correction is disabled; pass --fep to include this variant"
     return None
 
 
@@ -707,8 +695,8 @@ def _apply_variant_runtime_overrides(
         exit_stack.enter_context(_temporary_attr(streamer, "force_streaming_no_tiles", False))
         exit_stack.enter_context(_temporary_attr(streamer.args, "force_tiles", True))
 
-    if spec.key == "no_panorama_reprojection":
-        exit_stack.enter_context(_temporary_attr(streamer.args, "panorama", False))
+    if spec.key == "no_fep":
+        exit_stack.enter_context(_temporary_attr(streamer.args, "fep", False))
 
     return exit_stack
 
@@ -955,7 +943,6 @@ def _run_variant(
             "use_TRT": bool(config.use_TRT),
             "jetson_profile": bool(config.jetson_profile),
             "force_tiles": bool(getattr(streamer.args, "force_tiles", False)),
-            "panorama": bool(getattr(streamer.args, "panorama", False)),
             "ablation_frame_cap": int(streamer_metrics.get("ablation_frame_cap", ABLATION_MAX_FRAMES)),
             "ablation_video_seconds_cap": float(streamer_metrics.get("ablation_video_seconds_cap", ABLATION_MAX_VIDEO_SECONDS)),
             "qualitative_figure_path": qualitative_path,
@@ -1032,6 +1019,7 @@ def _write_markdown_summary(path: Path, base_config: PipelineConfig, results: li
         f"- Evaluation cap: up to `{ABLATION_MAX_FRAMES}` frames or `{int(ABLATION_MAX_VIDEO_SECONDS)}` seconds of source video, whichever is smaller.",
         "- Positive percentages mean the variant is faster than the full pipeline based on average `total_ms`.",
         "- `No DeepLab / lane segmentation` disables this repo's classical lane/crosswalk scene-mask path because there is no DeepLab module in the current codebase.",
+        "- `No fisheye correction` is only included when `--fep` is passed (fisheye cameras only).",
         "",
         "| Configuration | FPS | Total ms | Difference from full pipeline | Notes |",
         "| --- | ---: | ---: | ---: | --- |",
@@ -1084,7 +1072,6 @@ def _write_csv_summary(path: Path, base_config: PipelineConfig, results: list[di
         "use_trt",
         "jetson_profile",
         "force_tiles",
-        "panorama",
         "ablation_frame_cap",
         "ablation_video_seconds_cap",
         "qualitative_figure_path",
@@ -1128,7 +1115,6 @@ def _write_csv_summary(path: Path, base_config: PipelineConfig, results: list[di
                     "use_trt": config.get("use_TRT"),
                     "jetson_profile": config.get("jetson_profile"),
                     "force_tiles": config.get("force_tiles"),
-                    "panorama": config.get("panorama"),
                     "ablation_frame_cap": config.get("ablation_frame_cap"),
                     "ablation_video_seconds_cap": config.get("ablation_video_seconds_cap"),
                     "qualitative_figure_path": config.get("qualitative_figure_path"),
@@ -1174,7 +1160,7 @@ def _build_base_config(args: argparse.Namespace) -> PipelineConfig:
         jetson_hazard_scale=float(args.jetson_hazard_scale),
         jetson_cpu_threads=int(args.jetson_cpu_threads),
         force_tiles=False,
-        panorama=bool(args.panorama),
+        panorama=False,
     )
     return config.validate()
 
@@ -1183,8 +1169,19 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Run a TensorRT ablation study on one representative video by toggling "
-            "MQTT, saving, MOG2 gating, lane masks, tiling, and panorama reprojection."
-        )
+            "MQTT, saving, MOG2 gating, lane masks, and tiling. "
+            "Pass --fep to also include the fisheye correction ablation (fisheye cameras only)."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  Standard camera:\n"
+            "    python -m scripts.experiment_ablation_study --video-source samples/MVI_39401.mp4\n\n"
+            "  Fisheye camera (enables no-FEP ablation variant):\n"
+            "    python -m scripts.experiment_ablation_study --video-source samples/fisheye.mp4 --fep\n\n"
+            "  Lean benchmark (no MQTT, no saving):\n"
+            "    python -m scripts.experiment_ablation_study --video-source samples/MVI_39401.mp4 --no-mqtt --no-save-outputs"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--video-source", default=DEFAULT_VIDEO_SOURCE, help="Input video path or stream URL.")
     parser.add_argument("--model", default=DEFAULT_MODEL, help="TensorRT engine or ONNX model path.")
@@ -1193,10 +1190,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--labels-dir", default="", help="Optional YOLO label directory for accuracy metrics.")
     parser.add_argument("--roi", action=argparse.BooleanOptionalAction, default=True, help="Enable ROI cropping.")
     parser.add_argument("--roi-profile", default="", help="Optional ROI profile key from obs_system/utils/roi_profiles.json.")
-    parser.add_argument("--fep", action=argparse.BooleanOptionalAction, default=False, help="Enable fisheye reprojection.")
+    parser.add_argument("--fep", action=argparse.BooleanOptionalAction, default=False, help="Enable fisheye equalization and reprojection (fisheye cameras only). Also activates the no-FEP ablation variant.")
     parser.add_argument("--mqtt", action=argparse.BooleanOptionalAction, default=True, help="Enable MQTT in the full-pipeline baseline.")
     parser.add_argument("--save-outputs", action=argparse.BooleanOptionalAction, default=True, help="Enable frame/event saving in the full-pipeline baseline.")
-    parser.add_argument("--panorama", action=argparse.BooleanOptionalAction, default=False, help="Enable panorama reprojection in the full-pipeline baseline.")
     parser.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=False, help="Verbose streamer logging.")
     parser.add_argument("--stream-limit-hours", type=float, default=0.0, help="Live-stream runtime cap in hours. Use 0 to disable.")
     parser.add_argument("--lane-recalibration-interval-frames", type=int, default=0, help="For live streams, rerun lane calibration after this many frames. Use 0 to disable.")
