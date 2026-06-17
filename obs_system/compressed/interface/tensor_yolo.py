@@ -441,7 +441,10 @@ class TensorRTYOLO:
         )
 
         for _ in range(warmup_sessions):
-            self.inference(dummy_batch, return_numpy=False)
+            _, event = self.inference(dummy_batch, return_numpy=False)
+            torch.cuda.current_stream(self.__device).wait_event(event)
+
+        torch.cuda.synchronize(self.__device)
 
 
 
@@ -702,4 +705,3 @@ class TensorRTYOLO:
         
 
         
-
