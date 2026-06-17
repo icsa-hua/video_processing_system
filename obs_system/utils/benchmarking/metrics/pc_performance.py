@@ -69,8 +69,8 @@ class PerfLogger:
             'preprocess_ms_per_frame', 'inference_ms_per_frame', 'postprocess_ms_per_frame',
             'nms_ms_per_frame', 'tracking_ms_per_frame', 'hazard_logic_ms_per_frame',
             'preview_encode_ms_per_frame', 'mqtt_ms_per_frame', 'event_saving_ms_per_frame',
-            'total_ms_per_frame', 'fps_sliding'
-
+            'total_ms_per_frame', 'fps_sliding',
+            'tile_skip_rate', 'tiles_total_per_frame', 'tiles_submitted_per_frame',
         ])
         self._writer.writeheader()
 
@@ -132,6 +132,7 @@ class FramePerfLogger:
             'nms_ms', 'tracking_ms', 'hazard_logic_ms',
             'preview_encode_ms', 'mqtt_ms', 'event_saving_ms',
             'total_ms',
+            'tile_skip_rate', 'tiles_total', 'tiles_submitted',
         ])
         self._writer.writeheader()
 
