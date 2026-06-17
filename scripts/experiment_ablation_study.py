@@ -114,6 +114,13 @@ ABLATION_SPECS: list[AblationSpec] = [
         config_updates={"mqtt": False, "save": False},
     ),
     AblationSpec(
+        key="no_roi",
+        label="No ROI cropping",
+        purpose="Measure ROI cropping overhead",
+        config_updates={"roi": False},
+        notes="Disables Region of Interest cropping to isolate its contribution to pipeline latency.",
+    ),
+    AblationSpec(
         key="no_mog2_gating",
         label="No MOG2 gating",
         purpose="Show whether motion gating helps or hurts",
@@ -581,6 +588,8 @@ def _skip_reason(spec: AblationSpec, base_config: PipelineConfig) -> str | None:
         return "baseline MQTT is disabled"
     if spec.key in {"no_saving", "no_mqtt_no_saving"} and not base_config.save:
         return "baseline saving is disabled"
+    if spec.key == "no_roi" and not base_config.roi:
+        return "baseline ROI is disabled"
     if spec.key == "no_fep" and not base_config.fep:
         return "baseline fisheye correction is disabled; pass --fep to include this variant"
     return None
@@ -1116,6 +1125,7 @@ def _write_markdown_summary(path: Path, base_config: PipelineConfig, results: li
         f"- Evaluation cap: up to `{ABLATION_MAX_FRAMES}` frames or `{int(ABLATION_MAX_VIDEO_SECONDS)}` seconds of source video, whichever is smaller.",
         "- Positive percentages mean the variant is faster than the full pipeline based on average `total_ms`.",
         "- `No DeepLab / lane segmentation` disables this repo's classical lane/crosswalk scene-mask path because there is no DeepLab module in the current codebase.",
+        "- `No ROI cropping` is only included when `--roi` is passed (default: on).",
         "- `No fisheye correction` is only included when `--fep` is passed (fisheye cameras only).",
         "",
         "| Configuration | FPS | Total ms | Difference from full pipeline | Notes |",
