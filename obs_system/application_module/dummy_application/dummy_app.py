@@ -330,6 +330,12 @@ class Application:
                 producer_flag=producer_flag,
             )
 
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.synchronize()
+            except Exception:
+                logger.exception("Failed to synchronize CUDA before cleanup")
+
         self.model = None
         self.streamer = None
         self.logic_module.clear()

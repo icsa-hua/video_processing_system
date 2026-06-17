@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
+import subprocess
+import sys
 import re
 import time
 
@@ -969,6 +972,100 @@ def _run_variant(
     }
 
 
+def _spec_by_key(key: str) -> AblationSpec:
+    for spec in ABLATION_SPECS:
+        if spec.key == key:
+            return spec
+    raise KeyError(f"Unknown ablation variant: {key}")
+
+
+def _write_variant_result(path: Path, result: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")
+
+
+def _run_single_variant_child(args: argparse.Namespace, base_config: PipelineConfig, output_dir: Path) -> int:
+    spec = _spec_by_key(str(args.run_single_variant))
+    result_path = Path(args.variant_result_path)
+    try:
+        logger.info("Running ablation variant: %s", spec.label)
+        result = _run_variant(spec=spec, base_config=base_config, args=args, output_dir=output_dir)
+        _write_variant_result(result_path, result)
+        return 0
+    except Exception as exc:
+        logger.exception("Ablation variant failed: %s", spec.label)
+        result = {
+            "key": spec.key,
+            "label": spec.label,
+            "purpose": spec.purpose,
+            "status": "failed",
+            "notes": spec.notes,
+            "error": str(exc),
+        }
+        _write_variant_result(result_path, result)
+        return 1
+
+
+def _child_argv(args: argparse.Namespace, spec: AblationSpec, result_path: Path) -> list[str]:
+    parent_args = [
+        arg for arg in sys.argv[1:]
+        if arg not in {"--run-single-variant", "--variant-result-path"}
+    ]
+    return [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        *parent_args,
+        "--run-single-variant",
+        spec.key,
+        "--variant-result-path",
+        str(result_path),
+    ]
+
+
+def _run_variant_subprocess(
+    spec: AblationSpec,
+    base_config: PipelineConfig,
+    args: argparse.Namespace,
+    output_dir: Path,
+) -> dict[str, Any]:
+    source_slug = _video_source_slug(base_config.video_source)
+    result_path = output_dir / source_slug / spec.key / "variant_result.json"
+    if result_path.exists():
+        result_path.unlink()
+
+    cmd = _child_argv(args, spec, result_path)
+    logger.info("Running ablation variant in subprocess: %s", spec.label)
+    completed = subprocess.run(cmd, cwd=Path.cwd())
+
+    if result_path.exists():
+        try:
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            result = {
+                "key": spec.key,
+                "label": spec.label,
+                "purpose": spec.purpose,
+                "status": "failed",
+                "notes": spec.notes,
+                "error": f"Variant wrote invalid result JSON: {exc}",
+            }
+    else:
+        result = {
+            "key": spec.key,
+            "label": spec.label,
+            "purpose": spec.purpose,
+            "status": "failed",
+            "notes": spec.notes,
+            "error": f"Variant subprocess exited with code {completed.returncode} before writing a result file.",
+        }
+
+    if completed.returncode != 0 and result.get("status") != "failed":
+        result["status"] = "failed"
+        result["error"] = f"Variant subprocess exited with code {completed.returncode}."
+
+    return result
+
+
 def _compute_deltas(results: list[dict[str, Any]]) -> None:
     baseline = next((row for row in results if row.get("key") == "full_pipeline" and row.get("status") == "completed"), None)
     if baseline is None:
@@ -1202,6 +1299,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--jetson-cpu-threads", type=int, default=0, help="CPU thread cap for the Jetson execution branch. Use 0 for runtime defaults.")
     parser.add_argument("--save-qualitative-figure", action=argparse.BooleanOptionalAction, default=False, help="Save a 2x3 qualitative figure for one ablation variant.")
     parser.add_argument("--qualitative-variant", default="full_pipeline", choices=[spec.key for spec in ABLATION_SPECS], help="Which ablation variant should emit the qualitative figure.")
+    parser.add_argument("--run-single-variant", default="", choices=["", *[spec.key for spec in ABLATION_SPECS]], help=argparse.SUPPRESS)
+    parser.add_argument("--variant-result-path", default="", help=argparse.SUPPRESS)
     return parser.parse_args()
 
 
@@ -1220,23 +1319,14 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     source_slug = _video_source_slug(base_config.video_source)
 
+    if args.run_single_variant:
+        if not args.variant_result_path:
+            raise SystemExit("--variant-result-path is required with --run-single-variant")
+        raise SystemExit(_run_single_variant_child(args, base_config, output_dir))
+
     results: list[dict[str, Any]] = []
     for spec in ABLATION_SPECS:
-        try:
-            logger.info("Running ablation variant: %s", spec.label)
-            results.append(_run_variant(spec=spec, base_config=base_config, args=args, output_dir=output_dir))
-        except Exception as exc:
-            logger.exception("Ablation variant failed: %s", spec.label)
-            results.append(
-                {
-                    "key": spec.key,
-                    "label": spec.label,
-                    "purpose": spec.purpose,
-                    "status": "failed",
-                    "notes": spec.notes,
-                    "error": str(exc),
-                }
-            )
+        results.append(_run_variant_subprocess(spec=spec, base_config=base_config, args=args, output_dir=output_dir))
 
     _compute_deltas(results)
 
