@@ -41,6 +41,8 @@ MQTT_ARCHIVE_PATH = Path("assets/mqtt/saved_publishes.cbor")
 HAZARD_CSV_PATH = Path("assets/hazard_events/hazard_events.csv")
 DEFAULT_FRAME_CAP = 1500
 DEFAULT_VIDEO_SECONDS_CAP = 60.0
+
+# Per-frame stage keys present in perf_frames.csv for both regular and tile paths
 STAGE_LATENCY_KEYS = [
     "frame_read_ms",
     "roi_ms",
@@ -57,6 +59,43 @@ STAGE_LATENCY_KEYS = [
     "event_saving_ms",
     "total_ms",
 ]
+
+# Additional per-frame columns written only by the tiled inference path.
+# metric_distribution returns None when absent, so these are silently omitted for non-tile runs.
+TILE_STAGE_KEYS = [
+    "tiles_total",
+    "tiles_submitted",
+    "tile_skip_rate",
+]
+
+# Display names for the stage latency breakdown table
+STAGE_DISPLAY_NAMES: dict[str, str] = {
+    "frame_read_ms": "Frame read",
+    "roi_ms": "ROI crop",
+    "mog2_ms": "MOG2 subtraction",
+    "defish_ms": "Defish / FEP",
+    "preprocess_ms": "Preprocess (YOLO)",
+    "inference_ms": "Inference (YOLO)",
+    "postprocess_ms": "Postprocess (YOLO)",
+    "nms_ms": "NMS",
+    "tracking_ms": "ByteTracker",
+    "hazard_logic_ms": "Hazard logic",
+    "preview_encode_ms": "Preview encode",
+    "mqtt_ms": "MQTT publish",
+    "event_saving_ms": "Event saving",
+    "total_ms": "TOTAL",
+    "tiles_total": "Tiles/frame (total)",
+    "tiles_submitted": "Tiles/frame (submitted)",
+    "tile_skip_rate": "Tile skip rate",
+}
+
+
+def _infer_video_type(source: str) -> str:
+    src = (source or "").lower()
+    for keyword in ("fisheye", "panorama", "highway", "detrac", "edi", "rectilinear", "ptz"):
+        if keyword in src:
+            return keyword
+    return "unknown"
 
 
 class _FrameBudgetDataset:
@@ -141,6 +180,9 @@ def _configure_streamer_args(streamer: Any, config: PipelineConfig, run_dir: Pat
     streamer.args.jetson_profile = bool(config.jetson_profile)
     streamer.args.jetson_hazard_scale = float(config.jetson_hazard_scale)
     streamer.args.jetson_cpu_threads = int(config.jetson_cpu_threads)
+    streamer.args.force_tiles = bool(config.force_tiles)
+    streamer.args.panorama = bool(config.panorama)
+    streamer.args.lane_recalibration_interval_frames = int(config.lane_recalibration_interval_frames)
 
 def _estimate_video_frame_cap(video_source: str) -> int:
     frame_cap = int(DEFAULT_FRAME_CAP)
@@ -240,9 +282,12 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
         preview_jpeg_quality=70,
         preview_fps=8.0,
         stream_limit_hours=float(args.stream_limit_hours),
+        lane_recalibration_interval_frames=int(args.lane_recalibration_interval_frames),
         jetson_profile=bool(args.jetson_profile),
         jetson_hazard_scale=float(args.jetson_hazard_scale),
         jetson_cpu_threads=int(args.jetson_cpu_threads),
+        force_tiles=bool(args.force_tiles),
+        panorama=bool(args.panorama),
     ).validate()
 
     perf.reset()
@@ -320,7 +365,15 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
     frames_emitted = int(streamer_metrics.get("frames_emitted", 0))
     fps = (frames_emitted / elapsed_s) if elapsed_s > 0 else 0.0
 
+    video_type = (args.video_type or "").strip() or _infer_video_type(args.video_source)
+    inference_mode = "tiles" if config.force_tiles else ("panorama" if config.panorama else ("fisheye" if config.fep else "standard"))
+
+    stage_latency = summarize_stage_latency(frame_rows, STAGE_LATENCY_KEYS)
+    tile_metrics = summarize_stage_latency(frame_rows, TILE_STAGE_KEYS)
+
     summary = {
+        "video_type": video_type,
+        "inference_mode": inference_mode,
         "model_path": model_path,
         "model_kind": model_suffix.lstrip("."),
         "run_dir": str(run_dir),
@@ -348,7 +401,8 @@ def _run_single_benchmark(model_path: str, args: argparse.Namespace, output_dir:
             else 0.0
         ),
         "setup_metrics": setup_metrics,
-        "stage_latency": summarize_stage_latency(frame_rows, STAGE_LATENCY_KEYS),
+        "stage_latency": stage_latency,
+        "tile_metrics": tile_metrics,
         "hardware": hardware,
         "detection_metrics": detection_metrics,
         "output_load": output_load,
@@ -364,38 +418,108 @@ def _write_markdown_summary(path: Path, summaries: list[dict[str, Any]]) -> None
         "# Backend Comparison",
         "",
         f"- Evaluation cap: up to `{DEFAULT_FRAME_CAP}` frames or `{int(DEFAULT_VIDEO_SECONDS_CAP)}` seconds of source video, whichever is smaller.",
-        "| Model | FPS | Avg Latency ms | P50 ms | P95 ms | CPU % | GPU % | GPU Mem MB | Temp C | Power W | Power Mode | EMC MHz | Dropped | Stream Open s | First Frame s | mAP | Precision | Recall | F1 | Saved Events | MQTT Batches | Avg Crop JPEG B |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "",
+        "## Performance Overview",
+        "",
+        "| Video Type | Mode | Model | FPS | E2E avg ms | E2E p50 ms | E2E p95 ms | Infer ms | Preproc ms | Post+Track ms | CPU % | GPU % | RAM MB | VRAM MB | Temp C | Power W | Power Mode | Dropped | mAP | F1 |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |",
     ]
 
-    for summary in summaries:
-        detection = summary.get("detection_metrics", {})
-        hardware = summary.get("hardware", {})
-        output_load = summary.get("output_load", {})
+    for s in summaries:
+        hw = s.get("hardware", {})
+        det = s.get("detection_metrics", {})
+        sl = s.get("stage_latency", {})
+
+        infer_ms = fmt_opt(sl.get("inference_ms", {}).get("mean_ms") if isinstance(sl.get("inference_ms"), dict) else None)
+        preproc_ms = fmt_opt(sl.get("preprocess_ms", {}).get("mean_ms") if isinstance(sl.get("preprocess_ms"), dict) else None)
+        post_ms_val = None
+        if isinstance(sl.get("postprocess_ms"), dict) and isinstance(sl.get("tracking_ms"), dict):
+            post_ms_val = sl["postprocess_ms"]["mean_ms"] + sl["tracking_ms"]["mean_ms"]
+        post_ms = fmt_opt(post_ms_val)
+
+        ram_mb = fmt_opt(hw.get("jetson_ram_metric_mean") or hw.get("gpu_mem_used_mb_mean"))
+        vram_mb = fmt_opt(hw.get("gpu_mem_used_mb_mean"))
+
         lines.append(
-            "| {model} | {fps:.2f} | {avg:.2f} | {p50:.2f} | {p95:.2f} | {cpu} | {gpu} | {mem} | {temp} | {power_w} | {power_mode} | {emc} | {dropped} | {open_s} | {first_s} | {map_} | {prec} | {rec} | {f1} | {events} | {mqtt} | {crop_b:.2f} |".format(
-                model=Path(summary["model_path"]).name,
-                fps=summary.get("fps", 0.0),
-                avg=summary.get("avg_latency_ms", 0.0),
-                p50=summary.get("p50_latency_ms", 0.0),
-                p95=summary.get("p95_latency_ms", 0.0),
-                cpu=fmt_opt(hardware.get("cpu_util_mean")),
-                gpu=fmt_opt(hardware.get("gpu_util_mean")),
-                mem=fmt_opt(hardware.get("gpu_mem_used_mb_mean")),
-                temp=fmt_opt(hardware.get("temperature_c_mean")),
-                power_w=fmt_opt(hardware.get("power_w_mean")),
-                power_mode=fmt_opt(hardware.get("power_mode")),
-                emc=fmt_opt(hardware.get("emc_frequency_mhz_mean")),
-                dropped=summary.get("dropped_frames", 0),
-                open_s=fmt_opt(summary.get("stream_open_seconds")),
-                first_s=fmt_opt(summary.get("first_frame_seconds")),
-                map_=fmt_opt(detection.get("mAP")),
-                prec=fmt_opt(detection.get("Precision")),
-                rec=fmt_opt(detection.get("Recall")),
-                f1=fmt_opt(detection.get("F1")),
-                events=output_load.get("saved_event_count", 0),
-                mqtt=output_load.get("mqtt_crop_batch_count", 0),
-                crop_b=output_load.get("avg_crop_jpeg_bytes", 0.0),
+            "| {vtype} | {mode} | {model} | {fps:.2f} | {avg:.2f} | {p50:.2f} | {p95:.2f} | {infer} | {preproc} | {posttrack} | {cpu} | {gpu} | {ram} | {vram} | {temp} | {power} | {pmode} | {dropped} | {map_} | {f1} |".format(
+                vtype=s.get("video_type", "-"),
+                mode=s.get("inference_mode", "-"),
+                model=Path(s["model_path"]).name,
+                fps=s.get("fps", 0.0),
+                avg=s.get("avg_latency_ms", 0.0),
+                p50=s.get("p50_latency_ms", 0.0),
+                p95=s.get("p95_latency_ms", 0.0),
+                infer=infer_ms,
+                preproc=preproc_ms,
+                posttrack=post_ms,
+                cpu=fmt_opt(hw.get("cpu_util_mean")),
+                gpu=fmt_opt(hw.get("gpu_util_mean")),
+                ram=ram_mb,
+                vram=vram_mb,
+                temp=fmt_opt(hw.get("temperature_c_mean")),
+                power=fmt_opt(hw.get("power_w_mean")),
+                pmode=fmt_opt(hw.get("power_mode")),
+                dropped=s.get("dropped_frames", 0),
+                map_=fmt_opt(det.get("mAP")),
+                f1=fmt_opt(det.get("F1")),
+            )
+        )
+
+    # Stage latency breakdown — one row per pipeline stage, one column per model run
+    model_names = [Path(s["model_path"]).name for s in summaries]
+    lines += [
+        "",
+        "## Stage Latency Breakdown (mean ms per frame)",
+        "",
+        "| Stage | " + " | ".join(model_names) + " |",
+        "| --- |" + " ---: |" * len(summaries),
+    ]
+    for key in STAGE_LATENCY_KEYS:
+        display = STAGE_DISPLAY_NAMES.get(key, key)
+        cells = []
+        for s in summaries:
+            dist = s.get("stage_latency", {}).get(key)
+            cells.append(f"{dist['mean_ms']:.2f}" if isinstance(dist, dict) else "-")
+        lines.append(f"| {display} | " + " | ".join(cells) + " |")
+
+    # Tile metrics section — only rendered when at least one run has tile data
+    has_tile_data = any(bool(s.get("tile_metrics")) for s in summaries)
+    if has_tile_data:
+        lines += [
+            "",
+            "## Tile Metrics",
+            "",
+            "| Metric | " + " | ".join(model_names) + " |",
+            "| --- |" + " ---: |" * len(summaries),
+        ]
+        for key in TILE_STAGE_KEYS:
+            display = STAGE_DISPLAY_NAMES.get(key, key)
+            cells = []
+            for s in summaries:
+                dist = s.get("tile_metrics", {}).get(key)
+                cells.append(f"{dist['mean_ms']:.3f}" if isinstance(dist, dict) else "-")
+            lines.append(f"| {display} | " + " | ".join(cells) + " |")
+
+    # Detection quality + output load footer
+    lines += [
+        "",
+        "## Detection Quality & Output Load",
+        "",
+        "| Model | Precision | Recall | mAP | Saved Events | MQTT Batches | Avg Crop JPEG B |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for s in summaries:
+        det = s.get("detection_metrics", {})
+        ol = s.get("output_load", {})
+        lines.append(
+            "| {model} | {prec} | {rec} | {map_} | {events} | {mqtt} | {crop:.2f} |".format(
+                model=Path(s["model_path"]).name,
+                prec=fmt_opt(det.get("Precision")),
+                rec=fmt_opt(det.get("Recall")),
+                map_=fmt_opt(det.get("mAP")),
+                events=ol.get("saved_event_count", 0),
+                mqtt=ol.get("mqtt_crop_batch_count", 0),
+                crop=ol.get("avg_crop_jpeg_bytes", 0.0),
             )
         )
 
@@ -411,6 +535,7 @@ def main() -> None:
         )
     )
     parser.add_argument("--video-source", required=True, help="Input video path or stream URL.")
+    parser.add_argument("--video-type", default="", help="Label for this video type in the report (e.g. rectilinear, fisheye, highway). Auto-detected from the path when omitted.")
     parser.add_argument("--labels-dir", default="", help="Optional YOLO label directory for Precision/Recall/F1/mAP.")
     parser.add_argument("--output-dir", default="assets/backend_comparison", help="Directory where run summaries/logs are written.")
     parser.add_argument("--pt-model", default=DEFAULT_PT_MODEL, help="Path to the PT model.")
@@ -419,6 +544,9 @@ def main() -> None:
     parser.add_argument("--roi", action=argparse.BooleanOptionalAction, default=True, help="Enable ROI cropping.")
     parser.add_argument("--roi-profile", default="", help="Optional ROI profile key from obs_system/utils/roi_profiles.json.")
     parser.add_argument("--fep", action=argparse.BooleanOptionalAction, default=False, help="Enable fisheye projection.")
+    parser.add_argument("--force-tiles", action=argparse.BooleanOptionalAction, default=False, help="Force tiled inference regardless of image dimensions.")
+    parser.add_argument("--panorama", action=argparse.BooleanOptionalAction, default=False, help="Input is an equirectangular panorama.")
+    parser.add_argument("--lane-recalibration-interval-frames", type=int, default=0, help="Rerun lane calibration after this many frames. Use 0 to disable.")
     parser.add_argument("--mqtt", action=argparse.BooleanOptionalAction, default=False, help="Enable MQTT publishing during the benchmark.")
     parser.add_argument("--save-outputs", action=argparse.BooleanOptionalAction, default=False, help="Enable saving rendered outputs during the benchmark.")
     parser.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=False, help="Verbose streamer logging.")
