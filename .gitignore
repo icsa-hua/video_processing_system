@@ -8,6 +8,7 @@
 *.jpg
 *.jpeg
 *.yaml
+.DS_Store
 Depth_Anything_ONNX/
 DepthAnythingV2/
 ByteTrack/
@@ -60,4 +61,8 @@ DETRAC-Test-Annotations-XML
 DETRAC-Train-Annotations-XML 
 archive.zip
 Progress.md
-
+qualitative_panels.png 
+samples/.DS_Store
+samples/recordings 
+samples/test_samples  
+diagrams
