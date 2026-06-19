@@ -8,6 +8,7 @@
 *.jpg
 *.jpeg
 *.yaml
+.DS_Store
 Depth_Anything_ONNX/
 DepthAnythingV2/
 ByteTrack/
@@ -55,3 +56,8 @@ train_freeze_unified_dataset_512
 AGENTS.md 
 PLAN.md 
 Progress.md
+qualitative_panels.png 
+samples/.DS_Store
+samples/recordings 
+samples/test_samples  
+diagrams
