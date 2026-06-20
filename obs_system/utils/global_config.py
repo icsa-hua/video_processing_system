@@ -95,7 +95,7 @@ RED = (0, 0, 255)
 # Must stay BELOW sv.ByteTrack.track_activation_threshold (default 0.25) so the blobs
 # enter only the second-round matching pass — reinforcing existing tracks but never
 # spawning new ones. This is the allow_spawn=False behaviour from CarDet_Dummy_EdgeAI.
-MOTION_BOX_CONFIDENCE = 0.25
+MOTION_BOX_CONFIDENCE = 0.15
 # Blob area as fraction of the fg_mask (downscale) total pixels
 MOTION_BOX_MIN_AREA_RATIO = 0.003
 MOTION_BOX_MAX_AREA_RATIO = 0.40
@@ -159,11 +159,11 @@ TILE_ACTIVATION_MOTION_MIN_RATIO = 0.025
 
 #--------- Tile / Panorama Kalman Detection Smoother ----------
 # Maximum frames a Kalman track survives without a matching detection.
-TILE_KALMAN_MAX_AGE = 5
+TILE_KALMAN_MAX_AGE = 3
 # Minimum detections before a track contributes Kalman-predicted boxes.
-TILE_KALMAN_MIN_HITS = 1
+TILE_KALMAN_MIN_HITS = 3
 # Minimum IoU to associate a detection with a Kalman-predicted track position.
-TILE_KALMAN_IOU_THRESHOLD = 0.45
+TILE_KALMAN_IOU_THRESHOLD = 0.35
 
 #--------- Road-Scene Class Filter ----------
 # Classes that cannot appear in a road traffic scene — removed from all detections.
