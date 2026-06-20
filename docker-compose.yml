@@ -9,7 +9,7 @@ services:
       - ./:/workspace
       - venv:/opt/venv
       - ./assets/compressed_models:/app/models/
-      - /run/jtop.sock:/run/jtop.sock:ro
+      - /run:/run
 
     ports: 
       - "8503:8503" 
