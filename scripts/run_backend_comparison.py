@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
+import subprocess
+import sys
 import time
 
 import cv2
@@ -525,6 +528,62 @@ def _write_markdown_summary(path: Path, summaries: list[dict[str, Any]]) -> None
 
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
+def _benchmark_result_path(output_dir: Path, model_path: str) -> Path:
+    return output_dir / Path(model_path).stem / "benchmark_result.json"
+
+
+def _child_argv(model_path: str, result_path: Path) -> list[str]:
+    parent_args = [
+        arg for arg in sys.argv[1:]
+        if arg not in {"--run-single-benchmark", "--benchmark-result-path"}
+    ]
+    return [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        *parent_args,
+        "--run-single-benchmark", model_path,
+        "--benchmark-result-path", str(result_path),
+    ]
+
+
+def _run_single_benchmark_child(args: argparse.Namespace, output_dir: Path) -> int:
+    model_path = str(args.run_single_benchmark)
+    result_path = Path(args.benchmark_result_path)
+    try:
+        summary = _run_single_benchmark(model_path=model_path, args=args, output_dir=output_dir)
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
+        return 0
+    except Exception as exc:
+        logger.exception("Benchmark failed for model '%s'", model_path)
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(
+            json.dumps({"model_path": model_path, "status": "failed", "error": str(exc)}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return 1
+
+
+def _run_benchmark_subprocess(model_path: str, args: argparse.Namespace, output_dir: Path) -> dict[str, Any] | None:
+    result_path = _benchmark_result_path(output_dir, model_path)
+    if result_path.exists():
+        result_path.unlink()
+
+    cmd = _child_argv(model_path, result_path)
+    logger.info("Running benchmark in subprocess: %s", Path(model_path).name)
+    completed = subprocess.run(cmd, cwd=Path.cwd())
+
+    if result_path.exists():
+        try:
+            return json.loads(result_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            print(f"[ERROR] {model_path}  —  Invalid result JSON: {exc}")
+            return None
+    else:
+        print(f"[ERROR] {model_path}  —  subprocess exited with code {completed.returncode} before writing a result file.")
+        return None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -555,10 +614,17 @@ def main() -> None:
     parser.add_argument("--jetson-profile", action=argparse.BooleanOptionalAction, default=False, help="Enable the Jetson-optimized execution branch.")
     parser.add_argument("--jetson-hazard-scale", type=float, default=1.0, help="Scale factor for Jetson hazard-mask processing. Use values below 1.0 to trade a small amount of precision for speed.")
     parser.add_argument("--jetson-cpu-threads", type=int, default=0, help="CPU thread cap for the Jetson-optimized execution branch. Use 0 to keep runtime defaults.")
+    parser.add_argument("--run-single-benchmark", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--benchmark-result-path", default="", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.run_single_benchmark:
+        if not args.benchmark_result_path:
+            raise SystemExit("--benchmark-result-path is required with --run-single-benchmark")
+        raise SystemExit(_run_single_benchmark_child(args, output_dir))
 
     candidate_paths = [args.pt_model, args.onnx_model, args.engine_model]
 
@@ -579,10 +645,9 @@ def main() -> None:
 
     summaries: list[dict[str, Any]] = []
     for path in runnable:
-        try:
-            summaries.append(_run_single_benchmark(model_path=path, args=args, output_dir=output_dir))
-        except Exception as exc:
-            print(f"[ERROR] {path}  —  {exc}")
+        result = _run_benchmark_subprocess(model_path=path, args=args, output_dir=output_dir)
+        if result is not None and "fps" in result:
+            summaries.append(result)
 
     if not summaries:
         print("All benchmarks failed. Check model files and backend availability.")
