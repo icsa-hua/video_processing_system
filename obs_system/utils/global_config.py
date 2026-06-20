@@ -31,13 +31,25 @@ DEFISH_OUTPUT_FOV_DEG = 90.0     # legacy single-view rectilinear output FOV
 #--------- Fisheye Tangent-View Reprojection ----------
 FISHEYE_N_VIEWS = 6
 FISHEYE_VIEW_SIZE = (640, 640)
-FISHEYE_VIEW_FOV_DEG = 70.0
+FISHEYE_VIEW_FOV_DEG = 60.0
 FISHEYE_VIEW_TILT_DEG = 50.0
 FISHEYE_VIEW_YAWS_DEG = [0, 60, 120, 180, 240, 300]
 FISHEYE_VIEW_MIN_MOTION_FRACTION = 0.005
 FISHEYE_VIEW_NMS_IOU = 0.2
 FISHEYE_LOWER_VIEW_YAWS_DEG = [0, 240, 300]
-FISHEYE_LOWER_VIEW_CONF_THR = 0.55
+FISHEYE_LOWER_VIEW_CONF_THR = 0.65
+#
+# #--------- Fisheye Tangent-View Reprojection ----------
+# FISHEYE_N_VIEWS = 6
+# FISHEYE_VIEW_SIZE = (640, 640)
+# FISHEYE_VIEW_FOV_DEG = 70.0
+# FISHEYE_VIEW_TILT_DEG = 55.0
+# FISHEYE_VIEW_YAWS_DEG = [0, 60, 120, 180, 240, 300]
+# FISHEYE_VIEW_MIN_MOTION_FRACTION = 0.005
+# FISHEYE_VIEW_NMS_IOU = 0.35
+# FISHEYE_LOWER_VIEW_YAWS_DEG = [240, 300]
+# FISHEYE_LOWER_VIEW_CONF_THR = 0.55
+#
 
 #--------- Motion Gating ----------
 TRIALS = 10 
@@ -160,7 +172,8 @@ TILE_KALMAN_IOU_THRESHOLD = 0.45
 ROAD_IMPOSSIBLE_CLASSES = frozenset({
     "boat", "ship", "surfboard", "snowboard", "skis",
     "train", "airplane", "aeroplane", "helicopter",
-    "submarine", "kite", "bird",
+    "submarine", "kite", "bird", "toilet", "scissors", "bed", "brocolli"
+    # these last few are for fisheye 8k
 })
 
 

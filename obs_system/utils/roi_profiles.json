@@ -39,10 +39,10 @@
     }
   },
   "fisheye": {
-    "x1": 70,
-    "y1": 40,
-    "x2": 1170,
-    "y2": 1030,
+    "x1": 0,
+    "y1": 0,
+    "x2": 1244,
+    "y2": 1088,
     "reference_width": 1244,
     "reference_height": 1088,
     "motion": {
