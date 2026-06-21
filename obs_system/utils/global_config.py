@@ -139,7 +139,7 @@ PANORAMA_NMS_IOU = 0.45
 
 #--------- Tile Activation Persistence Window ----------
 # Set to False to disable per-tile motion gating and fall back to whole-frame inference.
-TILE_ACTIVATION_ENABLED = True
+TILE_ACTIVATION_ENABLED = False
 # Frames a tile stays active after its last motion trigger or detection hit.
 TILE_ACTIVATION_PERSIST_FRAMES = 5
 # Minimum fraction of a tile's FG-mask region that must be foreground to trigger it.
