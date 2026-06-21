@@ -167,8 +167,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     argparser.add_argument("--force_tiles", metavar="FT", action=argparse.BooleanOptionalAction, help="Force tiled inference regardless of image dimensions.")
 
-    argparser.add_argument("--panorama", metavar="PAN", action=argparse.BooleanOptionalAction, help="Input is an equirectangular panorama (already unwrapped). Generates overlapping perspective views for YOLO and back-projects detections to panorama space.")
-
     argparser.add_argument(
         "--fisheye_profile",
         metavar="FEP_PROFILE",

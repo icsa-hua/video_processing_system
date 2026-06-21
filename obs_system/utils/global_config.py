@@ -42,7 +42,7 @@ FISHEYE_LOWER_VIEW_CONF_THR = 0.50
 # behaviour.  ``jetson_2_road`` is explicitly selected for the 720x720 camera
 # overlooking the upper horizontal road and upper-left approach; it does not
 # affect any existing execution unless requested through ``--fisheye_profile``.
-DEFAULT_FISHEYE_PROFILE = "default"
+DEFAULT_FISHEYE_PROFILE = "none"
 FISHEYE_PROFILES = {
     "default": {
         "n_views": FISHEYE_N_VIEWS,

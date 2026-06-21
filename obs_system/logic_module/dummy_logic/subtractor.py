@@ -38,7 +38,7 @@ class Subtractor(EventExtractorInterface):
                  threshold_ratio=THR_RATIO,
                  detect_shadows=True,
                  empty_background_image="",
-                 downscale=(160,160),
+                 downscale=(320,320),
                  accum_time:int=100,
                  save_path:str="assets/background_check/lane_image.jpg",
                  recalibration_interval_frames:int=0,
