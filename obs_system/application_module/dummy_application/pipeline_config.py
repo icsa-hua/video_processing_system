@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from obs_system.utils.common import ModelSpecification, check_model_name
+from obs_system.utils.global_config import DEFAULT_FISHEYE_PROFILE, FISHEYE_PROFILES
 from obs_system.application_module.dummy_application.camera_config import keys
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp" 
@@ -52,6 +53,7 @@ class PipelineConfig:
     jetson_cpu_threads: int = 0
     force_tiles: bool = False
     panorama: bool = False
+    fisheye_profile: str = DEFAULT_FISHEYE_PROFILE
 
     @classmethod
     def from_namespace(cls, args: argparse.Namespace) -> "PipelineConfig":
@@ -98,6 +100,10 @@ class PipelineConfig:
 
         if int(self.jetson_cpu_threads) < 0:
             raise ValueError("Set jetson_cpu_threads to a value greater than or equal to 0")
+
+        if self.fisheye_profile not in FISHEYE_PROFILES:
+            choices = ", ".join(sorted(FISHEYE_PROFILES))
+            raise ValueError(f"Unknown fisheye_profile {self.fisheye_profile!r}. Choose one of: {choices}")
 
         return self
 
@@ -162,5 +168,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     argparser.add_argument("--force_tiles", metavar="FT", action=argparse.BooleanOptionalAction, help="Force tiled inference regardless of image dimensions.")
 
     argparser.add_argument("--panorama", metavar="PAN", action=argparse.BooleanOptionalAction, help="Input is an equirectangular panorama (already unwrapped). Generates overlapping perspective views for YOLO and back-projects detections to panorama space.")
+
+    argparser.add_argument(
+        "--fisheye_profile",
+        metavar="FEP_PROFILE",
+        choices=sorted(FISHEYE_PROFILES),
+        default=DEFAULT_FISHEYE_PROFILE,
+        help=(
+            "Named tangent-view geometry profile used only with --fep. "
+            "The default profile preserves the existing fisheye execution."
+        ),
+    )
 
     return argparser

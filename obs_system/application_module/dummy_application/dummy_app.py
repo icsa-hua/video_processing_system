@@ -164,7 +164,10 @@ class Application:
         self.logic_module["ROI"] = RegionSetter()
 
         if config.fep:
-            self.logic_module["FEP"] = FishEyeProjection(crop=0.00)
+            self.logic_module["FEP"] = FishEyeProjection(
+                crop=0.00,
+                profile_name=config.fisheye_profile,
+            )
         else:
             self.logic_module["FEP"] = None
 

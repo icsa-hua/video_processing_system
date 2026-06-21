@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from obs_system.application_module.dummy_application.pipeline_config import DEFAULT_BENCH_LABELS
+from obs_system.utils.global_config import DEFAULT_FISHEYE_PROFILE, FISHEYE_PROFILES
 from obs_system.utils.logger import get_logger
 
 import os
@@ -158,6 +159,16 @@ with st.sidebar:
     only_fps = st.checkbox("Measure FPS Only", value=True)
     half = st.checkbox("Use Half Precision", value=False)
     fep = st.checkbox("Enable FishEye Projection", value=False)
+    fisheye_profile = st.selectbox(
+        "FishEye tangent-view profile",
+        options=sorted(FISHEYE_PROFILES),
+        index=sorted(FISHEYE_PROFILES).index(DEFAULT_FISHEYE_PROFILE),
+        disabled=not fep,
+        help=(
+            "Only affects FishEye Projection. Use jetson_2_road for the "
+            "720×720 overhead road camera; default preserves prior behaviour."
+        ),
+    )
     force_tiles = st.checkbox(
         "Force Tiled Inference",
         value=False,
@@ -263,6 +274,7 @@ with tab1:
                 "roi": roi,
                 "half": half,
                 "fep": fep,
+                "fisheye_profile": fisheye_profile,
                 "bench": labels_available,
                 "bench_labels": bench_labels,
                 "use_TRT": use_trt,

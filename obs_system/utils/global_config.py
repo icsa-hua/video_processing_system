@@ -38,6 +38,62 @@ FISHEYE_VIEW_NMS_IOU = 0.45
 FISHEYE_LOWER_VIEW_YAWS_DEG = [0, 240, 300]
 FISHEYE_LOWER_VIEW_CONF_THR = 0.50
 
+# Named tangent-view profiles.  The default profile preserves the historical
+# behaviour.  ``jetson_2_road`` is explicitly selected for the 720x720 camera
+# overlooking the upper horizontal road and upper-left approach; it does not
+# affect any existing execution unless requested through ``--fisheye_profile``.
+DEFAULT_FISHEYE_PROFILE = "default"
+FISHEYE_PROFILES = {
+    "default": {
+        "n_views": FISHEYE_N_VIEWS,
+        "view_size": FISHEYE_VIEW_SIZE,
+        "view_fov_deg": FISHEYE_VIEW_FOV_DEG,
+        "view_yaws_deg": FISHEYE_VIEW_YAWS_DEG,
+        "view_tilts_deg": [FISHEYE_VIEW_TILT_DEG] * FISHEYE_N_VIEWS,
+        "min_motion_fraction": FISHEYE_VIEW_MIN_MOTION_FRACTION,
+        "center_x_ratio": 0.5,
+        "center_y_ratio": 0.5,
+        "radius_ratio": 0.5,
+        "full_refresh_interval_frames": 0,
+        "view_persist_frames": 0,
+        "backproject_edge_samples": 1,
+        "allowed_class_names": [],
+    },
+    "jetson_2_road": {
+        "n_views": 6,
+        "view_size": (640, 640),
+        "view_fov_deg": 65.0,
+        # Source convention: 0°=right, 90°=top, 180°=left.
+        # These six views spend the existing inference budget on the upper road
+        # and the upper section of the left-hand approach.  At 720x720 their
+        # approximate source-space centres are:
+        # (600,296), (499,195), (376,177), (260,187), (150,262), (92,407).
+        "view_yaws_deg": [15.0, 50.0, 85.0, 120.0, 155.0, 190.0],
+        # The road is nearer the optical centre at the top-middle and farther
+        # toward the lens perimeter at both ends and along the left approach.
+        "view_tilts_deg": [62.0, 54.0, 46.0, 50.0, 58.0, 68.0],
+        "min_motion_fraction": 0.002,
+        "center_x_ratio": 0.5,
+        "center_y_ratio": 0.5,
+        "radius_ratio": 0.5,
+        # At 25 FPS this refreshes all six road views every two seconds.  The
+        # amortised extra work is 0.12 view/frame when the scene is otherwise idle.
+        "full_refresh_interval_frames": 50,
+        "view_persist_frames": 8,
+        # Twenty perimeter points per box give a safer envelope after nonlinear
+        # back-projection while adding negligible work relative to inference.
+        "backproject_edge_samples": 5,
+        "allowed_class_names": [
+            "person", "pedestrian",
+            "bicycle", "bike", "cyclist",
+            "car",
+            "motorcycle", "motorbike", "motorcyclist",
+            "bus",
+            "truck",
+        ],
+    },
+}
+
 #--------- Motion Gating ----------
 TRIALS = 10 
 HISTORY = 300 

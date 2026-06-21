@@ -10,6 +10,7 @@ from obs_system.utils.global_config import (
     FISHEYE_N_VIEWS, FISHEYE_VIEW_SIZE, FISHEYE_VIEW_FOV_DEG,
     FISHEYE_VIEW_TILT_DEG, FISHEYE_VIEW_YAWS_DEG,
     FISHEYE_VIEW_MIN_MOTION_FRACTION,
+    DEFAULT_FISHEYE_PROFILE, FISHEYE_PROFILES,
 )
 
 
@@ -42,7 +43,13 @@ class FishEyeProjection(EventExtractorInterface):
         view_tilt_deg: float = FISHEYE_VIEW_TILT_DEG,
         view_yaws_deg: Optional[List[float]] = None,
         min_motion_fraction: float = FISHEYE_VIEW_MIN_MOTION_FRACTION,
+        profile_name: str = DEFAULT_FISHEYE_PROFILE,
     )->None:
+        if profile_name not in FISHEYE_PROFILES:
+            choices = ", ".join(sorted(FISHEYE_PROFILES))
+            raise ValueError(f"Unknown fisheye profile {profile_name!r}. Choose one of: {choices}")
+
+        profile = FISHEYE_PROFILES[profile_name]
         self.__fog_def = fog_deg
         self.__crop=crop 
         self.__cx = cx 
@@ -50,15 +57,62 @@ class FishEyeProjection(EventExtractorInterface):
         self.__map_cache:Dict[Tuple[int, int, float, float, float, float], Tuple[np.ndarray, np.ndarray, int, int,]] = {}
         self.__equidistant_cache: Dict[Tuple, Tuple[np.ndarray, np.ndarray]] = {}
         self.use_tangent_views = bool(use_tangent_views)
-        self.n_views = max(1, int(n_views))
-        self.view_w, self.view_h = int(view_size[0]), int(view_size[1])
-        self.view_fov_deg = float(view_fov_deg)
+        self.profile_name = str(profile_name)
+
+        if self.profile_name == DEFAULT_FISHEYE_PROFILE:
+            configured_n_views = n_views
+            configured_view_size = view_size
+            configured_view_fov = view_fov_deg
+            configured_yaws = FISHEYE_VIEW_YAWS_DEG if view_yaws_deg is None else view_yaws_deg
+            configured_tilts = [view_tilt_deg] * int(configured_n_views)
+            configured_motion_fraction = min_motion_fraction
+        else:
+            configured_n_views = profile["n_views"]
+            configured_view_size = profile["view_size"]
+            configured_view_fov = profile["view_fov_deg"]
+            configured_yaws = profile["view_yaws_deg"]
+            configured_tilts = profile["view_tilts_deg"]
+            configured_motion_fraction = profile["min_motion_fraction"]
+
+        self.n_views = max(1, int(configured_n_views))
+        self.view_w, self.view_h = int(configured_view_size[0]), int(configured_view_size[1])
+        self.view_fov_deg = float(configured_view_fov)
         self.view_tilt_deg = float(view_tilt_deg)
-        yaws = FISHEYE_VIEW_YAWS_DEG if view_yaws_deg is None else view_yaws_deg
+        yaws = configured_yaws
         if len(yaws) < self.n_views:
             raise ValueError("view_yaws_deg must contain at least n_views entries")
         self.view_yaws_deg = [float(y) for y in yaws[:self.n_views]]
-        self.min_motion_fraction = float(min_motion_fraction)
+        if len(configured_tilts) < self.n_views:
+            raise ValueError("view_tilts_deg must contain at least n_views entries")
+        self.view_tilts_deg = [float(t) for t in configured_tilts[:self.n_views]]
+        self.min_motion_fraction = float(configured_motion_fraction)
+
+        self.center_x_ratio = float(profile.get("center_x_ratio", 0.5))
+        self.center_y_ratio = float(profile.get("center_y_ratio", 0.5))
+        self.radius_ratio = float(profile.get("radius_ratio", 0.5))
+        self.full_refresh_interval_frames = max(
+            0, int(profile.get("full_refresh_interval_frames", 0))
+        )
+        self.view_persist_frames = max(0, int(profile.get("view_persist_frames", 0)))
+        self.backproject_edge_samples = max(
+            1, int(profile.get("backproject_edge_samples", 1))
+        )
+        self.allowed_class_names = frozenset(
+            str(name).strip().lower()
+            for name in profile.get("allowed_class_names", [])
+            if str(name).strip()
+        )
+        self._last_active_frame = np.full((self.n_views,), -10**9, dtype=np.int64)
+        self._fallback_frame_index = -1
+        self._view_metrics = {
+            "frames": 0,
+            "refresh_frames": 0,
+            "views_considered": 0,
+            "views_submitted": 0,
+            "views_motion_activated": 0,
+            "views_persisted": 0,
+            "views_detection_hits": 0,
+        }
         self._fish_w: int = 0
         self._fish_h: int = 0
         self._tangent_map_x: List[np.ndarray] = []
@@ -176,10 +230,10 @@ class FishEyeProjection(EventExtractorInterface):
         self._tangent_map1_int.clear()
         self._tangent_map2_int.clear()
 
-        cx = self._fish_w / 2.0 if self.__cx is None else float(self.__cx)
-        cy = self._fish_h / 2.0 if self.__cy is None else float(self.__cy)
+        cx = self._fish_w * self.center_x_ratio if self.__cx is None else float(self.__cx)
+        cy = self._fish_h * self.center_y_ratio if self.__cy is None else float(self.__cy)
         theta_max = np.deg2rad(DEFISH_FISHEYE_FOV_DEG / 2.0)
-        fisheye_radius = min(self._fish_w, self._fish_h) / 2.0
+        fisheye_radius = min(self._fish_w, self._fish_h) * self.radius_ratio
         f_fish = fisheye_radius / max(theta_max, 1e-9)
 
         f_view = (self.view_w / 2.0) / np.tan(np.deg2rad(self.view_fov_deg) / 2.0)
@@ -192,10 +246,9 @@ class FishEyeProjection(EventExtractorInterface):
         local_y = (vv - cy_v) / f_view
 
         world_up = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-        tilt = np.deg2rad(self.view_tilt_deg)
-
-        for yaw_deg in self.view_yaws_deg:
+        for yaw_deg, tilt_deg in zip(self.view_yaws_deg, self.view_tilts_deg):
             yaw = np.deg2rad(yaw_deg)
+            tilt = np.deg2rad(tilt_deg)
             view_forward = np.array(
                 [
                     np.cos(yaw) * np.sin(tilt),
@@ -248,6 +301,66 @@ class FishEyeProjection(EventExtractorInterface):
             self._build_tangent_maps(fish_w, fish_h)
 
 
+    def _resolve_frame_number(self, frame_id: Optional[int]) -> int:
+        if isinstance(frame_id, (int, np.integer)):
+            return int(frame_id)
+        self._fallback_frame_index += 1
+        return self._fallback_frame_index
+
+
+    def is_refresh_frame(self, frame_id: Optional[int]) -> bool:
+        if self.full_refresh_interval_frames <= 0:
+            return False
+        if not isinstance(frame_id, (int, np.integer)):
+            return False
+        return int(frame_id) % self.full_refresh_interval_frames == 0
+
+
+    def has_persisted_views(self, frame_id: Optional[int]) -> bool:
+        if self.view_persist_frames <= 0 or not isinstance(frame_id, (int, np.integer)):
+            return False
+        age = int(frame_id) - self._last_active_frame
+        return bool(np.any((age >= 0) & (age <= self.view_persist_frames)))
+
+
+    def should_force_frame(self, frame_id: Optional[int]) -> bool:
+        """Allow the frame through the whole-frame motion gate when required."""
+        return self.is_refresh_frame(frame_id) or self.has_persisted_views(frame_id)
+
+
+    def mark_view_detection(self, view_id: int, frame_id: Optional[int]) -> None:
+        if not (0 <= int(view_id) < self.n_views):
+            return
+        frame_number = self._resolve_frame_number(frame_id)
+        self._last_active_frame[int(view_id)] = frame_number
+        self._view_metrics["views_detection_hits"] += 1
+
+
+    def reset_runtime_state(self) -> None:
+        self._last_active_frame.fill(-10**9)
+        self._fallback_frame_index = -1
+        for key in self._view_metrics:
+            self._view_metrics[key] = 0
+
+
+    def get_runtime_metrics(self) -> Dict[str, float | int | str]:
+        frames = max(int(self._view_metrics["frames"]), 1)
+        considered = max(int(self._view_metrics["views_considered"]), 1)
+        return {
+            "fisheye_profile": self.profile_name,
+            **{
+                f"fisheye_{key}": value
+                for key, value in self._view_metrics.items()
+            },
+            "fisheye_views_submitted_per_frame": (
+                float(self._view_metrics["views_submitted"]) / float(frames)
+            ),
+            "fisheye_view_submission_ratio": (
+                float(self._view_metrics["views_submitted"]) / float(considered)
+            ),
+        }
+
+
     def _view_has_motion(self, fg_mask_small: np.ndarray, view_id: int) -> bool:
         if fg_mask_small is None or fg_mask_small.size == 0:
             return True
@@ -275,22 +388,51 @@ class FishEyeProjection(EventExtractorInterface):
         self,
         fisheye_bgr: np.ndarray,
         fg_mask_small: Optional[np.ndarray] = None,
+        frame_id: Optional[int] = None,
+        force_refresh: Optional[bool] = None,
     ) -> List[Tuple[Optional[np.ndarray], int, bool]]:
         """
         Return tangent/pinhole views for YOLO.
 
         Inactive views are returned with ``view_bgr=None`` so callers can avoid
-        paying image remap cost when the motion gate proves the sector is idle.
+        paying image remap cost when the sector has no motion, persistence, or
+        scheduled refresh.  The tuple boolean means "submit this view", not
+        necessarily that motion fired in the current frame.
         """
         h, w = fisheye_bgr.shape[:2]
         self._ensure_tangent_maps(w, h)
+        frame_number = self._resolve_frame_number(frame_id)
+        refresh = self.is_refresh_frame(frame_id) if force_refresh is None else bool(force_refresh)
+        self._view_metrics["frames"] += 1
+        self._view_metrics["views_considered"] += self.n_views
+        if refresh:
+            self._view_metrics["refresh_frames"] += 1
 
         result: List[Tuple[Optional[np.ndarray], int, bool]] = []
         for v_id in range(self.n_views):
-            has_motion = self._view_has_motion(fg_mask_small, v_id) if fg_mask_small is not None else True
-            if not has_motion:
+            mask_available = fg_mask_small is not None
+            has_motion = (
+                self._view_has_motion(fg_mask_small, v_id)
+                if mask_available
+                else False
+            )
+            if has_motion:
+                self._last_active_frame[v_id] = frame_number
+                self._view_metrics["views_motion_activated"] += 1
+
+            age = frame_number - int(self._last_active_frame[v_id])
+            persisted = (
+                self.view_persist_frames > 0
+                and age >= 0
+                and age <= self.view_persist_frames
+            )
+            ungated = not mask_available and not refresh
+            active = refresh or ungated or has_motion or persisted
+            if not active:
                 result.append((None, v_id, False))
                 continue
+            if persisted and not has_motion and not refresh:
+                self._view_metrics["views_persisted"] += 1
 
             view = cv2.remap(
                 fisheye_bgr,
@@ -300,6 +442,7 @@ class FishEyeProjection(EventExtractorInterface):
                 borderMode=cv2.BORDER_CONSTANT,
                 borderValue=0,
             )
+            self._view_metrics["views_submitted"] += 1
             result.append((view, v_id, True))
 
         return result
@@ -315,20 +458,76 @@ class FishEyeProjection(EventExtractorInterface):
             boxes_xyxy[:, 0], boxes_xyxy[:, 1],
             boxes_xyxy[:, 2], boxes_xyxy[:, 3],
         )
-        cu = np.concatenate([x1, x2, x2, x1])
-        cv_ = np.concatenate([y1, y1, y2, y2])
+
+        if self.backproject_edge_samples <= 1:
+            # Preserve the historical four-corner mapping for the default profile.
+            cu = np.concatenate([x1, x2, x2, x1])
+            cv_ = np.concatenate([y1, y1, y2, y2])
+            point_count = 4
+        else:
+            t = np.linspace(
+                0.0,
+                1.0,
+                self.backproject_edge_samples,
+                dtype=np.float32,
+            )[:, None]
+            top_x = x1[None, :] + (x2 - x1)[None, :] * t
+            side_y = y1[None, :] + (y2 - y1)[None, :] * t
+            cu = np.concatenate(
+                [
+                    top_x,
+                    np.broadcast_to(x2[None, :], top_x.shape),
+                    top_x[::-1],
+                    np.broadcast_to(x1[None, :], top_x.shape),
+                ],
+                axis=0,
+            ).reshape(-1)
+            cv_ = np.concatenate(
+                [
+                    np.broadcast_to(y1[None, :], side_y.shape),
+                    side_y,
+                    np.broadcast_to(y2[None, :], side_y.shape),
+                    side_y[::-1],
+                ],
+                axis=0,
+            ).reshape(-1)
+            point_count = self.backproject_edge_samples * 4
+
         cu = np.clip(cu, 0.0, self.view_w - 1).astype(np.float64)
         cv_ = np.clip(cv_, 0.0, self.view_h - 1).astype(np.float64)
 
         fish_x = self._bilinear_sample(self._tangent_map_x[view_id], cu, cv_)
         fish_y = self._bilinear_sample(self._tangent_map_y[view_id], cu, cv_)
-        fish_x = fish_x.reshape(4, n)
-        fish_y = fish_y.reshape(4, n)
+        fish_x = fish_x.reshape(point_count, n)
+        fish_y = fish_y.reshape(point_count, n)
 
-        out_x1 = np.clip(fish_x.min(axis=0), 0.0, self._fish_w - 1)
-        out_y1 = np.clip(fish_y.min(axis=0), 0.0, self._fish_h - 1)
-        out_x2 = np.clip(fish_x.max(axis=0), 0.0, self._fish_w - 1)
-        out_y2 = np.clip(fish_y.max(axis=0), 0.0, self._fish_h - 1)
+        if self.backproject_edge_samples <= 1:
+            out_x1 = np.clip(fish_x.min(axis=0), 0.0, self._fish_w - 1)
+            out_y1 = np.clip(fish_y.min(axis=0), 0.0, self._fish_h - 1)
+            out_x2 = np.clip(fish_x.max(axis=0), 0.0, self._fish_w - 1)
+            out_y2 = np.clip(fish_y.max(axis=0), 0.0, self._fish_h - 1)
+        else:
+            valid = (
+                (fish_x >= 0.0)
+                & (fish_x < self._fish_w)
+                & (fish_y >= 0.0)
+                & (fish_y < self._fish_h)
+            )
+            safe_x = np.where(valid, fish_x, np.nan)
+            safe_y = np.where(valid, fish_y, np.nan)
+            with np.errstate(all="ignore"):
+                out_x1 = np.nanmin(safe_x, axis=0)
+                out_y1 = np.nanmin(safe_y, axis=0)
+                out_x2 = np.nanmax(safe_x, axis=0)
+                out_y2 = np.nanmax(safe_y, axis=0)
+            out_x1 = np.nan_to_num(out_x1, nan=0.0)
+            out_y1 = np.nan_to_num(out_y1, nan=0.0)
+            out_x2 = np.nan_to_num(out_x2, nan=0.0)
+            out_y2 = np.nan_to_num(out_y2, nan=0.0)
+            out_x1 = np.clip(out_x1, 0.0, self._fish_w - 1)
+            out_y1 = np.clip(out_y1, 0.0, self._fish_h - 1)
+            out_x2 = np.clip(out_x2, 0.0, self._fish_w - 1)
+            out_y2 = np.clip(out_y2, 0.0, self._fish_h - 1)
         return np.stack([out_x1, out_y1, out_x2, out_y2], axis=1).astype(np.float32)
     
 

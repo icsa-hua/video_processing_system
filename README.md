@@ -103,6 +103,23 @@ Run a TensorRT engine:
 python3 scripts/obs_pipeline.py --video_source samples/sample_video.mp4 --model_name assets/compressed_models/yolov8s.engine --use_TRT
 ```
 
+For the 720×720 overhead fisheye road camera, select the isolated road-focused
+tangent-view profile:
+
+```bash
+python3 scripts/obs_pipeline.py \
+  --video_source assets/runs/jetson_2_recording.mp4 \
+  --model_name assets/compressed_models/edi_jetson_model.engine \
+  --use_TRT \
+  --fep \
+  --fisheye_profile jetson_2_road
+```
+
+The profile keeps the existing six-view inference budget, focuses those views
+on the upper road and upper-left approach, persists recently active views for
+eight frames, and performs a complete road-view refresh every 50 frames.
+Omitting `--fisheye_profile` preserves the previous fisheye behaviour.
+
 Show preview:
 
 ```bash

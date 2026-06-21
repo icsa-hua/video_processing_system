@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from obs_system.application_module.dummy_application.pipeline_config import PipelineConfig
+from obs_system.utils.global_config import DEFAULT_FISHEYE_PROFILE
 from obs_system.application_module.dummy_application.stream_examiner import (
     StreamExaminer,
     StreamExaminerConfig,
@@ -68,6 +69,7 @@ class VideoProcessingRequest(BaseModel):
     lane_recalibration_interval_frames: int = 0
     force_tiles: bool = False
     panorama: bool = False
+    fisheye_profile: str = DEFAULT_FISHEYE_PROFILE
 
 
 class StreamExaminationRequest(BaseModel):

@@ -37,7 +37,12 @@ from obs_system.utils.benchmarking.backend_benchmark import (
     read_csv_rows,
     summarize_stage_latency,
 )
-from obs_system.utils.global_config import CONF_THR, NMS_IOU
+from obs_system.utils.global_config import (
+    CONF_THR,
+    DEFAULT_FISHEYE_PROFILE,
+    FISHEYE_PROFILES,
+    NMS_IOU,
+)
 from obs_system.utils.logger import get_logger
 from ultralytics.utils import DEFAULT_CFG
 
@@ -952,6 +957,7 @@ def _run_variant(
             "save": bool(config.save),
             "roi": bool(config.roi),
             "fep": bool(config.fep),
+            "fisheye_profile": config.fisheye_profile,
             "use_TRT": bool(config.use_TRT),
             "jetson_profile": bool(config.jetson_profile),
             "force_tiles": bool(getattr(streamer.args, "force_tiles", False)),
@@ -972,6 +978,11 @@ def _run_variant(
             "dropped_frames": int(streamer_metrics.get("dropped_frames", 0)),
             "confidence_threshold": float(CONF_THR),
             "nms_iou": float(NMS_IOU),
+            "fisheye_runtime": {
+                key: value
+                for key, value in streamer_metrics.items()
+                if key.startswith("fisheye_")
+            },
         },
         "setup_metrics": setup_metrics,
         "stage_latency": summarize_stage_latency(frame_rows, STAGE_LATENCY_KEYS),
@@ -1253,6 +1264,7 @@ def _build_base_config(args: argparse.Namespace) -> PipelineConfig:
         roi_profile=args.roi_profile,
         half=True,
         fep=bool(args.fep),
+        fisheye_profile=args.fisheye_profile,
         bench=bool(args.labels_dir),
         bench_labels=args.labels_dir or DEFAULT_BENCH_LABELS,
         use_TRT=bool(use_tensorrt),
@@ -1298,6 +1310,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--roi", action=argparse.BooleanOptionalAction, default=True, help="Enable ROI cropping.")
     parser.add_argument("--roi-profile", default="", help="Optional ROI profile key from obs_system/utils/roi_profiles.json.")
     parser.add_argument("--fep", action=argparse.BooleanOptionalAction, default=False, help="Enable fisheye equalization and reprojection (fisheye cameras only). Also activates the no-FEP ablation variant.")
+    parser.add_argument(
+        "--fisheye-profile",
+        choices=sorted(FISHEYE_PROFILES),
+        default=DEFAULT_FISHEYE_PROFILE,
+        help="Named tangent-view profile used only when --fep is enabled.",
+    )
     parser.add_argument("--mqtt", action=argparse.BooleanOptionalAction, default=True, help="Enable MQTT in the full-pipeline baseline.")
     parser.add_argument("--save-outputs", action=argparse.BooleanOptionalAction, default=True, help="Enable frame/event saving in the full-pipeline baseline.")
     parser.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=False, help="Verbose streamer logging.")

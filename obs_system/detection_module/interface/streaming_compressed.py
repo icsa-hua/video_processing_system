@@ -211,6 +211,21 @@ class OptimizedStreamer(Streamer):
         if self.should_force_inference_all_frames():
             mfgs = [True] * len(mfgs)
 
+        # A named tangent-view profile may request a sparse full-view refresh or
+        # keep a recently active view alive.  This override is confined to FEP
+        # tangent-view execution and leaves all standard/panorama/tile gating
+        # unchanged.
+        fep = None if self.logic_module is None else self.logic_module.get("FEP")
+        if (
+            fep is not None
+            and bool(getattr(fep, "use_tangent_views", False))
+            and hasattr(fep, "should_force_frame")
+        ):
+            mfgs = [
+                bool(keep) or bool(fep.should_force_frame(fid))
+                for keep, fid in zip(mfgs, frame_ids)
+            ]
+
         fg_masks = getattr(subtractor_inst, "_last_batch_fg_masks", None) or []
 
         # When FEP is active im0s has been remapped; YOLO boxes will be in that
@@ -544,8 +559,16 @@ class OptimizedStreamer(Streamer):
             if not keep_frame or fep is None:
                 continue
             fg_mask = fg_masks[bni] if bni < len(fg_masks) else None
-            for view_img, v_id, has_motion in fep.get_views(fisheye_bgr, fg_mask_small=fg_mask):
-                if has_motion and view_img is not None:
+            force_refresh = bool(
+                hasattr(fep, "is_refresh_frame") and fep.is_refresh_frame(frame_ids[bni])
+            )
+            for view_img, v_id, view_active in fep.get_views(
+                fisheye_bgr,
+                fg_mask_small=None if force_refresh else fg_mask,
+                frame_id=frame_ids[bni],
+                force_refresh=force_refresh,
+            ):
+                if view_active and view_img is not None:
                     all_view_items.append((view_img, bni, v_id))
         total_preprocess_ms += (time.perf_counter() - t_view0) * 1e3
 
@@ -595,10 +618,37 @@ class OptimizedStreamer(Streamer):
                 scores_t = scores_t[road_mask]
                 classes_t = classes_t[road_mask]
 
+                profile_allowed_names = getattr(fep, "allowed_class_names", frozenset())
+                class_names = getattr(
+                    getattr(self, "converter", None),
+                    "class_names",
+                    [],
+                )
+                if profile_allowed_names and class_names:
+                    profile_mask = torch.tensor(
+                        [
+                            0 <= int(class_id) < len(class_names)
+                            and str(class_names[int(class_id)]).strip().lower()
+                            in profile_allowed_names
+                            for class_id in classes_t.tolist()
+                        ],
+                        dtype=torch.bool,
+                        device=classes_t.device,
+                    )
+                    if not profile_mask.any():
+                        continue
+                    boxes_t = boxes_t[profile_mask]
+                    scores_t = scores_t[profile_mask]
+                    classes_t = classes_t[profile_mask]
+
                 view_yaw_deg = None
                 if hasattr(fep, "view_yaws_deg") and 0 <= int(v_id) < len(fep.view_yaws_deg):
                     view_yaw_deg = int(round(float(fep.view_yaws_deg[int(v_id)]))) % 360
-                if view_yaw_deg in FISHEYE_LOWER_VIEW_YAWS_DEG:
+                if (
+                    getattr(fep, "profile_name", DEFAULT_FISHEYE_PROFILE)
+                    == DEFAULT_FISHEYE_PROFILE
+                    and view_yaw_deg in FISHEYE_LOWER_VIEW_YAWS_DEG
+                ):
                     conf_mask = scores_t >= float(FISHEYE_LOWER_VIEW_CONF_THR)
                     if not conf_mask.any():
                         continue
@@ -617,6 +667,8 @@ class OptimizedStreamer(Streamer):
                 entry["boxes"].append(boxes_fish[valid])
                 entry["scores"].append(scores_t.cpu().numpy()[valid])
                 entry["classes"].append(classes_t.cpu().numpy()[valid])
+                if hasattr(fep, "mark_view_detection"):
+                    fep.mark_view_detection(v_id, frame_ids[bni])
 
         frames: List[FrameDetections] = []
         for bni, (keep_frame, fid) in enumerate(zip(mfgs, frame_ids)):
@@ -638,6 +690,8 @@ class OptimizedStreamer(Streamer):
             all_boxes = np.concatenate(accum["boxes"], axis=0).astype(np.float32)
             all_scores = np.concatenate(accum["scores"], axis=0).astype(np.float32)
             all_classes = np.concatenate(accum["classes"], axis=0).astype(np.int64)
+            self.run_metrics.setdefault("fisheye_detections_before_cross_view_nms", 0)
+            self.run_metrics["fisheye_detections_before_cross_view_nms"] += int(len(all_boxes))
 
             boxes_t_all = torch.as_tensor(all_boxes, dtype=torch.float32)
             scores_t_all = torch.as_tensor(all_scores, dtype=torch.float32)
@@ -650,6 +704,8 @@ class OptimizedStreamer(Streamer):
             boxes_t_all = boxes_t_all[keep_idx]
             scores_t_all = scores_t_all[keep_idx]
             classes_t_all = classes_t_all[keep_idx]
+            self.run_metrics.setdefault("fisheye_detections_after_cross_view_nms", 0)
+            self.run_metrics["fisheye_detections_after_cross_view_nms"] += int(len(boxes_t_all))
 
             if self.use_roi and boxes_t_all.numel() > 0:
                 boxes_t_all = self.logic_module["ROI"].translate_bounding_boxes(
@@ -671,6 +727,25 @@ class OptimizedStreamer(Streamer):
                 classes=classes_t_all,
             )
             frames.append(self._merge_motion_boxes(fd, fg_mask_bni, im0s[bni].shape[:2]))
+
+        if hasattr(fep, "get_runtime_metrics"):
+            self.run_metrics.update(fep.get_runtime_metrics())
+        if batch_idx == 0 or batch_idx % 100 == 0:
+            metrics = (
+                fep.get_runtime_metrics()
+                if hasattr(fep, "get_runtime_metrics")
+                else {}
+            )
+            Streamer.logger.info(
+                "[fisheye:%s] submitted %.2f views/frame; refresh_frames=%d; "
+                "persisted_views=%d; detections pre/post NMS=%d/%d",
+                metrics.get("fisheye_profile", "default"),
+                float(metrics.get("fisheye_views_submitted_per_frame", 0.0)),
+                int(metrics.get("fisheye_refresh_frames", 0)),
+                int(metrics.get("fisheye_views_persisted", 0)),
+                int(self.run_metrics["fisheye_detections_before_cross_view_nms"]),
+                int(self.run_metrics["fisheye_detections_after_cross_view_nms"]),
+            )
 
         return {
             "detections": DetectionBatch(frames=frames),
@@ -1147,10 +1222,24 @@ class OptimizedStreamer(Streamer):
                 )
 
             if use_fisheye_views:
+                fep = self.logic_module["FEP"]
+                if hasattr(fep, "reset_runtime_state"):
+                    fep.reset_runtime_state()
+                self.run_metrics.update(
+                    {
+                        "fisheye_profile": getattr(
+                            fep, "profile_name", DEFAULT_FISHEYE_PROFILE
+                        ),
+                        "fisheye_detections_before_cross_view_nms": 0,
+                        "fisheye_detections_after_cross_view_nms": 0,
+                    }
+                )
                 Streamer.logger.info(
-                    "Run Inference in Fisheye Tangent-View Mode (%dx%d, %d views)",
+                    "Run Inference in Fisheye Tangent-View Mode "
+                    "(%dx%d, %d views, profile=%s)",
                     self.orig_width, self.orig_height,
-                    self.logic_module["FEP"].n_views,
+                    fep.n_views,
+                    getattr(fep, "profile_name", DEFAULT_FISHEYE_PROFILE),
                 )
                 return self._stream_inference_impl(
                     model=model,
