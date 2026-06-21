@@ -31,12 +31,12 @@ DEFISH_OUTPUT_FOV_DEG = 90.0     # legacy single-view rectilinear output FOV
 FISHEYE_N_VIEWS = 6
 FISHEYE_VIEW_SIZE = (640, 640)
 FISHEYE_VIEW_FOV_DEG = 70.0
-FISHEYE_VIEW_TILT_DEG = 55.0
+FISHEYE_VIEW_TILT_DEG = 50.0
 FISHEYE_VIEW_YAWS_DEG = [0, 60, 120, 180, 240, 300]
 FISHEYE_VIEW_MIN_MOTION_FRACTION = 0.005
-FISHEYE_VIEW_NMS_IOU = 0.25
+FISHEYE_VIEW_NMS_IOU = 0.2
 FISHEYE_LOWER_VIEW_YAWS_DEG = [0, 240, 300]
-FISHEYE_LOWER_VIEW_CONF_THR = 0.55
+FISHEYE_LOWER_VIEW_CONF_THR = 0.50
 
 #--------- Motion Gating ----------
 TRIALS = 10 
@@ -160,7 +160,7 @@ ROAD_IMPOSSIBLE_CLASSES = frozenset({
     "boat", "ship", "surfboard", "snowboard", "skis",
     "train", "airplane", "aeroplane", "helicopter",
     "submarine", "kite", "bird", "toilet", "scissors", "bed", "broccoli",
-    "skateboard"
+    "skateboard", "sink", "suitcase"
     # these last few are for fisheye 8k
 })
 
