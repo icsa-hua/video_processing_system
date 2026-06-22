@@ -44,6 +44,37 @@ class OptimizedStreamer(Streamer):
         self._benchmark_label_files: List[Path] = []
         self._benchmark_gt_by_stem: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         self._benchmark_labels_loaded = False
+
+
+    @staticmethod
+    def _record_completed_frame_fps(
+        fps_samples: collections.deque,
+        total_frames: int,
+        completed_frames: int,
+        stream_start: float,
+    ) -> tuple[int, float, float, float]:
+        """
+        Record one completed batch for end-to-end FPS accounting.
+
+        The counter includes every emitted source frame, including frames that
+        bypass model inference through motion gating.  A single timestamp is
+        recorded per completed batch so batched result yields do not create
+        artificial near-zero-time FPS bursts.
+        """
+        now = time.perf_counter()
+        total_frames += max(0, int(completed_frames))
+        fps_samples.append((now, total_frames))
+
+        sliding_fps = 0.0
+        if len(fps_samples) > 1:
+            first_time, first_count = fps_samples[0]
+            window_seconds = now - first_time
+            if window_seconds > 0.0:
+                sliding_fps = (total_frames - first_count) / window_seconds
+
+        elapsed = now - stream_start
+        average_fps = total_frames / elapsed if elapsed > 0.0 else 0.0
+        return total_frames, sliding_fps, average_fps, now
         
 
     def __call__(self, source:str, model:str, logic_module=None, mqtt_broker=None, producer_flag=None, preview_queue=None, *args, **kwargs)->None:
@@ -1092,6 +1123,7 @@ class OptimizedStreamer(Streamer):
     @smart_inference_mode()
     def stream_inference(self, source:str, model:str, producer_flag:Any, preview_queue:Any, *args, **kwargs)->Generator[Optional[Any], None, None]:
 
+        start_time = time.perf_counter()
         self.source = source 
 
         if self.args.verbose : Streamer.logger.info(" ")
@@ -1120,7 +1152,6 @@ class OptimizedStreamer(Streamer):
             )
 
             activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
-            start_time = time.perf_counter() 
 
             first_batch = next(iter(self.dataset)) #Keeps the original pointer without moving it "peeking" to the first frame 
             _, im0s, _ = first_batch
@@ -1280,11 +1311,15 @@ class OptimizedStreamer(Streamer):
     def _stream_inference_impl(self, **kwargs): 
 
         FPS_WINDOW = 100  # sliding window size
-        fps_times = collections.deque(maxlen=FPS_WINDOW)
-        fps=0
-        stream_start = time.perf_counter()
+        stream_start = float(kwargs["start_time"])
+        fps_samples = collections.deque([(stream_start, 0)], maxlen=FPS_WINDOW)
+        fps = 0.0
         last_fps_log = stream_start
         total_frames = 0
+        fps_enabled = bool(
+            (self.args.only_FPS and not self.args.plot_performance)
+            or self.args.plot_performance
+        )
 
         # Performance logging (for plots: FPS vs motion density, inference calls/sec, latency breakdown)
         perf_log_path = getattr(self.args, 'perf_log', None) or 'assets/perf_logs/perf_log.csv'
@@ -1427,6 +1462,21 @@ class OptimizedStreamer(Streamer):
                         frame_count = int(getattr(self.dataset, "count", fid))
                         orig_rgb = cv2.cvtColor(original_images_bgr[i], cv2.COLOR_BGR2RGB)
                         self.save_queue.put(("save_frame", save_path, frame_count, orig_rgb))
+
+                total_frames, fps, avg_fps, fps_now = self._record_completed_frame_fps(
+                    fps_samples,
+                    total_frames,
+                    len(empty_preds),
+                    stream_start,
+                )
+                if fps_enabled and fps_now - last_fps_log >= 1.0:
+                    Streamer.logger.info(
+                        "[FPS] End-to-end FPS: %.2f | Average FPS since start: %.2f",
+                        fps,
+                        avg_fps,
+                    )
+                    last_fps_log = fps_now
+
                 if self.args.plot_performance:
                     t_now = time.perf_counter()
                     scores = getattr(self.logic_module.get('SUBTRACTOR', None), 'last_motion_scores', None)
@@ -1602,20 +1652,19 @@ class OptimizedStreamer(Streamer):
                 self._note_emitted_result()
                 yield r
 
-                if (self.args.only_FPS and not self.args.plot_performance) or self.args.plot_performance:
-                    now = time.perf_counter()
-                    fps_times.append(now)
-                    total_frames += 1
-                    if len(fps_times) > 1:
-                        fps = (len(fps_times) - 1) / (fps_times[-1] - fps_times[0])
-                    if now - last_fps_log >= 1.0:
-                        elapsed = now - stream_start
-                        avg_fps = total_frames / elapsed
-                        Streamer.logger.info(
-                            f"[FPS] End-to-end FPS: {fps:.2f} | "
-                            f"Average FPS since start: {avg_fps:.2f}"
-                        )
-                        last_fps_log = now
+            total_frames, fps, avg_fps, fps_now = self._record_completed_frame_fps(
+                fps_samples,
+                total_frames,
+                len(preds),
+                stream_start,
+            )
+            if fps_enabled and fps_now - last_fps_log >= 1.0:
+                Streamer.logger.info(
+                    "[FPS] End-to-end FPS: %.2f | Average FPS since start: %.2f",
+                    fps,
+                    avg_fps,
+                )
+                last_fps_log = fps_now
 
             self.run_callbacks("on_predict_postprocess_end")
             
@@ -1749,15 +1798,6 @@ class OptimizedStreamer(Streamer):
                 f"{(min(self.args.batch, self.seen), 3, BATCH_SIZE)}" % t
             )
 
-        if (self.args.only_FPS and not self.args.plot_performance) or (self.args.plot_performance): 
-
-            # ---------------- CLEANUP LOG ----------------
-            total_time = time.perf_counter() - stream_start
-            if total_frames > 0:
-                print(
-                    f"[FPS] FINAL Average FPS: {total_frames / total_time:.2f}"
-                )
-
         if self.args.plot_performance:
             # Close performance loggers
             try:
@@ -1769,6 +1809,23 @@ class OptimizedStreamer(Streamer):
 
         self.release_session_resources(preview_queue=preview_queue, producer_flag=producer_flag)
         self.run_callbacks("on_predict_end")
+
+        emitted_frames = int(self.run_metrics.get("frames_emitted", total_frames))
+        if emitted_frames != total_frames:
+            Streamer.logger.warning(
+                "Internal FPS counter mismatch: completed=%d, emitted=%d; "
+                "using emitted frames for the final result.",
+                total_frames,
+                emitted_frames,
+            )
+        total_time = time.perf_counter() - stream_start
+        final_fps = emitted_frames / total_time if total_time > 0.0 else 0.0
+        self.run_metrics["internal_completed_frames"] = emitted_frames
+        self.run_metrics["internal_processing_seconds"] = float(total_time)
+        self.run_metrics["internal_fps"] = float(final_fps)
+
+        if fps_enabled and emitted_frames > 0:
+            print(f"[FPS] FINAL Average FPS: {final_fps:.2f}")
 
 
     @mem_profile
@@ -1784,11 +1841,15 @@ class OptimizedStreamer(Streamer):
         Perf logging, MQTT, preview, benchmarking – identical to the no-tiles path.
         """
         FPS_WINDOW = 100
-        fps_times = collections.deque(maxlen=FPS_WINDOW)
-        fps = 0
-        stream_start = time.perf_counter()
+        stream_start = float(kwargs["start_time"])
+        fps_samples = collections.deque([(stream_start, 0)], maxlen=FPS_WINDOW)
+        fps = 0.0
         last_fps_log = stream_start
         total_frames = 0
+        fps_enabled = bool(
+            (self.args.only_FPS and not self.args.plot_performance)
+            or self.args.plot_performance
+        )
 
         perf_log_path = getattr(self.args, "perf_log", None) or "assets/perf_logs/perf_log.csv"
         perf_flush_every = int(getattr(self.args, "perf_log_flush_every", 64) or 64)
@@ -1940,6 +2001,21 @@ class OptimizedStreamer(Streamer):
                         frame_count = int(getattr(self.dataset, "count", fid))
                         orig_rgb = cv2.cvtColor(original_images_bgr[i], cv2.COLOR_BGR2RGB)
                         self.save_queue.put(("save_frame", save_path, frame_count, orig_rgb))
+
+                total_frames, fps, avg_fps, fps_now = self._record_completed_frame_fps(
+                    fps_samples,
+                    total_frames,
+                    len(empty_preds),
+                    stream_start,
+                )
+                if fps_enabled and fps_now - last_fps_log >= 1.0:
+                    Streamer.logger.info(
+                        "[FPS][tiles] End-to-end: %.2f | Average: %.2f",
+                        fps,
+                        avg_fps,
+                    )
+                    last_fps_log = fps_now
+
                 if self.args.plot_performance:
                     t_now = time.perf_counter()
                     scores = getattr(self.logic_module.get("SUBTRACTOR", None), "last_motion_scores", None)
@@ -2241,19 +2317,19 @@ class OptimizedStreamer(Streamer):
                 self._note_emitted_result()
                 yield r
 
-                if (self.args.only_FPS and not self.args.plot_performance) or self.args.plot_performance:
-                    now = time.perf_counter()
-                    fps_times.append(now)
-                    total_frames += 1
-                    if len(fps_times) > 1:
-                        fps = (len(fps_times) - 1) / (fps_times[-1] - fps_times[0])
-                    if now - last_fps_log >= 1.0:
-                        elapsed = now - stream_start
-                        avg_fps = total_frames / elapsed
-                        Streamer.logger.info(
-                            "[FPS][tiles] End-to-end: %.2f | Average: %.2f", fps, avg_fps
-                        )
-                        last_fps_log = now
+            total_frames, fps, avg_fps, fps_now = self._record_completed_frame_fps(
+                fps_samples,
+                total_frames,
+                len(preds),
+                stream_start,
+            )
+            if fps_enabled and fps_now - last_fps_log >= 1.0:
+                Streamer.logger.info(
+                    "[FPS][tiles] End-to-end: %.2f | Average: %.2f",
+                    fps,
+                    avg_fps,
+                )
+                last_fps_log = fps_now
 
             self.run_callbacks("on_predict_postprocess_end")
 
@@ -2391,11 +2467,6 @@ class OptimizedStreamer(Streamer):
                 f"{(min(self.args.batch, self.seen), 3, tile_size, tile_size)}" % t
             )
 
-        if (self.args.only_FPS and not self.args.plot_performance) or self.args.plot_performance:
-            total_time = time.perf_counter() - stream_start
-            if total_frames > 0:
-                print(f"[FPS][tiles] FINAL Average FPS: {total_frames / total_time:.2f}")
-
         # Tile activation cumulative summary — useful for research / benchmarking
         _tile_win_final = getattr(self, "_tile_activation", None)
         if _tile_win_final is not None and _tile_win_final.cumulative_total > 0:
@@ -2419,6 +2490,23 @@ class OptimizedStreamer(Streamer):
 
         self.release_session_resources(preview_queue=preview_queue, producer_flag=producer_flag)
         self.run_callbacks("on_predict_end")
+
+        emitted_frames = int(self.run_metrics.get("frames_emitted", total_frames))
+        if emitted_frames != total_frames:
+            Streamer.logger.warning(
+                "Internal tiled FPS counter mismatch: completed=%d, emitted=%d; "
+                "using emitted frames for the final result.",
+                total_frames,
+                emitted_frames,
+            )
+        total_time = time.perf_counter() - stream_start
+        final_fps = emitted_frames / total_time if total_time > 0.0 else 0.0
+        self.run_metrics["internal_completed_frames"] = emitted_frames
+        self.run_metrics["internal_processing_seconds"] = float(total_time)
+        self.run_metrics["internal_fps"] = float(final_fps)
+
+        if fps_enabled and emitted_frames > 0:
+            print(f"[FPS][tiles] FINAL Average FPS: {final_fps:.2f}")
 
 
 
