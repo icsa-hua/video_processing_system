@@ -89,9 +89,10 @@ class QualitativeCaptureState:
     target_variant: str = "full_pipeline"
     output_path: Path | None = None
     max_captures: int = 10
-    capture_spacing: int = 15           # min frames between routine captures
+    capture_spacing: int = 50           # min frames between routine captures
     captured: list = field(default_factory=list)   # list[(frame_id_int, figure_bgr)]
     last_captured_frame_id: int = -9999
+    target_frame_ids: set | None = None  # set when mirroring another variant's frames
     pending: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
@@ -784,10 +785,24 @@ def _install_qualitative_capture(
     config: PipelineConfig,
     run_dir: Path,
 ) -> None:
-    if not state.enabled or spec.key != state.target_variant:
+    _tile_variant = "tiling_enabled"
+    is_primary = state.enabled and spec.key == state.target_variant
+    # The tiling variant always participates to capture the per-tile panel,
+    # unless the user already chose tiling_enabled as the primary target.
+    is_tile_run = state.enabled and spec.key == _tile_variant and spec.key != state.target_variant
+    if not (is_primary or is_tile_run):
         return
 
     state.output_path = run_dir / "qualitative_panels.png"
+
+    if is_tile_run:
+        # Load frame IDs captured by the primary run so we capture the same frames.
+        ids_path = run_dir.parent / "qualitative_captured_frame_ids.json"
+        if ids_path.exists():
+            try:
+                state.target_frame_ids = set(json.loads(ids_path.read_text(encoding="utf-8")))
+            except Exception:
+                pass
 
     tracker = getattr(streamer, "tracker_model", None)
     if tracker is not None and hasattr(tracker, "update_tracker_history"):
@@ -874,11 +889,19 @@ def _install_qualitative_capture(
             frame_id_int = -1
 
         frames_since_last = frame_id_int - state.last_captured_frame_id
-        should_capture = len(state.captured) < state.max_captures and (
-            len(state.captured) == 0          # always grab the very first frame
-            or has_hazard                      # always grab hazard frames regardless of spacing
-            or frames_since_last >= state.capture_spacing
-        )
+        if state.target_frame_ids is not None:
+            # Frame-matched mode (tiling variant): mirror the primary variant's frames.
+            # Loose spacing fallback handles minor frame-ID numbering differences.
+            should_capture = len(state.captured) < state.max_captures and (
+                frame_id_int in state.target_frame_ids
+                or frames_since_last >= state.capture_spacing * 3
+            )
+        else:
+            should_capture = len(state.captured) < state.max_captures and (
+                len(state.captured) == 0          # always grab the very first frame
+                or has_hazard                      # always grab hazard frames regardless of spacing
+                or frames_since_last >= state.capture_spacing
+            )
 
         if should_capture:
             figure_bgr = _build_qualitative_figure(self, out, artifacts, config)
@@ -967,13 +990,27 @@ def _run_variant(
                 preview_queue=None,
             )
             elapsed_s = time.perf_counter() - t0
-            if qualitative_state.enabled and spec.key == qualitative_state.target_variant and qualitative_state.captured:
+            _tile_variant = "tiling_enabled"
+            _capture_active = qualitative_state.enabled and spec.key in {
+                qualitative_state.target_variant, _tile_variant
+            }
+            if _capture_active and qualitative_state.captured:
                 base_path = qualitative_state.output_path or (run_dir / "qualitative_panels.png")
                 for i, (_fid, fig) in enumerate(qualitative_state.captured, start=1):
                     out_path = base_path.parent / f"{base_path.stem}_{i:03d}{base_path.suffix}"
                     saved = _export_qualitative_figure(out_path, fig)
                     if i == 1 and saved:
                         qualitative_path = saved
+                # Write captured frame IDs so the tiling variant can mirror them.
+                if spec.key == qualitative_state.target_variant:
+                    ids_path = run_dir.parent / "qualitative_captured_frame_ids.json"
+                    try:
+                        ids_path.write_text(
+                            json.dumps([fid for fid, _ in qualitative_state.captured]),
+                            encoding="utf-8",
+                        )
+                    except Exception:
+                        pass
     finally:
         jetson_sampler.stop()
         try:
@@ -1391,7 +1428,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--save-outputs", action=argparse.BooleanOptionalAction, default=True, help="Enable frame/event saving in the full-pipeline baseline.")
     parser.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=False, help="Verbose streamer logging.")
     parser.add_argument("--stream-limit-hours", type=float, default=0.0, help="Live-stream runtime cap in hours. Use 0 to disable.")
-    parser.add_argument("--lane-recalibration-interval-frames", type=int, default=0, help="For live streams, rerun lane calibration after this many frames. Use 0 to disable.")
+    parser.add_argument("--lane-recalibration-interval-frames", type=int,
+                        default=50, help="For live streams, rerun lane calibration after this many frames. Use 0 to disable.")
     parser.add_argument("--jetson-interval", type=float, default=1.0, help="Sampling interval for Jetson telemetry in seconds.")
     parser.add_argument("--jetson-profile", action=argparse.BooleanOptionalAction, default=True, help="Enable the Jetson-optimized execution branch.")
     parser.add_argument("--jetson-hazard-scale", type=float, default=1.0, help="Scale factor for Jetson hazard-mask processing.")
