@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OBS System — Pipeline Data Flow</title>
+<style>
+  :root {
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --surface2: #21262d;
+    --border:   #30363d;
+    --text:     #e6edf3;
+    --dim:      #7d8590;
+    --accent:   #388bfd;
+
+    --c1: #3b82f6;
+    --c2: #8b5cf6;
+    --c3: #06b6d4;
+    --c4: #10b981;
+    --c5: #f59e0b;
+    --c6: #ef4444;
+    --c7: #a855f7;
+    --c8: #f97316;
+    --c9: #6b7280;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, 'Cascadia Code', 'Fira Code', Consolas, monospace;
+    font-size: 13px;
+    padding: 2rem 2rem 3rem;
+    overflow-x: auto;
+  }
+
+  /* ── Header ──────────────────────────────────────────── */
+  .page-header {
+    text-align: center;
+    margin-bottom: 2.5rem;
+  }
+  .page-header h1 {
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text);
+  }
+  .page-header .subtitle {
+    color: var(--dim);
+    font-size: 0.78rem;
+    margin-top: 0.3rem;
+    letter-spacing: 0.06em;
+  }
+  .page-header .meta {
+    display: flex;
+    justify-content: center;
+    gap: 2.5rem;
+    margin-top: 0.75rem;
+    font-size: 0.72rem;
+    color: var(--dim);
+  }
+  .page-header .meta b { color: var(--accent); }
+
+  /* ── Pipeline row ─────────────────────────────────────── */
+  .pipeline-wrap {
+    overflow-x: auto;
+    padding-bottom: 0.5rem;
+  }
+
+  .pipeline-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0;
+    min-width: max-content;
+  }
+
+  /* ── Stage card ───────────────────────────────────────── */
+  .card {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    width: 188px;
+    flex-shrink: 0;
+    overflow: hidden;
+    transition: border-color 0.15s;
+  }
+  .card:hover { border-color: #555; }
+  .card.large { width: 296px; }
+
+  .card-top {
+    height: 4px;
+  }
+  .card-header {
+    padding: 7px 10px 5px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .card-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    font-size: 0.68rem;
+    font-weight: 700;
+    flex-shrink: 0;
+    color: #000;
+  }
+  .card-title {
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    line-height: 1.3;
+  }
+  .card-opt {
+    margin-left: auto;
+    font-size: 0.58rem;
+    color: var(--dim);
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 5px;
+    white-space: nowrap;
+  }
+
+  .card-scene {
+    padding: 8px 8px 6px;
+    display: flex;
+    justify-content: center;
+  }
+  .card-scene svg {
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    display: block;
+  }
+
+  .card-footer {
+    padding: 5px 10px 8px;
+    border-top: 1px solid var(--border);
+  }
+  .data-type {
+    font-size: 0.6rem;
+    color: var(--dim);
+    font-family: ui-monospace, monospace;
+    line-height: 1.5;
+  }
+  .data-type .k { color: var(--text); }
+
+  /* ── Connectors ───────────────────────────────────────── */
+  .conn {
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    width: 36px;
+    flex-shrink: 0;
+    padding-top: 60px;
+  }
+  .conn svg { display: block; }
+
+  /* ── Feedback bar ─────────────────────────────────────── */
+  .feedback-row {
+    display: flex;
+    align-items: center;
+    margin-top: 10px;
+    min-width: max-content;
+    gap: 0;
+  }
+  .fb-spacer { flex-shrink: 0; }
+  .fb-line {
+    height: 22px;
+    border-left: 1px dashed #8b5cf6;
+    border-bottom: 1px dashed #8b5cf6;
+    flex-shrink: 0;
+  }
+  .fb-label {
+    font-size: 0.62rem;
+    color: #8b5cf6;
+    white-space: nowrap;
+    padding-left: 8px;
+    padding-bottom: 4px;
+    align-self: flex-end;
+  }
+
+  /* ── Legend & notes ───────────────────────────────────── */
+  .bottom-section {
+    display: flex;
+    gap: 1.5rem;
+    margin-top: 2rem;
+    flex-wrap: wrap;
+    max-width: 1200px;
+  }
+
+  .legend {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.2rem;
+    min-width: 360px;
+  }
+  .legend h3 {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--dim);
+    margin-bottom: 0.6rem;
+  }
+  .legend-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.35rem 1.5rem;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 0.68rem;
+  }
+  .legend-dot {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .notes {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    padding: 0.85rem 1rem;
+    font-size: 0.68rem;
+    color: var(--dim);
+    line-height: 1.6;
+    max-width: 460px;
+  }
+  .notes h3 {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--dim);
+    margin-bottom: 0.5rem;
+  }
+  .notes b { color: var(--text); }
+</style>
+</head>
+<body>
+
+<!-- ══════════ HEADER ══════════ -->
+<header class="page-header">
+  <h1>OBS System &mdash; Video Processing Pipeline</h1>
+  <div class="subtitle">Data flow &amp; image state transitions &bull; Roadside Obstacle Detection</div>
+  <div class="meta">
+    <span>Backend: <b>.pt / .onnx / .engine</b></span>
+    <span>Tracker: <b>ByteTrack / SORT</b></span>
+    <span>Targets: <b>x86-64 &bull; NVIDIA Jetson</b></span>
+    <span>MQTT: <b>CBOR over paho</b></span>
+  </div>
+</header>
+
+<!-- ══════════ PIPELINE ROW ══════════ -->
+<div class="pipeline-wrap">
+<div class="pipeline-row">
+
+  <!-- ─── S1: VIDEO SOURCE ─── -->
+  <div class="card">
+    <div class="card-top" style="background:var(--c1)"></div>
+    <div class="card-header">
+      <span class="card-num" style="background:var(--c1)">1</span>
+      <span class="card-title" style="color:var(--c1)">Video Source</span>
+    </div>
+    <div class="card-scene">
+      <svg width="172" height="104" viewBox="0 0 172 104">
+        <!-- sky -->
+        <defs>
+          <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#7fb3d3"/>
+            <stop offset="100%" stop-color="#aecfe8"/>
+          </linearGradient>
+          <linearGradient id="road" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#464646"/>
+            <stop offset="100%" stop-color="#2e2e2e"/>
+          </linearGradient>
+        </defs>
+        <rect x="0" y="0" width="172" height="40" fill="url(#sky)"/>
+        <rect x="0" y="40" width="172" height="64" fill="url(#road)"/>
+        <!-- horizon line -->
+        <line x1="0" y1="40" x2="172" y2="40" stroke="#888" stroke-width="0.5"/>
+        <!-- lane dashes -->
+        <rect x="83" y="48" width="6" height="12" fill="white" opacity="0.65"/>
+        <rect x="83" y="66" width="6" height="12" fill="white" opacity="0.65"/>
+        <rect x="83" y="84" width="6" height="12" fill="white" opacity="0.65"/>
+        <!-- vehicle 1 (car) -->
+        <rect x="14" y="55" width="44" height="28" fill="#c0c0c0" rx="2"/>
+        <rect x="18" y="46" width="36" height="20" fill="#aaaaaa" rx="2"/>
+        <rect x="16" y="75" width="8" height="8" fill="#333" rx="1"/>
+        <rect x="50" y="75" width="8" height="8" fill="#333" rx="1"/>
+        <!-- vehicle 2 (truck) -->
+        <rect x="108" y="48" width="52" height="38" fill="#909090" rx="2"/>
+        <rect x="108" y="48" width="18" height="20" fill="#7a7a7a" rx="1"/>
+        <rect x="110" y="80" width="10" height="8" fill="#333" rx="1"/>
+        <rect x="148" y="80" width="10" height="8" fill="#333" rx="1"/>
+        <!-- camera badge -->
+        <rect x="3" y="3" width="58" height="14" fill="#000" opacity="0.55" rx="2"/>
+        <text x="7" y="13" font-family="monospace" font-size="8" fill="#3b82f6">RTSP / FILE</text>
+        <!-- frame dims badge -->
+        <rect x="115" y="3" width="54" height="14" fill="#000" opacity="0.55" rx="2"/>
+        <text x="119" y="13" font-family="monospace" font-size="8" fill="#888">H×W×3 BGR</text>
+      </svg>
+    </div>
+    <div class="card-footer">
+      <div class="data-type">
+        <span class="k">out:</span> BGR frame batch<br>
+        <span class="k">type:</span> List[np.ndarray]<br>
+        <span class="k">src:</span> cv2.VideoCapture
+      </div>
+    </div>
+  </div>
+
+  <!-- connector → -->
+  <div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="5" y="10" font-family="monospace" font-size="7" fill="#555">batch</text></svg></div>
+
+  <!-- ─── S2: MOTION GATE ─── -->
+  <div class="card">
+    <div class="card-top" style="background:var(--c2)"></div>
+    <div class="card-header">
+      <span class="card-num" style="background:var(--c2)">2</span>
+      <span class="card-title" style="color:var(--c2)">Motion Gate</span>
+    </div>
+    <div class="card-scene">
+      <svg width="172" height="104" viewBox="0 0 172 104">
+        <!-- black background (no-motion areas) -->
+        <rect x="0" y="0" width="172" height="104" fill="#080808"/>
+        <!-- MOG2 foreground blobs (moving vehicles) -->
+        <ellipse cx="44" cy="68" rx="26" ry="16" fill="white"/>
+        <ellipse cx="44" cy="68" rx="20" ry="10" fill="white"/>
+        <ellipse cx="134" cy="63" rx="32" ry="20" fill="white"/>
+        <!-- small calibration noise -->
+        <ellipse cx="88" cy="28" rx="4" ry="2.5" fill="white" opacity="0.18"/>
+        <ellipse cx="152" cy="22" rx="2.5" ry="2" fill="white" opacity="0.12"/>
+        <!-- unstable-motion map hint -->
+        <rect x="60" y="8" width="40" height="18" fill="none" stroke="#8b5cf6" stroke-width="0.8" stroke-dasharray="3,3" rx="2" opacity="0.5"/>
+        <text x="63" y="20" font-family="monospace" font-size="7" fill="#8b5cf6" opacity="0.7">unstable</text>
+        <!-- motion gate status -->
+        <rect x="3" y="3" width="90" height="14" fill="#1a0a2e" rx="2"/>
+        <text x="7" y="13" font-family="monospace" font-size="8" fill="#8b5cf6">fg_score: 4.3%  YES</text>
+        <!-- skip indicator (skip path label) -->
+        <rect x="3" y="88" width="78" height="13" fill="#1a0a2e" rx="2" opacity="0.8"/>
+        <text x="7" y="98" font-family="monospace" font-size="7.5" fill="#555">no-motion → SKIP</text>
+        <!-- lane calibration -->
+        <rect x="100" y="88" width="68" height="13" fill="#1a0a2e" rx="2" opacity="0.8"/>
+        <text x="104" y="98" font-family="monospace" font-size="7" fill="#8b5cf6">YOLO-gated calib.</text>
+      </svg>
+    </div>
+    <div class="card-footer">
+      <div class="data-type">
+        <span class="k">out:</span> motion_flags, lanes_mask<br>
+        <span class="k">op:</span> MOG2 + CC filter<br>
+        <span class="k">ds:</span> 320×320 downscale
+      </div>
+    </div>
+  </div>
+
+  <!-- connector → -->
+  <div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="4" y="10" font-family="monospace" font-size="7" fill="#555">gated</text></svg></div>
+
+  <!-- ─── S3: PROJECTION ─── -->
+  <div class="card">
+    <div class="card-top" style="background:var(--c3)"></div>
+    <div class="card-header">
+      <span class="card-num" style="background:var(--c3)">3</span>
+      <span class="card-title" style="color:var(--c3)">Projection</span>
+      <span class="card-opt">optional</span>
+    </div>
+    <div class="card-scene">
+      <svg width="172" height="104" viewBox="0 0 172 104">
+        <rect x="0" y="0" width="172" height="104" fill="#0e1a24"/>
+        <!-- fisheye circle input (left side) -->
+        <circle cx="38" cy="52" r="30" fill="#162536" stroke="#06b6d4" stroke-width="1" stroke-dasharray="4,3"/>
+        <!-- curved distortion lines inside circle -->
+        <path d="M 18 40 Q 38 35 58 40" fill="none" stroke="#7fb3d3" stroke-width="0.8" opacity="0.5"/>
+        <path d="M 18 52 Q 38 47 58 52" fill="none" stroke="#7fb3d3" stroke-width="0.8" opacity="0.5"/>
+        <path d="M 18 64 Q 38 59 58 64" fill="none" stroke="#7fb3d3" stroke-width="0.8" opacity="0.5"/>
+        <text x="25" y="88" font-family="monospace" font-size="7.5" fill="#06b6d4">fisheye</text>
+        <!-- arrow -->
+        <line x1="72" y1="52" x2="84" y2="52" stroke="#06b6d4" stroke-width="1.5"/>
+        <polygon points="84,48 93,52 84,56" fill="#06b6d4"/>
+        <!-- 4 tangent view tiles (right side) -->
+        <!-- top-left tile -->
+        <rect x="97" y="6" width="34" height="22" fill="#1a2e3a" rx="2" stroke="#06b6d4" stroke-width="0.8"/>
+        <rect x="97" y="6" width="34" height="8" fill="#4a7a99" rx="1"/>
+        <rect x="97" y="14" width="34" height="14" fill="#2a2a2a"/>
+        <text x="101" y="28" font-family="monospace" font-size="6" fill="#06b6d4">TOP</text>
+        <!-- top-right tile -->
+        <rect x="135" y="6" width="34" height="22" fill="#1a2e3a" rx="2" stroke="#06b6d4" stroke-width="0.8"/>
+        <rect x="135" y="6" width="34" height="8" fill="#4a7a99" rx="1"/>
+        <rect x="135" y="14" width="34" height="14" fill="#2a2a2a"/>
+        <text x="139" y="28" font-family="monospace" font-size="6" fill="#06b6d4">LEFT</text>
+        <!-- bottom-left tile -->
+        <rect x="97" y="32" width="34" height="22" fill="#1a2e3a" rx="2" stroke="#06b6d4" stroke-width="0.8"/>
+        <rect x="97" y="32" width="34" height="8" fill="#4a7a99" rx="1"/>
+        <rect x="97" y="40" width="34" height="14" fill="#2a2a2a"/>
+        <text x="100" y="54" font-family="monospace" font-size="6" fill="#06b6d4">RIGHT</text>
+        <!-- bottom-right tile -->
+        <rect x="135" y="32" width="34" height="22" fill="#1a2e3a" rx="2" stroke="#06b6d4" stroke-width="0.8"/>
+        <rect x="135" y="32" width="34" height="8" fill="#4a7a99" rx="1"/>
+        <rect x="135" y="40" width="34" height="14" fill="#2a2a2a"/>
+        <text x="138" y="54" font-family="monospace" font-size="6" fill="#06b6d4">PERSP</text>
+        <!-- panorama label -->
+        <rect x="97" y="60" width="72" height="26" fill="#1a2e3a" rx="2" stroke="#444" stroke-width="0.8" stroke-dasharray="3,2"/>
+        <text x="103" y="72" font-family="monospace" font-size="7" fill="#888">panorama:</text>
+        <text x="103" y="82" font-family="monospace" font-size="7" fill="#888">equirect→persp</text>
+        <!-- FEP label -->
+        <text x="4" y="100" font-family="monospace" font-size="7.5" fill="#06b6d4">FEP / PanoramaReprojector</text>
+      </svg>
+    </div>
+    <div class="card-footer">
+      <div class="data-type">
+        <span class="k">out:</span> rectilinear tile(s)<br>
+        <span class="k">op:</span> fisheye → tangent views<br>
+        <span class="k">cfg:</span> --fep / --panorama
+      </div>
+    </div>
+  </div>
+
+  <!-- connector → -->
+  <div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="6" y="10" font-family="monospace" font-size="7" fill="#555">tiles</text></svg></div>
+
+  <!-- ─── S4: ROI / TILING ─── -->
+  <div class="card">
+    <div class="card-top" style="background:var(--c4)"></div>
+    <div class="card-header">
+      <span class="card-num" style="background:var(--c4)">4</span>
+      <span class="card-title" style="color:var(--c4)">ROI / Tiling</span>
+    </div>
+    <div class="card-scene">
+      <svg width="172" height="104" viewBox="0 0 172 104">
+        <!-- sky -->
+        <rect x="0" y="0" width="172" height="38" fill="#7fb3d3"/>
+        <!-- road -->
+        <rect x="0" y="38" width="172" height="66" fill="#3a3a3a"/>
+        <!-- vehicles (faint) -->
+        <rect x="14" y="52" width="44" height="28" fill="#9a9a9a" rx="2" opacity="0.5"/>
+        <rect x="108" y="46" width="52" height="36" fill="#808080" rx="2" opacity="0.5"/>
+        <!-- ROI polygon (trapezoid) -->
+        <polygon points="16,38 156,38 168,102 4,102" fill="#10b981" opacity="0.18"/>
+        <polygon points="16,38 156,38 168,102 4,102" fill="none" stroke="#10b981" stroke-width="1.8" stroke-dasharray="5,3"/>
+        <!-- tile grid overlay -->
+        <line x1="86" y1="38" x2="86" y2="104" stroke="#10b981" stroke-width="0.8" opacity="0.6"/>
+        <line x1="0" y1="71" x2="172" y2="71" stroke="#10b981" stroke-width="0.8" opacity="0.6"/>
+        <!-- tile highlight (active tile) -->
+        <rect x="86" y="71" width="86" height="33" fill="#10b981" opacity="0.1"/>
+        <rect x="87" y="72" width="84" height="31" fill="none" stroke="#10b981" stroke-width="1.5"/>
+        <!-- labels -->
+        <rect x="3" y="3" width="60" height="14" fill="#000" opacity="0.5" rx="2"/>
+        <text x="7" y="13" font-family="monospace" font-size="8" fill="#10b981">ROI ACTIVE</text>
+        <rect x="3" y="88" width="52" height="13" fill="#000" opacity="0.5" rx="2"/>
+        <text x="7" y="98" font-family="monospace" font-size="7.5" fill="#10b981">2×2 tiles</text>
+        <text x="90" y="82" font-family="monospace" font-size="8" fill="#10b981">active ↑</text>
+      </svg>
+    </div>
+    <div class="card-footer">
+      <div class="data-type">
+        <span class="k">out:</span> roi-masked sub-frames<br>
+        <span class="k">op:</span> RegionSetter + TileActivation<br>
+        <span class="k">cfg:</span> --force-tiles / profile
+      </div>
+    </div>
+  </div>
+
+  <!-- connector → (wider, leading to large card) -->
+  <div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#f59e0b" stroke-width="1.8"/><polygon points="27,10 36,14 27,18" fill="#f59e0b"/><text x="4" y="10" font-family="monospace" font-size="7" fill="#f59e0b">tensor</text></svg></div>
+
+  <!-- ─── S5: BACKEND INFERENCE (LARGE) ─── -->
+  <div class="card large">
+    <div class="card-top" style="background:var(--c5)"></div>
+    <div class="card-header">
+      <span class="card-num" style="background:var(--c5)">5</span>
+      <span class="card-title" style="color:var(--c5)">Backend Inference</span>
+    </div>
+    <div class="card-scene">
+      <svg width="280" height="152" viewBox="0 0 280 152">
+        <defs>
+          <linearGradient id="sky2" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#7fb3d3"/>
+            <stop offset="100%" stop-color="#aecfe8"/>
+          </linearGradient>
+        </defs>
+        <!-- sky -->
+        <rect x="0" y="0" width="280" height="52" fill="url(#sky2)"/>
+        <!-- road -->
+        <rect x="0" y="52" width="280" height="100" fill="#3a3a3a"/>
+        <!-- lane dashes -->
+        <rect x="136" y="60" width="8" height="14" fill="white" opacity="0.6"/>
+        <rect x="136" y="82" width="8" height="14" fill="white" opacity="0.6"/>
+        <rect x="136" y="104" width="8" height="14" fill="white" opacity="0.6"/>
+        <rect x="136" y="126" width="8" height="14" fill="white" opacity="0.6"/>
+        <!-- Detection: car (green bbox) -->
+        <rect x="16" y="58" width="70" height="50" fill="none" stroke="#00e676" stroke-width="2"/>
+        <rect x="16" y="58" width="68" height="15" fill="#00e676" opacity="0.85" rx="0"/>
+        <text x="19" y="69" font-family="monospace" font-size="9" fill="#000" font-weight="bold">car  0.89</text>
+        <!-- car body -->
+        <rect x="20" y="72" width="62" height="32" fill="#b8b8b8" rx="2" opacity="0.6"/>
+        <rect x="26" y="64" width="50" height="18" fill="#aaaaaa" rx="2" opacity="0.6"/>
+        <!-- Detection: truck (green bbox) -->
+        <rect x="168" y="48" width="96" height="70" fill="none" stroke="#00e676" stroke-width="2"/>
+        <rect x="168" y="48" width="72" height="15" fill="#00e676" opacity="0.85"/>
+        <text x="171" y="59" font-family="monospace" font-size="9" fill="#000" font-weight="bold">truck  0.94</text>
+        <!-- truck body -->
+        <rect x="172" y="62" width="88" height="50" fill="#909090" rx="2" opacity="0.6"/>
+        <rect x="172" y="62" width="26" height="28" fill="#7a7a7a" rx="1" opacity="0.6"/>
+        <!-- Detection: person (yellow dashed - noise) -->
+        <rect x="100" y="58" width="28" height="50" fill="none" stroke="#ffd600" stroke-width="1.5" stroke-dasharray="4,2.5"/>
+        <rect x="100" y="58" width="56" height="13" fill="#ffd600" opacity="0.75"/>
+        <text x="103" y="68" font-family="monospace" font-size="8.5" fill="#000">person  0.63</text>
+        <!-- small person silhouette -->
+        <rect x="107" y="70" width="14" height="34" fill="#ccc" rx="2" opacity="0.4"/>
+        <!-- Backend format badges -->
+        <rect x="4" y="4" width="36" height="16" fill="#1c1208" rx="3" stroke="#f59e0b" stroke-width="1"/>
+        <text x="8" y="14" font-family="monospace" font-size="8" fill="#f59e0b" font-weight="bold">.pt</text>
+        <rect x="44" y="4" width="46" height="16" fill="#1c1208" rx="3" stroke="#f59e0b" stroke-width="1"/>
+        <text x="48" y="14" font-family="monospace" font-size="8" fill="#f59e0b" font-weight="bold">.onnx</text>
+        <rect x="94" y="4" width="62" height="16" fill="#1c1208" rx="3" stroke="#f59e0b" stroke-width="1"/>
+        <text x="98" y="14" font-family="monospace" font-size="8" fill="#f59e0b" font-weight="bold">.engine</text>
+        <!-- TRT badge -->
+        <rect x="160" y="4" width="56" height="16" fill="#1c1208" rx="3" stroke="#f59e0b" stroke-width="1" stroke-dasharray="3,2"/>
+        <text x="164" y="14" font-family="monospace" font-size="8" fill="#888">TensorRT</text>
+        <!-- Input tensor info -->
+        <rect x="0" y="136" width="280" height="16" fill="#1c1c1c" opacity="0.7"/>
+        <text x="6" y="147" font-family="monospace" font-size="8" fill="#f59e0b">LetterBox → [B, 3, 640, 640]  FP32 / FP16</text>
+      </svg>
+    </div>
+    <div class="card-footer">
+      <div class="data-type">
+        <span class="k">in:</span>  [B,3,640,640] letterboxed tensor<br>
+        <span class="k">out:</span> raw dets [N×(x,y,x,y,conf,cls)]<br>
+        <span class="k">models:</span> YOLOv8s / YOLOv5 · NMS inside
+      </div>
+    </div>
+  </div>
+
+  <!-- connector → -->
+  <div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="4" y="10" font-family="monospace" font-size="7" fill="#555">dets</text></svg></div>
+
+  <!-- ─── S6: POST-PROCESSING ─── -->
+  <div class="card">
+    <div class="card-top" style="background:var(--c6)"></div>
+    <div class="card-header">
+      <span class="card-num" style="background:var(--c6)">6</span>
+      <span class="card-title" style="color:var(--c6)">Post-Process</span>
+    </div>
+    <div class="card-scene">
+      <svg width="172" height="104" viewBox="0 0 172 104">
+        <!-- scene -->
+        <rect x="0" y="0" width="172" height="38" fill="#7fb3d3"/>
+        <rect x="0" y="38" width="172" height="66" fill="#3a3a3a"/>
+        <!-- lane mask overlay (calibrated region) -->
+        <polygon points="8,38 164,38 170,102 2,102" fill="#f59e0b" opacity="0.12"/>
+        <polygon points="8,38 164,38 170,102 2,102" fill="none" stroke="#f59e0b" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.5"/>
+        <!-- Car bbox - KEPT -->
+        <rect x="12" y="44" width="46" height="32" fill="none" stroke="#00e676" stroke-width="1.8"/>
+        <rect x="12" y="44" width="36" height="12" fill="#00e676" opacity="0.85" rx="0"/>
+        <text x="14" y="53" font-family="monospace" font-size="7.5" fill="#000" font-weight="bold">car ✓</text>
+        <!-- Truck bbox - KEPT -->
+        <rect x="106" y="40" width="56" height="42" fill="none" stroke="#00e676" stroke-width="1.8"/>
+        <rect x="106" y="40" width="44" height="12" fill="#00e676" opacity="0.85"/>
+        <text x="108" y="49" font-family="monospace" font-size="7.5" fill="#000" font-weight="bold">truck ✓</text>
+        <!-- Person bbox - FILTERED OUT -->
+        <rect x="62" y="44" width="22" height="34" fill="none" stroke="#ef4444" stroke-width="1.2" stroke-dasharray="3,2.5" opacity="0.6"/>
+        <line x1="62" y1="44" x2="84" y2="78" stroke="#ef4444" stroke-width="1.5" opacity="0.7"/>
+        <line x1="84" y1="44" x2="62" y2="78" stroke="#ef4444" stroke-width="1.5" opacity="0.7"/>
+        <rect x="62" y="44" width="30" height="11" fill="#ef4444" opacity="0.65"/>
+        <text x="64" y="52" font-family="monospace" font-size="7" fill="white">person ✗</text>
+        <!-- NMS label -->
+        <rect x="3" y="90" width="90" height="12" fill="#000" opacity="0.5" rx="2"/>
+        <text x="6" y="99" font-family="monospace" font-size="7.5" fill="#ef4444">NMS · class filter</text>
+        <!-- cross-view NMS -->
+        <rect x="97" y="90" width="72" height="12" fill="#000" opacity="0.5" rx="2"/>
+        <text x="100" y="99" font-family="monospace" font-size="7" fill="#ef4444">cross-view NMS</text>
+      </svg>
+    </div>
+    <div class="card-footer">
+      <div class="data-type">
+        <span class="k">out:</span> FrameDetections (filtered)<br>
+        <span class="k">op:</span> class whitelist + cross-view NMS<br>
+        <span class="k">feed:</span> vehicle idxs → calib. (S2)
+      </div>
+    </div>
+  </div>
+
+  <!-- connector → -->
+  <div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="4" y="10" font-family="monospace" font-size="7" fill="#555">filt.</text></svg></div>
+
+  <!-- ─── S7: TRACKER ─── -->
+  <div class="card">
+    <div class="card-top" style="background:var(--c7)"></div>
+    <div class="card-header">
+      <span class="card-num" style="background:var(--c7)">7</span>
+      <span class="card-title" style="color:var(--c7)">Tracker</span>
+    </div>
+    <div class="card-scene">
+      <svg width="172" height="104" viewBox="0 0 172 104">
+        <!-- scene -->
+        <rect x="0" y="0" width="172" height="38" fill="#7fb3d3"/>
+        <rect x="0" y="38" width="172" height="66" fill="#3a3a3a"/>
+        <!-- lane dashes -->
+        <rect x="82" y="44" width="5" height="10" fill="white" opacity="0.5"/>
+        <rect x="82" y="62" width="5" height="10" fill="white" opacity="0.5"/>
+        <rect x="82" y="80" width="5" height="10" fill="white" opacity="0.5"/>
+        <!-- Track 3: car - yellow -->
+        <rect x="12" y="44" width="46" height="32" fill="none" stroke="#ffff00" stroke-width="2"/>
+        <!-- Track ID badge -->
+        <rect x="12" y="32" width="32" height="14" fill="#ffff00" rx="2"/>
+        <text x="15" y="42" font-family="monospace" font-size="8.5" fill="#000" font-weight="bold">T #3</text>
+        <!-- trail dots -->
+        <circle cx="35" cy="58" r="2.5" fill="#ffff00" opacity="0.4"/>
+        <circle cx="34" cy="72" r="2" fill="#ffff00" opacity="0.25"/>
+        <circle cx="33" cy="86" r="1.5" fill="#ffff00" opacity="0.15"/>
+        <circle cx="32" cy="98" r="1" fill="#ffff00" opacity="0.08"/>
+        <!-- Track 7: truck - cyan -->
+        <rect x="106" y="40" width="56" height="42" fill="none" stroke="#00ffff" stroke-width="2"/>
+        <!-- Track ID badge -->
+        <rect x="106" y="28" width="32" height="14" fill="#00ffff" rx="2"/>
+        <text x="109" y="38" font-family="monospace" font-size="8.5" fill="#000" font-weight="bold">T #7</text>
+        <!-- trail dots -->
+        <circle cx="134" cy="60" r="2.5" fill="#00ffff" opacity="0.4"/>
+        <circle cx="133" cy="74" r="2" fill="#00ffff" opacity="0.25"/>
+        <circle cx="132" cy="88" r="1.5" fill="#00ffff" opacity="0.15"/>
+        <!-- byte tracker label -->
+        <rect x="3" y="90" width="100" height="12" fill="#000" opacity="0.5" rx="2"/>
+        <text x="6" y="99" font-family="monospace" font-size="7.5" fill="#a855f7">ByteTrack / SORT</text>
+        <text x="108" y="99" font-family="monospace" font-size="7" fill="#555">hist: 30fr</text>
+      </svg>
+    </div>
+    <div class="card-footer">
+      <div class="data-type">
+        <span class="k">out:</span> sv.Detections + track_id<br>
+        <span class="k">op:</span> ByteTrack / SORTTracker<br>
+        <span class="k">hist:</span> 30-frame centroid trail
+      </div>
+    </div>
+  </div>
+
+  <!-- connector → -->
+  <div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="3" y="10" font-family="monospace" font-size="7" fill="#555">tracks</text></svg></div>
+
+  <!-- ─── S8: HAZARD LOGIC ─── -->
+  <div class="card">
+    <div class="card-top" style="background:var(--c8)"></div>
+    <div class="card-header">
+      <span class="card-num" style="background:var(--c8)">8</span>
+      <span class="card-title" style="color:var(--c8)">Hazard Logic</span>
+    </div>
+    <div class="card-scene">
+      <svg width="172" height="104" viewBox="0 0 172 104">
+        <!-- scene -->
+        <rect x="0" y="0" width="172" height="38" fill="#7fb3d3"/>
+        <rect x="0" y="38" width="172" height="66" fill="#3a3a3a"/>
+        <!-- drivable confidence map overlay (soft green lanes) -->
+        <polygon points="8,38 164,38 170,102 2,102" fill="#10b981" opacity="0.1"/>
+        <!-- Hazard zone (red polygon) -->
+        <polygon points="66,42 168,42 172,102 60,102" fill="#ef4444" opacity="0.22"/>
+        <polygon points="66,42 168,42 172,102 60,102" fill="none" stroke="#ef4444" stroke-width="1.2"/>
+        <!-- Safe vehicle outside hazard (yellow) -->
+        <rect x="8" y="44" width="48" height="32" fill="none" stroke="#ffff00" stroke-width="1.8"/>
+        <text x="10" y="54" font-family="monospace" font-size="7" fill="#ffff00">T#3  safe</text>
+        <!-- Vehicle in hazard zone (red alert) -->
+        <rect x="104" y="40" width="58" height="44" fill="none" stroke="#ef4444" stroke-width="2"/>
+        <!-- Warning triangle -->
+        <polygon points="133,45 148,68 118,68" fill="#ef4444" opacity="0.9"/>
+        <text x="130" y="63" font-family="monospace" font-size="10" fill="white" font-weight="bold">!</text>
+        <!-- Hazard label -->
+        <rect x="100" y="38" width="46" height="12" fill="#ef4444" opacity="0.9" rx="0"/>
+        <text x="102" y="47" font-family="monospace" font-size="7.5" fill="white" font-weight="bold">T#7 ⚠ HAZ</text>
+        <!-- Event label -->
+        <rect x="3" y="3" width="84" height="13" fill="#2a0a0a" rx="2" opacity="0.9"/>
+        <text x="6" y="13" font-family="monospace" font-size="7.5" fill="#ef4444">⚠ obstacle_in_lane</text>
+        <!-- scene masks info -->
+        <rect x="3" y="90" width="165" height="12" fill="#000" opacity="0.5" rx="2"/>
+        <text x="6" y="99" font-family="monospace" font-size="7" fill="#f97316">lane_mask · crosswalk · drivable_conf</text>
+      </svg>
+    </div>
+    <div class="card-footer">
+      <div class="data-type">
+        <span class="k">out:</span> hazard_events List[Event]<br>
+        <span class="k">mask:</span> lane + crosswalk + drivable_conf<br>
+        <span class="k">evt:</span> obstacle_in_lane / zone_alert
+      </div>
+    </div>
+  </div>
+
+  <!-- connector → -->
+  <div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="5" y="10" font-family="monospace" font-size="7" fill="#555">evts</text></svg></div>
+
+  <!-- ─── S9: OUTPUT ─── -->
+  <div class="card">
+    <div class="card-top" style="background:var(--c9)"></div>
+    <div class="card-header">
+      <span class="card-num" style="background:var(--c9); color:#fff">9</span>
+      <span class="card-title" style="color:var(--c9)">Output</span>
+    </div>
+    <div class="card-scene">
+      <svg width="172" height="104" viewBox="0 0 172 104">
+        <rect x="0" y="0" width="172" height="104" fill="#111"/>
+        <!-- MQTT panel -->
+        <rect x="4" y="4" width="78" height="96" fill="#1a1a1a" rx="4" stroke="#374151" stroke-width="1"/>
+        <rect x="4" y="4" width="78" height="18" fill="#1f2937" rx="4"/>
+        <text x="22" y="16" font-family="monospace" font-size="8" fill="#6b7280">MQTT</text>
+        <!-- antenna -->
+        <line x1="43" y1="26" x2="43" y2="50" stroke="#6b7280" stroke-width="2"/>
+        <line x1="25" y1="36" x2="43" y2="26" stroke="#6b7280" stroke-width="1.5"/>
+        <line x1="61" y1="36" x2="43" y2="26" stroke="#6b7280" stroke-width="1.5"/>
+        <circle cx="43" cy="60" r="10" fill="none" stroke="#4b5563" stroke-width="1" stroke-dasharray="3,2"/>
+        <circle cx="43" cy="60" r="5" fill="none" stroke="#4b5563" stroke-width="1" opacity="0.6"/>
+        <circle cx="43" cy="60" r="2" fill="#6b7280"/>
+        <!-- CBOR label -->
+        <text x="13" y="82" font-family="monospace" font-size="7" fill="#4b5563">CBOR encoded</text>
+        <text x="13" y="92" font-family="monospace" font-size="7" fill="#4b5563">paho MQTT</text>
+        <!-- Preview panel -->
+        <rect x="90" y="4" width="78" height="46" fill="#1a1a1a" rx="4" stroke="#374151" stroke-width="1"/>
+        <rect x="90" y="4" width="78" height="16" fill="#1f2937" rx="4"/>
+        <text x="104" y="15" font-family="monospace" font-size="8" fill="#6b7280">PREVIEW</text>
+        <!-- mini preview frame -->
+        <rect x="96" y="22" width="66" height="24" fill="#2a2a2a" rx="2"/>
+        <rect x="96" y="22" width="66" height="9" fill="#4a6a7a" rx="1"/>
+        <text x="108" y="37" font-family="monospace" font-size="7" fill="#9ca3af">MJPEG stream</text>
+        <!-- Save panel -->
+        <rect x="90" y="54" width="78" height="46" fill="#1a1a1a" rx="4" stroke="#374151" stroke-width="1"/>
+        <rect x="90" y="54" width="78" height="16" fill="#1f2937" rx="4"/>
+        <text x="110" y="65" font-family="monospace" font-size="8" fill="#6b7280">SAVE</text>
+        <!-- save icon (disk) -->
+        <rect x="110" y="72" width="48" height="20" fill="#374151" rx="3"/>
+        <rect x="118" y="72" width="16" height="8" fill="#4b5563" rx="1"/>
+        <text x="116" y="88" font-family="monospace" font-size="7" fill="#9ca3af">.mp4 / .jpg</text>
+      </svg>
+    </div>
+    <div class="card-footer">
+      <div class="data-type">
+        <span class="k">mqtt:</span> CBOR crop + metadata<br>
+        <span class="k">preview:</span> MJPEG FastAPI/Streamlit<br>
+        <span class="k">save:</span> video + annotation files
+      </div>
+    </div>
+  </div>
+
+</div><!-- end pipeline-row -->
+
+<!-- ── YOLO-Gated Calibration Feedback Arrow ── -->
+<!--
+  Spans from S6 (Post-Process) back left to S2 (Motion Gate).
+  Width calculation: from start of S6 card back to S2.
+  S1(188) + conn(36) + S2(188) + conn(36) + S3(188) + conn(36) + S4(188) + conn(36) + S5_large(296)
+  S6 starts at: 188+36+188+36+188+36+188+36+296+36 = 1228px from left edge
+  S2 starts at: 188+36 = 224px
+  We want a line going from card-6 footer back to card-2.
+-->
+<div style="min-width:max-content; margin-top:6px; padding-left:224px;">
+  <svg width="1050" height="32" viewBox="0 0 1050 32">
+    <!-- horizontal dashed line from S6 back to S2 -->
+    <!-- S6 left edge relative to S2 left = 36+188+36+188+36+296+36 = 816px -->
+    <!-- S6 center = 816 + 94 = 910, but we offset from S2 so it's 816+94 = 910 -->
+    <!-- from S2 left (0 here) to S6 center (0+36+188+36+188+36+296+36+94 = 910) -->
+    <line x1="94" y1="16" x2="910" y2="16" stroke="#8b5cf6" stroke-width="1.2" stroke-dasharray="5,4"/>
+    <!-- left arrowhead pointing to S2 -->
+    <polygon points="94,12 82,16 94,20" fill="#8b5cf6"/>
+    <!-- vertical drop from S6 -->
+    <line x1="910" y1="6" x2="910" y2="16" stroke="#8b5cf6" stroke-width="1.2" stroke-dasharray="5,4"/>
+    <!-- label -->
+    <rect x="350" y="6" width="220" height="14" fill="#0d1117" rx="2"/>
+    <text x="360" y="17" font-family="monospace" font-size="8.5" fill="#8b5cf6">YOLO-gated calibration feedback (vehicle_indices)</text>
+  </svg>
+</div>
+
+<!-- ── Motion skip bypass ── -->
+<div style="min-width:max-content; margin-top:0px; padding-left:188px;">
+  <svg width="260" height="28" viewBox="0 0 260 28">
+    <line x1="94" y1="14" x2="224" y2="14" stroke="#555" stroke-width="1" stroke-dasharray="4,3"/>
+    <polygon points="224,10 234,14 224,18" fill="#555"/>
+    <text x="100" y="11" font-family="monospace" font-size="7.5" fill="#555">no motion → skip inference</text>
+  </svg>
+</div>
+
+</div><!-- end pipeline-wrap -->
+
+<!-- ══════════ BOTTOM SECTION ══════════ -->
+<div class="bottom-section">
+
+  <div class="legend">
+    <h3>Stage Legend</h3>
+    <div class="legend-grid">
+      <div class="legend-item"><div class="legend-dot" style="background:var(--c1)"></div>S1: Video Source — cv2.VideoCapture</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--c6)"></div>S6: Post-Process — class filter + cross-NMS</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--c2)"></div>S2: Motion Gate — MOG2 + CC quality filter</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--c7)"></div>S7: Tracker — ByteTrack / SORT (supervision)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--c3)"></div>S3: Projection — FEP / PanoramaReprojector</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--c8)"></div>S8: Hazard Logic — zone intersection + events</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--c4)"></div>S4: ROI / Tiling — RegionSetter + TileActivation</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--c9)"></div>S9: Output — MQTT CBOR / MJPEG / save</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--c5)"></div>S5: Backend Inference — YOLO .pt / .onnx / TRT</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#8b5cf6"></div>Feedback — YOLO-gated lane calibration loop</div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <h3>Pipeline Notes</h3>
+    <p><b>Motion gate</b> runs at 320×320 downscale; frames without motion (fg_score below threshold) skip S3–S8 entirely, saving GPU cycles.</p>
+    <p><b>S3 is optional</b>; enabled by <code>--fep</code> or <code>--panorama</code>. Without it the raw (or ROI-masked) frame passes directly to S4.</p>
+    <p><b>YOLO-gated calibration</b>: only frames where S5 confirms a vehicle contribute to the MOG2 lane accumulator in S2, preventing tree/shadow contamination.</p>
+    <p><b>Backend Inference</b> is the dominant latency stage. TensorRT (.engine) on Jetson is the target deployment path for sub-10 ms inference.</p>
+    <p><b>Drivable confidence map</b> (S8) combines static lane mask, vehicle detection heatmap, and track trails to produce a continuous float32 map.</p>
+  </div>
+
+</div>
+
+</body>
+</html>
