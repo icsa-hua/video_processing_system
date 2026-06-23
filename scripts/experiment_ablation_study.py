@@ -88,9 +88,10 @@ class QualitativeCaptureState:
     enabled: bool = False
     target_variant: str = "full_pipeline"
     output_path: Path | None = None
-    exported: bool = False
-    best_score: int = -1
-    best_figure_bgr: np.ndarray | None = None
+    max_captures: int = 10
+    capture_spacing: int = 15           # min frames between routine captures
+    captured: list = field(default_factory=list)   # list[(frame_id_int, figure_bgr)]
+    last_captured_frame_id: int = -9999
     pending: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
@@ -436,24 +437,65 @@ def _build_hazard_panel(streamer: Any, preds: Any) -> np.ndarray:
     return _panel_title(panel, "E. Hazard Event Trigger")
 
 
+def _build_tangent_views_panel(views: list[np.ndarray]) -> np.ndarray:
+    """Grid panel showing every tangent view produced by FEP for one original frame."""
+    if not views:
+        return _make_text_panel("F. Tangent Views (FEP)", "No tangent views were captured.")
+    labels = ["TOP", "LEFT", "RIGHT", "PERSP"] + [f"View {i + 1}" for i in range(4, len(views))]
+    labeled: list[np.ndarray] = []
+    for i, view in enumerate(views):
+        panel = (view.copy() if view is not None else np.zeros((360, 640, 3), dtype=np.uint8))
+        if panel.ndim == 2:
+            panel = cv2.cvtColor(panel, cv2.COLOR_GRAY2BGR)
+        cv2.rectangle(panel, (0, 0), (panel.shape[1], 30), (18, 18, 18), -1)
+        cv2.putText(panel, labels[i] if i < len(labels) else f"View {i + 1}",
+                    (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (200, 200, 200), 2, cv2.LINE_AA)
+        labeled.append(panel)
+    cols = 2 if len(labeled) <= 4 else 3
+    return _panel_title(_compose_panel_grid(labeled, cols=cols), "F. Tangent Views (FEP)")
+
+
+def _build_tiles_panel(tiles: list[np.ndarray]) -> np.ndarray:
+    """Grid panel showing every tile produced by TileActivation for one original frame."""
+    if not tiles:
+        return _make_text_panel("F. Tiling", "No tiles were captured.")
+    labeled: list[np.ndarray] = []
+    for i, tile in enumerate(tiles):
+        panel = (tile.copy() if tile is not None else np.zeros((360, 640, 3), dtype=np.uint8))
+        if panel.ndim == 2:
+            panel = cv2.cvtColor(panel, cv2.COLOR_GRAY2BGR)
+        cv2.rectangle(panel, (0, 0), (panel.shape[1], 30), (18, 18, 18), -1)
+        cv2.putText(panel, f"Tile {i}", (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (200, 200, 200), 2, cv2.LINE_AA)
+        labeled.append(panel)
+    cols = min(3, len(labeled))
+    return _panel_title(_compose_panel_grid(labeled, cols=cols), "F. Tiling")
+
+
 def _build_limitation_panel(
     streamer: Any,
     original_bgr: np.ndarray | None,
-    processed_bgr: np.ndarray | None,
+    processed_views: list[np.ndarray],
     roi_bgr: np.ndarray | None,
     config: PipelineConfig,
+    views_kind: str = "single",
 ) -> np.ndarray:
-    if config.fep and streamer.logic_module is not None and streamer.logic_module.get("FEP") is not None and processed_bgr is not None:
+    if views_kind == "fep" and processed_views:
+        if len(processed_views) > 1:
+            return _build_tangent_views_panel(processed_views)
+        # FEP active but only one view captured — fall through to side-by-side display
         source_view = roi_bgr if roi_bgr is not None else original_bgr
-        if source_view is None:
-            source_view = processed_bgr
-        raw_panel = _draw_multiline_text(source_view.copy(), "Pre-correction view", origin=(18, 62), max_width_chars=22)
-        corrected_panel = _draw_multiline_text(processed_bgr.copy(), "Defished inference input", origin=(18, 62), max_width_chars=22)
-        return _panel_title(_stack_horizontal([raw_panel, corrected_panel]), "F. Fisheye Correction")
+        processed_bgr = processed_views[0]
+        if source_view is not None and processed_bgr is not None:
+            raw_panel = _draw_multiline_text(source_view.copy(), "Pre-correction view", origin=(18, 62), max_width_chars=22)
+            corr_panel = _draw_multiline_text(processed_bgr.copy(), "Defished inference input", origin=(18, 62), max_width_chars=22)
+            return _panel_title(_stack_horizontal([raw_panel, corr_panel]), "F. Fisheye Correction")
+
+    if views_kind == "tiles" and processed_views and len(processed_views) > 1:
+        return _build_tiles_panel(processed_views)
 
     return _make_text_panel(
-        "F. Fisheye Correction",
-        "Fisheye correction was not enabled for this run. Pass --fep to capture this diagnostic panel (fisheye cameras only).",
+        "F. Fisheye / Tile Views",
+        "Pass --fep (fisheye cameras) or --force-tiles to capture per-view panels.",
     )
 
 
@@ -473,9 +515,10 @@ def _build_qualitative_figure(
         _build_limitation_panel(
             streamer,
             artifacts.get("original_bgr"),
-            artifacts.get("processed_bgr"),
+            artifacts.get("processed_views", []),
             artifacts.get("roi_bgr"),
             config,
+            artifacts.get("views_kind", "single"),
         ),
     ]
     grid = _compose_panel_grid(panels)
@@ -770,14 +813,36 @@ def _install_qualitative_capture(
         processed = stage.get("im0s", [])
         fg_masks = stage.get("fg_masks", []) or []
 
-        for idx, fid in enumerate(frame_ids):
+        # n_per_orig > 1 when FEP or tiling produces multiple inference inputs per
+        # original frame.  All views for the same original frame are stored under a
+        # single pending key (the first view's frame_id) so the postprocess hook can
+        # build the full tangent-view / tile grid in one shot.
+        n_orig = max(len(originals), 1)
+        n_proc = len(processed)
+        n_per_orig = max(n_proc // n_orig, 1)
+        views_kind = (
+            "fep" if config.fep and n_per_orig > 1
+            else "tiles" if n_per_orig > 1
+            else "single"
+        )
+
+        for orig_idx in range(n_orig):
+            proc_start = orig_idx * n_per_orig
+            # Use the frame_id of the first view for this original frame as the key.
+            first_fid_idx = min(proc_start, len(frame_ids) - 1)
+            fid = frame_ids[first_fid_idx] if first_fid_idx < len(frame_ids) else orig_idx
+            views = [
+                _copy_image(processed[v])
+                for v in range(proc_start, min(proc_start + n_per_orig, n_proc))
+            ]
             state.pending[str(fid)] = {
                 "frame_id": fid,
                 "variant_key": spec.key,
-                "original_bgr": _copy_image(originals[idx]) if idx < len(originals) else None,
-                "roi_bgr": cv2.cvtColor(cropped_rgb[idx], cv2.COLOR_RGB2BGR) if idx < len(cropped_rgb) else None,
-                "processed_bgr": _copy_image(processed[idx]) if idx < len(processed) else None,
-                "fg_mask": _copy_mask(fg_masks[idx]) if idx < len(fg_masks) else None,
+                "original_bgr": _copy_image(originals[orig_idx]) if orig_idx < len(originals) else None,
+                "roi_bgr": cv2.cvtColor(cropped_rgb[orig_idx], cv2.COLOR_RGB2BGR) if orig_idx < len(cropped_rgb) else None,
+                "processed_views": views,
+                "views_kind": views_kind,
+                "fg_mask": _copy_mask(fg_masks[orig_idx]) if orig_idx < len(fg_masks) else None,
             }
         return stage
 
@@ -787,9 +852,9 @@ def _install_qualitative_capture(
 
     def postprocess_with_capture(self, preds, orig_image):
         out = original_postprocess(preds, orig_image)
-        if state.exported:
-            return out
 
+        # Secondary views (FEP / tiling) share the first view's pending entry;
+        # subsequent view frame_ids will simply not be found here.
         frame_id = str(self._extract_frame_id(out))
         artifacts = state.pending.pop(frame_id, None)
         if artifacts is None:
@@ -802,16 +867,23 @@ def _install_qualitative_capture(
 
         has_boxes = bool(getattr(getattr(out, "boxes", None), "xyxy", None) is not None and out.boxes.xyxy.numel() > 0)
         has_hazard = bool(getattr(out, "hazard_events", None))
-        score = 2 if has_hazard else 1 if has_boxes else 0
 
-        figure_bgr = _build_qualitative_figure(self, out, artifacts, config)
-        if score >= state.best_score:
-            state.best_score = score
-            state.best_figure_bgr = figure_bgr
+        try:
+            frame_id_int = int(frame_id)
+        except (ValueError, TypeError):
+            frame_id_int = -1
 
-        if has_hazard:
-            _export_qualitative_figure(state.output_path, figure_bgr)
-            state.exported = True
+        frames_since_last = frame_id_int - state.last_captured_frame_id
+        should_capture = len(state.captured) < state.max_captures and (
+            len(state.captured) == 0          # always grab the very first frame
+            or has_hazard                      # always grab hazard frames regardless of spacing
+            or frames_since_last >= state.capture_spacing
+        )
+
+        if should_capture:
+            figure_bgr = _build_qualitative_figure(self, out, artifacts, config)
+            state.captured.append((frame_id_int, figure_bgr))
+            state.last_captured_frame_id = frame_id_int
 
         return out
 
@@ -895,14 +967,13 @@ def _run_variant(
                 preview_queue=None,
             )
             elapsed_s = time.perf_counter() - t0
-            if qualitative_state.enabled and spec.key == qualitative_state.target_variant and qualitative_state.exported:
-                qualitative_path = str(qualitative_state.output_path or "")
-            if qualitative_state.enabled and spec.key == qualitative_state.target_variant and not qualitative_state.exported:
-                qualitative_path = _export_qualitative_figure(
-                    qualitative_state.output_path,
-                    qualitative_state.best_figure_bgr,
-                )
-                qualitative_state.exported = bool(qualitative_path)
+            if qualitative_state.enabled and spec.key == qualitative_state.target_variant and qualitative_state.captured:
+                base_path = qualitative_state.output_path or (run_dir / "qualitative_panels.png")
+                for i, (_fid, fig) in enumerate(qualitative_state.captured, start=1):
+                    out_path = base_path.parent / f"{base_path.stem}_{i:03d}{base_path.suffix}"
+                    saved = _export_qualitative_figure(out_path, fig)
+                    if i == 1 and saved:
+                        qualitative_path = saved
     finally:
         jetson_sampler.stop()
         try:

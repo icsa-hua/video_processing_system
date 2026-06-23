@@ -248,6 +248,208 @@
     margin-bottom: 0.5rem;
   }
   .notes b { color: var(--text); }
+
+  /* ── Active card highlight ──────────────────────────────── */
+  .card {
+    transition: border-color 0.25s, box-shadow 0.25s, transform 0.25s;
+    cursor: pointer;
+  }
+  .card:hover:not(.active) { transform: translateY(-2px); border-color: #484f58; }
+  .card.active {
+    border-color: var(--stage-c);
+    box-shadow: 0 0 0 1px var(--stage-c), 0 4px 20px var(--stage-shadow, #0005);
+    transform: translateY(-4px);
+    z-index: 2;
+    position: relative;
+  }
+
+  /* ── Viewer section ─────────────────────────────────────── */
+  .viewer-section {
+    margin-top: 1.5rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--surface);
+    transition: border-color 0.3s;
+    max-width: 1300px;
+  }
+  .viewer-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.55rem 1rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface2);
+    flex-wrap: wrap;
+  }
+  .viewer-badge {
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+  }
+  .viewer-badge-sub {
+    font-size: 0.68rem;
+    color: var(--dim);
+    font-weight: 400;
+    margin-left: 0.5rem;
+  }
+  .viewer-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-left: auto;
+  }
+  .ctrl-btn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 5px;
+    padding: 3px 10px;
+    font-family: ui-monospace, monospace;
+    font-size: 0.72rem;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .ctrl-btn:hover { background: var(--surface2); }
+  .ctrl-btn.paused { border-color: var(--accent); color: var(--accent); }
+  .speed-sel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--dim);
+    border-radius: 5px;
+    padding: 3px 6px;
+    font-family: ui-monospace, monospace;
+    font-size: 0.7rem;
+    cursor: pointer;
+  }
+  .viewer-body {
+    display: flex;
+    align-items: stretch;
+    min-height: 240px;
+  }
+
+  /* ── Primary: image fills left space ── */
+  .v-img-area {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    border-right: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .v-img-area img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: none;
+  }
+
+  /* ── Right panel: SVG thumbnail + text ── */
+  .v-right {
+    width: 260px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .viewer-scene {
+    padding: 0.6rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    overflow: hidden;
+    aspect-ratio: 16 / 9;
+    flex-shrink: 0;
+  }
+  .viewer-scene svg {
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    max-width: 100%;
+    max-height: 100%;
+    transition: opacity 0.2s;
+  }
+  .v-img-ph {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    border: 1px dashed currentColor;
+    border-radius: 0;
+    opacity: 0.55;
+    transition: color 0.3s, border-color 0.3s;
+    padding: 0.5rem;
+  }
+  .v-img-ph .ph-icon {
+    font-size: 1.4rem;
+    line-height: 1;
+  }
+  .v-img-ph .ph-label {
+    font-size: 0.6rem;
+    font-family: ui-monospace, monospace;
+    text-align: center;
+    line-height: 1.4;
+  }
+
+  /* text + dots */
+  .v-text-area {
+    flex: 1;
+    padding: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    justify-content: space-between;
+    min-height: 0;
+  }
+  .viewer-info-name {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .viewer-info-data {
+    font-size: 0.62rem;
+    color: var(--dim);
+    line-height: 1.65;
+    font-family: ui-monospace, monospace;
+    flex: 1;
+    overflow: hidden;
+  }
+  .viewer-info-data .k { color: var(--text); }
+  .viewer-dots {
+    display: flex;
+    gap: 5px;
+    flex-wrap: wrap;
+    padding-top: 0.4rem;
+    border-top: 1px solid var(--border);
+  }
+  .v-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    cursor: pointer;
+    opacity: 0.3;
+    transition: opacity 0.2s, transform 0.2s;
+  }
+  .v-dot:hover  { opacity: 0.65; }
+  .v-dot.on     { opacity: 1; transform: scale(1.35); }
+  .viewer-progress {
+    height: 3px;
+    background: var(--surface2);
+    border-top: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .v-prog {
+    height: 100%;
+    width: 0%;
+  }
+  @keyframes prog-fill {
+    from { width: 0%; }
+    to   { width: 100%; }
+  }
 </style>
 </head>
 <body>
@@ -788,6 +990,48 @@
 
 </div><!-- end pipeline-wrap -->
 
+<!-- ══════════ ANIMATED VIEWER ══════════ -->
+<div class="viewer-section" id="viewer-section">
+  <div class="viewer-header">
+    <span class="viewer-badge" id="v-badge">Stage 1 / 9: Video Source</span>
+    <span class="viewer-badge-sub" id="v-sub"></span>
+    <div class="viewer-controls">
+      <button class="ctrl-btn" onclick="stepStage(-1)">&#9664; Prev</button>
+      <button class="ctrl-btn" id="btn-play" onclick="togglePlay()">&#9646;&#9646; Pause</button>
+      <button class="ctrl-btn" onclick="stepStage(1)">Next &#9654;</button>
+      <select class="speed-sel" id="speed-sel" onchange="setSpeed(+this.value)">
+        <option value="600">0.6s</option>
+        <option value="1000" selected>1s</option>
+        <option value="2000">2s</option>
+        <option value="3000">3s</option>
+      </select>
+    </div>
+  </div>
+  <div class="viewer-body">
+    <!-- PRIMARY: real screenshot fills the left -->
+    <div class="v-img-area">
+      <img id="v-img" src="" alt="stage screenshot"/>
+      <div class="v-img-ph" id="v-img-ph">
+        <span class="ph-icon">&#128247;</span>
+        <span class="ph-label" id="v-img-ph-label">
+          add to diagrams/stage_images/
+        </span>
+      </div>
+    </div>
+    <!-- RIGHT: SVG diagram thumbnail + stage info -->
+    <div class="v-right">
+      <div class="viewer-scene" id="v-scene"></div>
+      <!-- text info -->
+      <div class="v-text-area">
+        <div class="viewer-info-name" id="v-name"></div>
+        <div class="viewer-info-data"  id="v-data"></div>
+        <div class="viewer-dots"       id="v-dots"></div>
+      </div>
+    </div>
+  </div>
+  <div class="viewer-progress"><div class="v-prog" id="v-prog"></div></div>
+</div>
+
 <!-- ══════════ BOTTOM SECTION ══════════ -->
 <div class="bottom-section">
 
@@ -818,5 +1062,191 @@
 
 </div>
 
+<script>
+(function () {
+  const COLORS = [
+    '#3b82f6','#8b5cf6','#06b6d4','#10b981',
+    '#f59e0b','#ef4444','#a855f7','#f97316','#6b7280'
+  ];
+
+  /* ── Stage image paths ──────────────────────────────────────────────
+     Place real screenshots in  diagrams/stage_images/
+     and set the corresponding entry to the relative path, e.g.:
+       './stage_images/s1_raw_frame.jpg'
+     Leave as null to show the placeholder.
+  ─────────────────────────────────────────────────────────────────── */
+  const stageImages = [
+    null,  // S1 · raw frame          e.g. './stage_images/s1_raw.jpg'
+    null,  // S2 · motion mask             './stage_images/s2_motion.jpg'
+    null,  // S3 · FEP / tangent tiles     './stage_images/s3_fep.jpg'
+    null,  // S4 · ROI / tiling            './stage_images/s4_roi.jpg'
+    null,  // S5 · backend inference       './stage_images/s5_inference.jpg'
+    null,  // S6 · post-process            './stage_images/s6_filtered.jpg'
+    null,  // S7 · tracker                 './stage_images/s7_tracked.jpg'
+    null,  // S8 · hazard logic            './stage_images/s8_hazard.jpg'
+    null,  // S9 · output                  './stage_images/s9_output.jpg'
+  ];
+
+  const stageImageLabels = [
+    's1_raw.jpg',
+    's2_motion.jpg',
+    's3_fep.jpg',
+    's4_roi.jpg',
+    's5_inference.jpg',
+    's6_filtered.jpg',
+    's7_tracked.jpg',
+    's8_hazard.jpg',
+    's9_output.jpg',
+  ];
+
+  const cards   = Array.from(document.querySelectorAll('.card'));
+  const section = document.getElementById('viewer-section');
+  const vScene  = document.getElementById('v-scene');
+  const vBadge  = document.getElementById('v-badge');
+  const vSub    = document.getElementById('v-sub');
+  const vName   = document.getElementById('v-name');
+  const vData   = document.getElementById('v-data');
+  const vDots   = document.getElementById('v-dots');
+  const vProg   = document.getElementById('v-prog');
+  const btnPlay = document.getElementById('btn-play');
+
+  let current  = 0;
+  let playing  = true;
+  let ms       = 1000;
+  let ticker   = null;
+
+  /* ── set CSS vars on each card ── */
+  cards.forEach((card, i) => {
+    card.style.setProperty('--stage-c', COLORS[i]);
+    /* soft shadow in stage color */
+    card.style.setProperty('--stage-shadow', COLORS[i] + '44');
+  });
+
+  /* ── build navigation dots ── */
+  COLORS.forEach((c, i) => {
+    const d = document.createElement('div');
+    d.className = 'v-dot';
+    d.style.background = c;
+    d.title = `Stage ${i + 1}`;
+    d.addEventListener('click', () => { goTo(i); restartTicker(); });
+    vDots.appendChild(d);
+  });
+
+  function goTo(idx) {
+    current = idx;
+    const card   = cards[idx];
+    const color  = COLORS[idx];
+    const svg    = card.querySelector('.card-scene svg');
+    const title  = card.querySelector('.card-title');
+    const footer = card.querySelector('.data-type');
+
+    /* highlight active card */
+    cards.forEach(c => c.classList.remove('active'));
+    card.classList.add('active');
+    card.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+
+    /* update viewer border color */
+    section.style.borderColor = color + '77';
+
+    /* clone & scale SVG */
+    if (svg) {
+      const clone = svg.cloneNode(true);
+      const vb    = clone.getAttribute('viewBox');
+      if (vb) {
+        const parts = vb.split(' ').map(Number);
+        const w = parts[2], h = parts[3];
+        const scale = Math.min(560 / w, 280 / h, 2.2);
+        clone.setAttribute('width',  Math.round(w * scale));
+        clone.setAttribute('height', Math.round(h * scale));
+      }
+      clone.style.borderColor = color + '55';
+      vScene.innerHTML = '';
+      vScene.appendChild(clone);
+    }
+
+    /* update text */
+    const name = title ? title.textContent.trim() : `Stage ${idx + 1}`;
+    vBadge.textContent = `Stage ${idx + 1} / ${cards.length}: ${name}`;
+    vBadge.style.color = color;
+    vName.textContent  = name;
+    vName.style.color  = color;
+    vData.innerHTML    = footer ? footer.innerHTML : '';
+
+    /* update image slot */
+    const imgEl  = document.getElementById('v-img');
+    const phEl   = document.getElementById('v-img-ph');
+    const phLbl  = document.getElementById('v-img-ph-label');
+    const path   = stageImages[idx];
+
+    phEl.style.color = color;
+
+    if (path) {
+      imgEl.onload  = () => { imgEl.style.display = 'block'; phEl.style.display = 'none'; };
+      imgEl.onerror = () => {
+        imgEl.style.display = 'none';
+        phEl.style.display  = 'flex';
+        phLbl.textContent   = `not found: ${path}`;
+      };
+      imgEl.src = path;
+    } else {
+      imgEl.style.display = 'none';
+      imgEl.src = '';
+      phEl.style.display  = 'flex';
+      phLbl.textContent   = `diagrams/stage_images/${stageImageLabels[idx]}`;
+    }
+
+    /* update dots */
+    document.querySelectorAll('.v-dot').forEach((d, i) =>
+      d.classList.toggle('on', i === idx));
+
+    /* restart progress bar */
+    animateProg();
+  }
+
+  function animateProg() {
+    vProg.style.animation = 'none';
+    vProg.style.background = COLORS[current];
+    void vProg.offsetWidth;                 /* force reflow */
+    vProg.style.animationDuration = ms + 'ms';
+    vProg.style.animation = `prog-fill ${ms}ms linear forwards`;
+  }
+
+  function restartTicker() {
+    clearInterval(ticker);
+    if (playing) {
+      ticker = setInterval(() => {
+        goTo((current + 1) % cards.length);
+      }, ms);
+    }
+    animateProg();
+  }
+
+  window.togglePlay = function () {
+    playing = !playing;
+    btnPlay.textContent = playing ? '⏸ Pause' : '▶ Play';
+    btnPlay.classList.toggle('paused', !playing);
+    restartTicker();
+  };
+
+  window.stepStage = function (dir) {
+    goTo((current + dir + cards.length) % cards.length);
+    restartTicker();
+  };
+
+  window.setSpeed = function (newMs) {
+    ms = newMs;
+    restartTicker();
+  };
+
+  /* ── make each card clickable ── */
+  cards.forEach((card, i) => {
+    card.addEventListener('click', () => { goTo(i); restartTicker(); });
+  });
+
+  /* ── init ── */
+  goTo(0);
+  restartTicker();
+})();
+</script>
 </body>
 </html>
