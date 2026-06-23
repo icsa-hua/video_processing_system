@@ -14,15 +14,17 @@ from obs_system.utils.global_config import *
 from obs_system.utils.common import *
 from obs_system.utils.tiles import * 
 
-import os 
-import cv2 
+import os
+import csv
+import cv2
 import time
 import glob
-import torch 
+import torch
 import numpy as np
 import queue
 import threading
-import collections 
+import collections
+from datetime import datetime, timezone
 
 from typing import Union, List, Any, Generator, Optional
 from pathlib import Path 
@@ -1120,6 +1122,29 @@ class OptimizedStreamer(Streamer):
         return (np.zeros((0,), np.float32), np.zeros((0, 4), np.float32))
 
 
+    def _save_bench_results(self) -> None:
+        results = self.mp.results()
+        csv_path = Path("assets") / "bench_results.csv"
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+        row = {
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "source": str(getattr(self.args, "source", "")),
+            "model": str(getattr(self.args, "model", "")),
+            "bench_labels": str(getattr(self.args, "bench_labels", "")),
+            **results,
+        }
+
+        write_header = not csv_path.exists() or csv_path.stat().st_size == 0
+        with csv_path.open("a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+            if write_header:
+                writer.writeheader()
+            writer.writerow(row)
+
+        Streamer.logger.info("Benchmark results saved to %s", csv_path)
+
+
     @smart_inference_mode()
     def stream_inference(self, source:str, model:str, producer_flag:Any, preview_queue:Any, *args, **kwargs)->Generator[Optional[Any], None, None]:
 
@@ -1782,9 +1807,10 @@ class OptimizedStreamer(Streamer):
         if self.stop_reason != "stream_limit":
             producer_thread.join()
 
-        if self.args.bench and self.mp is not None: 
-            self.mp.finalize() 
+        if self.args.bench and self.mp is not None:
+            self.mp.finalize()
             Streamer.logger.info(self.mp.results())
+            self._save_bench_results()
 
         if self.args.save or self.args.save_txt or self.args.save_crop:
             nl = len(list(self.save_dir.glob("labels/*.txt")))  # number of labels
@@ -2455,6 +2481,7 @@ class OptimizedStreamer(Streamer):
         if self.args.bench and self.mp is not None:
             self.mp.finalize()
             Streamer.logger.info(self.mp.results())
+            self._save_bench_results()
 
         if self.args.save or self.args.save_txt or self.args.save_crop:
             nl = len(list(self.save_dir.glob("labels/*.txt")))
