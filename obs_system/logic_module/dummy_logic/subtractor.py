@@ -26,6 +26,7 @@ from obs_system.utils.common import detect_static_lanes
 import numpy as np
 import cv2
 import os
+import random
 
 from collections import deque
 from pathlib import Path
@@ -52,7 +53,7 @@ class Subtractor(EventExtractorInterface):
         self._save_call_count: int = 0
         self._save_captured: int = 0
         self._save_max: int = 10
-        self._save_spacing: int = 50
+        self._next_save_call: int = 1
         self.downscale = downscale
         self.threshold_ratio = float(threshold_ratio)
         self.initial_accum_time = max(int(accum_time), 0)
@@ -706,9 +707,10 @@ class Subtractor(EventExtractorInterface):
             self._save_call_count += 1
             if (
                 self._save_captured < self._save_max
-                and (self._save_call_count == 1 or self._save_call_count % self._save_spacing == 0)
+                and self._save_call_count >= self._next_save_call
             ):
                 self._save_captured += 1
+                self._next_save_call = self._save_call_count + random.randint(40, 250)
                 idx = self._save_captured
                 self._capture_dir.mkdir(parents=True, exist_ok=True)
                 if batch:

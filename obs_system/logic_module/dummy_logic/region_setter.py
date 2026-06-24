@@ -4,6 +4,7 @@ from obs_system.logic_module.interface.event_extractor import EventExtractorInte
 import numpy as np
 import pdb
 import cv2
+import random
 import torch 
 from typing import Any
 from shapely.geometry import Polygon
@@ -25,7 +26,7 @@ class RegionSetter(EventExtractorInterface):
         self._save_call_count: int = 0
         self._save_captured: int = 0
         self._save_max: int = 10
-        self._save_spacing: int = 50
+        self._next_save_call: int = 1
 
     def detect(self, predictions):
         return super().detect(predictions)
@@ -131,11 +132,10 @@ class RegionSetter(EventExtractorInterface):
         if self._capture_dir is None:
             return
         self._save_call_count += 1
-        if not (self._save_call_count == 1 or self._save_call_count % self._save_spacing == 0):
-            return
-        if self._save_captured >= self._save_max:
+        if self._save_captured >= self._save_max or self._save_call_count < self._next_save_call:
             return
         self._save_captured += 1
+        self._next_save_call = self._save_call_count + random.randint(40, 250)
         idx = self._save_captured
         self._capture_dir.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(self._capture_dir / f"s1_raw_{idx:03d}.png"), original)

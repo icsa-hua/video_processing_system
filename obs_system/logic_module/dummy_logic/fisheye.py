@@ -3,6 +3,7 @@ from pathlib import Path
 from obs_system.logic_module.interface.event_extractor import EventExtractorInterface
 import cv2
 import numpy as np
+import random
 
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Tuple
@@ -52,7 +53,7 @@ class FishEyeProjection(EventExtractorInterface):
         self._save_call_count: int = 0
         self._save_captured: int = 0
         self._save_max: int = 10
-        self._save_spacing: int = 50
+        self._next_save_call: int = 1
         if profile_name not in FISHEYE_PROFILES:
             choices = ", ".join(sorted(FISHEYE_PROFILES))
             raise ValueError(f"Unknown fisheye profile {profile_name!r}. Choose one of: {choices}")
@@ -457,9 +458,10 @@ class FishEyeProjection(EventExtractorInterface):
             self._save_call_count += 1
             if (
                 self._save_captured < self._save_max
-                and (self._save_call_count == 1 or self._save_call_count % self._save_spacing == 0)
+                and self._save_call_count >= self._next_save_call
             ):
                 self._save_captured += 1
+                self._next_save_call = self._save_call_count + random.randint(40, 250)
                 idx = self._save_captured
                 self._capture_dir.mkdir(parents=True, exist_ok=True)
                 _view_labels = ("top", "left", "right", "persp")
