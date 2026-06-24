@@ -102,7 +102,8 @@ def _save_stage_images(
         _write_img(Path(f"{pfx}_s2_motion_mask.png"), disp)
         if raw is not None:
             ov = raw.copy()
-            ov[fg > 0] = (0, 220, 80)
+            fg_up = cv2.resize(fg, (raw.shape[1], raw.shape[0]), interpolation=cv2.INTER_NEAREST)
+            ov[fg_up > 0] = (0, 220, 80)
             _write_img(Path(f"{pfx}_s2_motion_overlay.png"), ov)
 
     lane = (artifacts.get("scene_masks") or {}).get("lane_mask")
