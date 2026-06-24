@@ -1,6 +1,8 @@
+from pathlib import Path
+
 from obs_system.logic_module.interface.event_extractor import EventExtractorInterface
-import cv2 
-import numpy as np 
+import cv2
+import numpy as np
 
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Tuple
@@ -44,7 +46,13 @@ class FishEyeProjection(EventExtractorInterface):
         view_yaws_deg: Optional[List[float]] = None,
         min_motion_fraction: float = FISHEYE_VIEW_MIN_MOTION_FRACTION,
         profile_name: str = DEFAULT_FISHEYE_PROFILE,
+        capture_dir=None,
     )->None:
+        self._capture_dir: Path | None = Path(capture_dir) if capture_dir is not None else None
+        self._save_call_count: int = 0
+        self._save_captured: int = 0
+        self._save_max: int = 10
+        self._save_spacing: int = 50
         if profile_name not in FISHEYE_PROFILES:
             choices = ", ".join(sorted(FISHEYE_PROFILES))
             raise ValueError(f"Unknown fisheye profile {profile_name!r}. Choose one of: {choices}")
@@ -444,6 +452,22 @@ class FishEyeProjection(EventExtractorInterface):
             )
             self._view_metrics["views_submitted"] += 1
             result.append((view, v_id, True))
+
+        if self._capture_dir is not None:
+            self._save_call_count += 1
+            if (
+                self._save_captured < self._save_max
+                and (self._save_call_count == 1 or self._save_call_count % self._save_spacing == 0)
+            ):
+                self._save_captured += 1
+                idx = self._save_captured
+                self._capture_dir.mkdir(parents=True, exist_ok=True)
+                _view_labels = ("top", "left", "right", "persp")
+                for view_bgr, v_id, submitted in result:
+                    if view_bgr is None:
+                        continue
+                    label = _view_labels[v_id] if v_id < len(_view_labels) else f"v{v_id}"
+                    cv2.imwrite(str(self._capture_dir / f"s3_fep_{label}_{idx:03d}.png"), view_bgr)
 
         return result
 

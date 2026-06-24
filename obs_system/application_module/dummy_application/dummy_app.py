@@ -15,6 +15,8 @@ from obs_system.utils.appraisal import perf, frame_list, StepContext
 
 import os
 import gc
+import re
+import time
 import numpy as np
 import psutil
 import pynvml
@@ -29,6 +31,28 @@ from collections import defaultdict
 from ultralytics.utils import DEFAULT_CFG
 
 logger = get_logger("obs_system." + __name__)
+
+
+def _resolve_capture_dir(config: "PipelineConfig") -> "Path | None":
+    from pathlib import Path
+    from urllib.parse import urlparse
+    if not config.save_all_modules:
+        return None
+    if config.save_modules_dir:
+        d = Path(config.save_modules_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+    source = (config.video_source or "").strip()
+    parsed = urlparse(source)
+    if parsed.scheme and parsed.netloc:
+        slug = (parsed.hostname or "stream").replace(".", "_")
+    else:
+        from pathlib import Path as _P
+        slug = re.sub(r"[^A-Za-z0-9._-]+", "_", _P(source).stem or "capture").strip("._-") or "capture"
+    d = Path("runs") / "module_captures" / f"{slug}_{time.strftime('%Y%m%d_%H%M%S')}"
+    d.mkdir(parents=True, exist_ok=True)
+    logger.info("Module captures will be saved to: %s", d)
+    return d
 
 
 class Application:
@@ -157,16 +181,19 @@ class Application:
 
 
     def setup_logic_module(self, config: PipelineConfig):
-        # Change this based on your video. Get the first frame.
+        capture_dir = _resolve_capture_dir(config)
+
         self.logic_module["SUBTRACTOR"] = Subtractor(
             recalibration_interval_frames=int(config.lane_recalibration_interval_frames),
+            capture_dir=capture_dir,
         )
-        self.logic_module["ROI"] = RegionSetter()
+        self.logic_module["ROI"] = RegionSetter(capture_dir=capture_dir)
 
         if config.fep:
             self.logic_module["FEP"] = FishEyeProjection(
                 crop=0.00,
                 profile_name=config.fisheye_profile,
+                capture_dir=capture_dir,
             )
         else:
             self.logic_module["FEP"] = None

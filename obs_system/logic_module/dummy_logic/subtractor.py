@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from obs_system.logic_module.interface.event_extractor import EventExtractorInterface
 from obs_system.utils import global_config
 from obs_system.utils.global_config import (
@@ -44,7 +46,13 @@ class Subtractor(EventExtractorInterface):
                  recalibration_interval_frames:int=0,
                  recalibration_accum_time:Optional[int]=None,
                  save_scene_overlays: bool = True,
+                 capture_dir=None,
     ):
+        self._capture_dir: Path | None = Path(capture_dir) if capture_dir is not None else None
+        self._save_call_count: int = 0
+        self._save_captured: int = 0
+        self._save_max: int = 10
+        self._save_spacing: int = 50
         self.downscale = downscale
         self.threshold_ratio = float(threshold_ratio)
         self.initial_accum_time = max(int(accum_time), 0)
@@ -693,6 +701,31 @@ class Subtractor(EventExtractorInterface):
             motion_flags = [False] * len(motion_flags)
 
         self.last_motion_scores = motion_scores
+
+        if self._capture_dir is not None:
+            self._save_call_count += 1
+            if (
+                self._save_captured < self._save_max
+                and (self._save_call_count == 1 or self._save_call_count % self._save_spacing == 0)
+            ):
+                self._save_captured += 1
+                idx = self._save_captured
+                self._capture_dir.mkdir(parents=True, exist_ok=True)
+                if batch:
+                    raw = batch[0]
+                    cv2.imwrite(str(self._capture_dir / f"s2_input_{idx:03d}.png"), raw)
+                    fg = self._last_batch_fg_masks[0] if self._last_batch_fg_masks else None
+                    if fg is not None:
+                        cv2.imwrite(str(self._capture_dir / f"s2_motion_mask_{idx:03d}.png"), fg)
+                        fg_up = cv2.resize(fg, (raw.shape[1], raw.shape[0]), interpolation=cv2.INTER_NEAREST)
+                        ov = raw.copy()
+                        ov[fg_up > 0] = (0, 220, 80)
+                        cv2.imwrite(str(self._capture_dir / f"s2_motion_overlay_{idx:03d}.png"), ov)
+                lane = self.lanes_mask if getattr(self, "lanes_mask", None) is not None else getattr(self, "_static_lanes_mask", None)
+                if lane is not None:
+                    ld = cv2.cvtColor(lane, cv2.COLOR_GRAY2BGR) if lane.ndim == 2 else lane.copy()
+                    cv2.imwrite(str(self._capture_dir / f"s2_lane_mask_{idx:03d}.png"), ld)
+
         return motion_flags, lanes_final
         
 

@@ -54,6 +54,8 @@ class PipelineConfig:
     force_tiles: bool = False
     panorama: bool = False
     fisheye_profile: str = DEFAULT_FISHEYE_PROFILE
+    save_all_modules: bool = False
+    save_modules_dir: str = ""
 
     @classmethod
     def from_namespace(cls, args: argparse.Namespace) -> "PipelineConfig":
@@ -167,6 +169,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     argparser.add_argument("--force_tiles", metavar="FT", action=argparse.BooleanOptionalAction, help="Force tiled inference regardless of image dimensions.")
 
+    argparser.add_argument(
+        "--save-all-modules",
+        action="store_true",
+        default=False,
+        dest="save_all_modules",
+        help=(
+            "Capture and save per-stage images (raw, motion mask, lane mask, ROI crop, "
+            "FEP tangent views, tiling) for up to 10 frames spread across the run. "
+            "Images are written directly by each module as it processes frames."
+        ),
+    )
+    argparser.add_argument(
+        "--save-modules-dir",
+        type=str,
+        default="",
+        dest="save_modules_dir",
+        help="Output directory for --save-all-modules images. Defaults to runs/module_captures/<video_stem>_<timestamp>/",
+    )
     argparser.add_argument(
         "--fisheye_profile",
         metavar="FEP_PROFILE",

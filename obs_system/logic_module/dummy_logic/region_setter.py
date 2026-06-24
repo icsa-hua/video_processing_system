@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from obs_system.logic_module.interface.event_extractor import EventExtractorInterface
 import numpy as np
 import pdb
@@ -12,13 +14,18 @@ from obs_system.utils import global_config
 
 class RegionSetter(EventExtractorInterface):
 
-    def __init__(self) -> None:
+    def __init__(self, capture_dir=None) -> None:
         self.regions = []
         self.x_start = 0
         self.x_end = 0
         self.y_start = 0
-        self.y_end = 0 
-        self.current_region = None 
+        self.y_end = 0
+        self.current_region = None
+        self._capture_dir: Path | None = Path(capture_dir) if capture_dir is not None else None
+        self._save_call_count: int = 0
+        self._save_captured: int = 0
+        self._save_max: int = 10
+        self._save_spacing: int = 50
 
     def detect(self, predictions):
         return super().detect(predictions)
@@ -109,11 +116,30 @@ class RegionSetter(EventExtractorInterface):
             return image[y0:y1, x0:x1]
 
         if isinstance(images, (list, tuple)):
-            return [_crop_one(image) for image in images]
+            result = [_crop_one(image) for image in images]
+            if images:
+                self._maybe_save_crop(images[0], result[0])
+            return result
         if isinstance(images, np.ndarray):
-            return _crop_one(images)
+            result = _crop_one(images)
+            self._maybe_save_crop(images, result)
+            return result
 
         raise ValueError("No images to crop in crop_image method of RegionSetter.")
+
+    def _maybe_save_crop(self, original: np.ndarray, cropped: np.ndarray) -> None:
+        if self._capture_dir is None:
+            return
+        self._save_call_count += 1
+        if not (self._save_call_count == 1 or self._save_call_count % self._save_spacing == 0):
+            return
+        if self._save_captured >= self._save_max:
+            return
+        self._save_captured += 1
+        idx = self._save_captured
+        self._capture_dir.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(self._capture_dir / f"s1_raw_{idx:03d}.png"), original)
+        cv2.imwrite(str(self._capture_dir / f"s4_roi_{idx:03d}.png"), cropped)
 
 
     def count_regions(self, bbox) -> None:
