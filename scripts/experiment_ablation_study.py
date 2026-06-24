@@ -88,8 +88,8 @@ class QualitativeCaptureState:
     enabled: bool = False
     target_variant: str = "full_pipeline"
     output_path: Path | None = None
-    max_captures: int = 10
-    capture_spacing: int = 50           # min frames between routine captures
+    max_captures: int = 20
+    capture_spacing: int = 25           # min frames between routine captures
     captured: list = field(default_factory=list)   # list[(frame_id_int, figure_bgr)]
     last_captured_frame_id: int = -9999
     target_frame_ids: set | None = None  # set when mirroring another variant's frames
