@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from obs_system.application_module.dummy_application.pipeline_config import DEFAULT_BENCH_LABELS
-from obs_system.utils.global_config import DEFAULT_FISHEYE_PROFILE, FISHEYE_PROFILES
+from obs_system.utils.global_config import DEFAULT_FISHEYE_PROFILE, FISHEYE_PROFILES, load_roi_profiles
 from obs_system.utils.logger import get_logger
 
 import os
@@ -36,6 +36,7 @@ MODEL_OPTIONS = {
     "YOLOv8 ONNX": "assets/compressed_models/yolov8s.onnx",
     "YOLOv8 PT": "assets/compressed_models/yolov8s.pt",
 }
+DEFAULT_WEB_ROI_PROFILE = "jetson_3_recording"
 
 
 def _cleanup_uploaded_file() -> None:
@@ -56,6 +57,13 @@ def _sync_live_stream_url(source_key: str) -> None:
 
     other_key = "live_stream_url_examine" if source_key == "live_stream_url_inference" else "live_stream_url_inference"
     st.session_state[other_key] = stream_url
+
+
+def _roi_profile_options() -> list[str]:
+    profiles = list(load_roi_profiles().keys())
+    if not profiles:
+        return [DEFAULT_WEB_ROI_PROFILE]
+    return profiles
 
 
 def _backend_browser_feed_url(feed_path: str) -> str:
@@ -183,7 +191,18 @@ with st.sidebar:
     mqtt = st.checkbox("Use MQTT to send data to server", value=False)
     save = st.checkbox("Save Video after Inference", value=False)
     verbose = st.checkbox("Show logs in Terminal", value=False)
-    roi = st.checkbox("Enable ROI", value=True)
+    roi_profiles = _roi_profile_options()
+    roi_default_index = (
+        roi_profiles.index(DEFAULT_WEB_ROI_PROFILE)
+        if DEFAULT_WEB_ROI_PROFILE in roi_profiles
+        else 0
+    )
+    roi_profile = st.selectbox(
+        "ROI profile",
+        options=roi_profiles,
+        index=roi_default_index,
+        help="ROI is always enabled in the web UI; this profile controls the crop used for inference and motion gating.",
+    )
     use_trt = st.checkbox("Use TensorRT", value=model_label == "TensorRT FP16 engine")
     only_fps = st.checkbox("Measure FPS Only", value=True)
     half = st.checkbox("Use Half Precision", value=False)
@@ -300,7 +319,8 @@ with tab1:
                 "mqtt": mqtt,
                 "save": save,
                 "verbose": verbose,
-                "roi": roi,
+                "roi": True,
+                "roi_profile": roi_profile,
                 "half": half,
                 "fep": fep,
                 "fisheye_profile": fisheye_profile,
