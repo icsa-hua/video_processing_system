@@ -5,6 +5,7 @@ from obs_system.utils.global_config import DEFAULT_FISHEYE_PROFILE, FISHEYE_PROF
 from obs_system.utils.logger import get_logger
 
 import os
+import json
 import tempfile
 import time
 import warnings
@@ -13,23 +14,18 @@ from typing import Text
 
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 from PIL import Image
 
 
 logger = get_logger("obs_system." + __name__)
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
-BACKEND_HOST = st.get_option("server.address") or "localhost"
-
-if BACKEND_HOST == "0.0.0.0":
-    BACKEND_HOST = "localhost"
-
-BACKEND_URL = f"http://{BACKEND_HOST}:8000"
 BACKEND_INTERNAL_URL = os.getenv('BACKEND_INTERNAL_URL',
                                  "http://localhost:8000")
 
-BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL",
-                               "http://localhost:8000")
+BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "").strip().rstrip("/")
+BACKEND_BROWSER_PORT = int(os.getenv("BACKEND_BROWSER_PORT", "8000"))
 
 
 static_folder = PACKAGE_ROOT / "static"
@@ -62,23 +58,48 @@ def _sync_live_stream_url(source_key: str) -> None:
     st.session_state[other_key] = stream_url
 
 
-def _render_stream_embed(feed_url: str, caption: str) -> None:
-    # stream_url = f"{feed_url}?ts={int(time.time() * 1000)}"
-    stream_url = feed_url
-    st.markdown(
+def _backend_browser_feed_url(feed_path: str) -> str:
+    if BACKEND_PUBLIC_URL:
+        return f"{BACKEND_PUBLIC_URL}{feed_path}"
+    return ""
+
+
+def _render_stream_embed(feed_path: str, caption: str) -> None:
+    stream_url = _backend_browser_feed_url(feed_path)
+    caption_json = json.dumps(caption)
+    feed_path_json = json.dumps(feed_path)
+    stream_url_json = json.dumps(stream_url)
+    backend_port_json = json.dumps(BACKEND_BROWSER_PORT)
+    components.html(
         f"""
         <div style="display:flex;justify-content:center;">
-            <div style="width:min(100%, 960px);">
+            <div style="width:min(100%, 960px);font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
                 <div style="margin:0 0 0.5rem 0;font-size:0.95rem;color:#cbd5e1;">{caption}</div>
                 <img
-                    src="{stream_url}"
+                    id="edgeai-preview"
                     alt="{caption}"
-                    style="width:100%;height:auto;border-radius:0.75rem;border:1px solid rgba(148,163,184,0.35);background:#0f172a;"
+                    style="width:100%;height:auto;border-radius:0.75rem;border:1px solid rgba(148,163,184,0.35);background:#0f172a;display:block;"
                 />
             </div>
         </div>
+        <script>
+        const explicitUrl = {stream_url_json};
+        const feedPath = {feed_path_json};
+        const caption = {caption_json};
+        const backendPort = {backend_port_json};
+        let parentLocation = window.location;
+        try {{
+            if (window.parent && window.parent.location && window.parent.location.hostname) {{
+                parentLocation = window.parent.location;
+            }}
+        }} catch (err) {{}}
+        const inferredUrl = `${{parentLocation.protocol}}//${{parentLocation.hostname}}:${{backendPort}}${{feedPath}}`;
+        const img = document.getElementById("edgeai-preview");
+        img.alt = caption;
+        img.src = explicitUrl || inferredUrl;
+        </script>
         """,
-        unsafe_allow_html=True,
+        height=620,
     )
 
 
@@ -121,10 +142,18 @@ if "source_mode" not in st.session_state:
 if "inference_preview_enabled" not in st.session_state:
     st.session_state["inference_preview_enabled"] = True
 
+shutdown_url_json = json.dumps(
+    f"{BACKEND_PUBLIC_URL}/shutdown" if BACKEND_PUBLIC_URL else ""
+)
+backend_browser_port_json = json.dumps(BACKEND_BROWSER_PORT)
 js = f"""
 <script>
 window.addEventListener("beforeunload", async function() {{
-    fetch("{BACKEND_URL}/shutdown", {{ method: "POST" }});
+    const explicitUrl = {shutdown_url_json};
+    const backendPort = {backend_browser_port_json};
+    const loc = window.location;
+    const shutdownUrl = explicitUrl || `${{loc.protocol}}//${{loc.hostname}}:${{backendPort}}/shutdown`;
+    fetch(shutdownUrl, {{ method: "POST" }});
 }});
 </script>
 """
@@ -203,7 +232,7 @@ with st.sidebar:
 
 if option != "Live Stream" and st.session_state.get("examine_stream_active"):
     try:
-        requests.post(f"{BACKEND_URL}/examine_stream/stop", timeout=5)
+        requests.post(f"{BACKEND_INTERNAL_URL}/examine_stream/stop", timeout=5)
     except requests.exceptions.RequestException:
         pass
     st.session_state["examine_stream_active"] = False
@@ -287,7 +316,7 @@ with tab1:
             logger.debug("UI payload: %s", payload)
 
             try:
-                response = requests.post(f"{BACKEND_PUBLIC_URL}/", json=payload, timeout=15)
+                response = requests.post(f"{BACKEND_INTERNAL_URL}/", json=payload, timeout=15)
                 response.raise_for_status()
                 st.session_state["inference_preview_enabled"] = bool(show)
                 st.success("Configuration added successfully.")
@@ -305,7 +334,7 @@ with tab1:
 
     if stop_button:
         try:
-            response = requests.post(f"{BACKEND_URL}/shutdown", timeout=10)
+            response = requests.post(f"{BACKEND_INTERNAL_URL}/shutdown", timeout=10)
             response.raise_for_status()
             st.success("Application stopped successfully.")
         except requests.exceptions.RequestException as exc:
@@ -322,7 +351,7 @@ with tab1:
             if not processing_status.get("preview_ready", False):
                 st.info("Connecting to the processed stream...")
             _render_stream_embed(
-                f"{BACKEND_URL}/video_feed",
+                "/video_feed",
                 "Live inference stream",
             )
 
@@ -338,7 +367,7 @@ if tab_examine is not None:
 
         examine_status = {"running": False, "preview_ready": False}
         try:
-            status_response = requests.get(f"{BACKEND_URL}/examine_stream/status", timeout=5)
+            status_response = requests.get(f"{BACKEND_INTERNAL_URL}/examine_stream/status", timeout=5)
             status_response.raise_for_status()
             examine_status = status_response.json()
         except requests.exceptions.RequestException:
@@ -366,7 +395,7 @@ if tab_examine is not None:
                     "preview_fps": 8.0,
                 }
                 try:
-                    response = requests.post(f"{BACKEND_URL}/examine_stream", json=payload, timeout=15)
+                    response = requests.post(f"{BACKEND_INTERNAL_URL}/examine_stream", json=payload, timeout=15)
                     response.raise_for_status()
                     st.session_state["examine_stream_active"] = True
                     st.success("Stream examination started.")
@@ -383,7 +412,7 @@ if tab_examine is not None:
 
         if stop_examine_button:
             try:
-                response = requests.post(f"{BACKEND_URL}/examine_stream/stop", timeout=10)
+                response = requests.post(f"{BACKEND_INTERNAL_URL}/examine_stream/stop", timeout=10)
                 response.raise_for_status()
                 st.success("Stream examination stopped.")
             except requests.exceptions.RequestException as exc:
@@ -430,7 +459,7 @@ if tab_examine is not None:
                     }
                     try:
                         response = requests.post(
-                            f"{BACKEND_URL}/examine_stream/record", json=payload, timeout=15
+                            f"{BACKEND_INTERNAL_URL}/examine_stream/record", json=payload, timeout=15
                         )
                         response.raise_for_status()
                         result = response.json()
@@ -451,7 +480,7 @@ if tab_examine is not None:
         if st.session_state.get("recording_active"):
             record_status = {"running": False, "done": False, "error": False, "output_path": ""}
             try:
-                rs = requests.get(f"{BACKEND_URL}/examine_stream/record/status", timeout=5)
+                rs = requests.get(f"{BACKEND_INTERNAL_URL}/examine_stream/record/status", timeout=5)
                 rs.raise_for_status()
                 record_status = rs.json()
             except requests.exceptions.RequestException:
@@ -475,7 +504,7 @@ if tab_examine is not None:
                         stop_record_button = st.button("Stop Recording", key="stop_record_btn")
                 if stop_record_button:
                     try:
-                        requests.post(f"{BACKEND_URL}/examine_stream/record/stop", timeout=10)
+                        requests.post(f"{BACKEND_INTERNAL_URL}/examine_stream/record/stop", timeout=10)
                     except requests.exceptions.RequestException:
                         pass
                     st.session_state["recording_active"] = False
@@ -489,7 +518,7 @@ if tab_examine is not None:
                 st.info("Connecting to the live stream...")
 
             _render_stream_embed(
-                f"{BACKEND_URL}/examine_stream/feed",
+                "/examine_stream/feed",
                 "Live camera feed",
             )
 

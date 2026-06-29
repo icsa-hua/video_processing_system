@@ -12,6 +12,7 @@ services:
       - /run:/run
 
     ports: 
+      - "8000:8000"
       - "8503:8503" 
       - "8504:8504"
 
@@ -23,6 +24,8 @@ services:
       - MALLOC_CHECK=0 
       - OPENBLAS_CORETYPE=ARMV8
       - LD_PRELOAD=
+      - BACKEND_INTERNAL_URL=http://localhost:8000
+      - BACKEND_BROWSER_PORT=8000
 
     ipc: host
     shm_size: "1gb"
@@ -50,4 +53,3 @@ services:
 
 volumes:
   venv:
-

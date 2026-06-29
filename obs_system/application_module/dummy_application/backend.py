@@ -317,12 +317,7 @@ def _build_examination_config(request: StreamExaminationRequest) -> StreamExamin
     return StreamExaminerConfig(**request.model_dump()).validate()
 
 
-def _frame_stream(queue_ref: Queue, ready_flag: Value, process_is_alive):
-    while not ready_flag.value:
-        if not process_is_alive():
-            return
-        time.sleep(0.03)
-
+def _frame_stream(queue_ref: Queue, _ready_flag: Value, process_is_alive):
     while True:
         try:
             frame_bytes = queue_ref.get(timeout=0.5)

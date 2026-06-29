@@ -14,16 +14,17 @@
     --dim:      #7d8590;
     --accent:   #388bfd;
 
-    --c0: #64748b;
-    --c1: #3b82f6;
-    --c2: #10b981;
-    --c3: #8b5cf6;
-    --c4: #06b6d4;
-    --c5: #ec4899;
-    --c6: #f59e0b;
-    --c7: #ef4444;
-    --c8: #a855f7;
-    --c9: #f97316;
+    --c0:  #64748b;
+    --c1:  #3b82f6;
+    --c2:  #10b981;
+    --c3:  #8b5cf6;
+    --c4:  #06b6d4;
+    --c5:  #f59e0b;
+    --c6:  #84cc16;
+    --c7:  #ef4444;
+    --c8:  #a855f7;
+    --c9:  #f97316;
+    --c10: #14b8a6;
   }
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -37,381 +38,206 @@
     overflow-x: auto;
   }
 
-  /* ── Header ──────────────────────────────────────────── */
-  .page-header {
-    text-align: center;
-    margin-bottom: 2.5rem;
-  }
+  .page-header { text-align: center; margin-bottom: 2.5rem; }
   .page-header h1 {
-    font-size: 1.35rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--text);
+    font-size: 1.35rem; font-weight: 700;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--text);
   }
   .page-header .subtitle {
-    color: var(--dim);
-    font-size: 0.78rem;
-    margin-top: 0.3rem;
-    letter-spacing: 0.06em;
+    color: var(--dim); font-size: 0.78rem;
+    margin-top: 0.3rem; letter-spacing: 0.06em;
   }
   .page-header .meta {
-    display: flex;
-    justify-content: center;
-    gap: 2.5rem;
-    margin-top: 0.75rem;
-    font-size: 0.72rem;
-    color: var(--dim);
+    display: flex; justify-content: center;
+    gap: 2.5rem; margin-top: 0.75rem;
+    font-size: 0.72rem; color: var(--dim);
   }
   .page-header .meta b { color: var(--accent); }
 
-  /* ── Pipeline row ─────────────────────────────────────── */
-  .pipeline-wrap {
-    overflow-x: auto;
-    padding-bottom: 0.5rem;
-  }
+  .pipeline-wrap { overflow-x: auto; padding-bottom: 0.5rem; }
+  .pipeline-row  { display: flex; align-items: flex-start; gap: 0; min-width: max-content; }
 
-  .pipeline-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 0;
-    min-width: max-content;
-  }
-
-  /* ── Stage card ───────────────────────────────────────── */
   .card {
-    position: relative;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    width: 188px;
-    flex-shrink: 0;
-    overflow: hidden;
-    transition: border-color 0.25s, box-shadow 0.25s, transform 0.25s;
+    position: relative; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 8px;
+    width: 188px; flex-shrink: 0; overflow: hidden;
+    transition: border-color .25s, box-shadow .25s, transform .25s;
     cursor: pointer;
   }
   .card:hover:not(.active) { transform: translateY(-2px); border-color: #484f58; }
   .card.active {
     border-color: var(--stage-c);
-    box-shadow: 0 0 0 1px var(--stage-c), 0 4px 20px var(--stage-shadow, #0005);
-    transform: translateY(-4px);
-    z-index: 2;
-    position: relative;
+    box-shadow: 0 0 0 1px var(--stage-c), 0 4px 20px var(--stage-shadow,#0005);
+    transform: translateY(-4px); z-index: 2; position: relative;
   }
   .card.large { width: 296px; }
 
-  .card-top { height: 4px; }
+  .card-top    { height: 4px; }
   .card-header {
-    padding: 7px 10px 5px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    gap: 7px;
+    padding: 7px 10px 5px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 7px;
   }
   .card-num {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    font-size: 0.68rem;
-    font-weight: 700;
-    flex-shrink: 0;
-    color: #000;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; border-radius: 50%;
+    font-size: 0.68rem; font-weight: 700; flex-shrink: 0; color: #fff;
   }
   .card-title {
-    font-size: 0.68rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    line-height: 1.3;
+    font-size: 0.68rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.06em; line-height: 1.3;
   }
   .card-opt {
-    margin-left: auto;
-    font-size: 0.58rem;
-    color: var(--dim);
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 1px 5px;
-    white-space: nowrap;
+    margin-left: auto; font-size: 0.58rem; color: var(--dim);
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 3px; padding: 1px 5px; white-space: nowrap;
   }
-
-  .card-scene {
-    padding: 8px 8px 6px;
-    display: flex;
-    justify-content: center;
-  }
-  .card-scene svg {
-    border-radius: 3px;
-    border: 1px solid var(--border);
-    display: block;
-  }
-
-  .card-footer {
-    padding: 5px 10px 8px;
-    border-top: 1px solid var(--border);
-  }
-  .data-type {
-    font-size: 0.6rem;
-    color: var(--dim);
-    font-family: ui-monospace, monospace;
-    line-height: 1.5;
-  }
+  .card-scene { padding: 8px 8px 6px; display: flex; justify-content: center; }
+  .card-scene svg { border-radius: 3px; border: 1px solid var(--border); display: block; }
+  .card-footer { padding: 5px 10px 8px; border-top: 1px solid var(--border); }
+  .data-type   { font-size: 0.6rem; color: var(--dim); font-family: ui-monospace,monospace; line-height: 1.5; }
   .data-type .k { color: var(--text); }
 
-  /* ── Connectors ───────────────────────────────────────── */
-  .conn {
-    display: flex;
-    align-items: flex-start;
-    justify-content: center;
-    width: 36px;
-    flex-shrink: 0;
-    padding-top: 60px;
-  }
+  .conn { display: flex; align-items: flex-start; justify-content: center; width: 36px; flex-shrink: 0; padding-top: 60px; }
   .conn svg { display: block; }
 
-  /* ── Legend & notes ───────────────────────────────────── */
-  .bottom-section {
-    display: flex;
-    gap: 1.5rem;
-    margin-top: 2rem;
-    flex-wrap: wrap;
-    max-width: 1400px;
-  }
-
+  /* bottom */
+  .bottom-section { display: flex; gap: 1.5rem; margin-top: 2rem; flex-wrap: wrap; max-width: 1600px; }
   .legend {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1rem 1.2rem;
-    min-width: 400px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 1rem 1.2rem; min-width: 420px;
   }
-  .legend h3 {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: var(--dim);
-    margin-bottom: 0.6rem;
+  .legend h3, .notes h3 {
+    font-size: 0.7rem; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--dim); margin-bottom: 0.6rem;
   }
-  .legend-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.35rem 1.5rem;
-  }
-  .legend-item {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    font-size: 0.68rem;
-  }
-  .legend-dot {
-    width: 9px; height: 9px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-
+  .legend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.35rem 1.5rem; }
+  .legend-item { display: flex; align-items: center; gap: 7px; font-size: 0.68rem; }
+  .legend-dot  { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
   .notes {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--accent);
-    border-radius: 4px;
-    padding: 0.85rem 1rem;
-    font-size: 0.68rem;
-    color: var(--dim);
-    line-height: 1.6;
-    max-width: 500px;
-  }
-  .notes h3 {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: var(--dim);
-    margin-bottom: 0.5rem;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-left: 3px solid var(--accent); border-radius: 4px;
+    padding: 0.85rem 1rem; font-size: 0.68rem; color: var(--dim);
+    line-height: 1.6; max-width: 520px;
   }
   .notes b { color: var(--text); }
 
-  /* ── Viewer section ─────────────────────────────────────── */
+  /* viewer */
   .viewer-section {
-    margin-top: 1.5rem;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    overflow: hidden;
-    background: var(--surface);
-    transition: border-color 0.3s;
-    max-width: 1300px;
+    margin-top: 1.5rem; border: 1px solid var(--border);
+    border-radius: 10px; overflow: hidden;
+    background: var(--surface); transition: border-color .3s; max-width: 1000px;
   }
   .viewer-header {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.55rem 1rem;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface2);
-    flex-wrap: wrap;
+    display: flex; align-items: center; gap: .75rem;
+    padding: .55rem 1rem; border-bottom: 1px solid var(--border);
+    background: var(--surface2); flex-wrap: wrap;
   }
-  .viewer-badge {
-    font-size: 0.75rem;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-  }
-  .viewer-badge-sub {
-    font-size: 0.68rem;
-    color: var(--dim);
-    font-weight: 400;
-    margin-left: 0.5rem;
-  }
-  .viewer-controls {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    margin-left: auto;
-  }
+  .viewer-badge     { font-size: .75rem; font-weight: 700; letter-spacing: .05em; }
+  .viewer-badge-sub { font-size: .68rem; color: var(--dim); font-weight: 400; margin-left: .5rem; }
+  .viewer-controls  { display: flex; align-items: center; gap: .4rem; margin-left: auto; }
   .ctrl-btn {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    color: var(--text);
-    border-radius: 5px;
-    padding: 3px 10px;
-    font-family: ui-monospace, monospace;
-    font-size: 0.72rem;
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
+    background: var(--surface); border: 1px solid var(--border); color: var(--text);
+    border-radius: 5px; padding: 3px 10px;
+    font-family: ui-monospace,monospace; font-size: .72rem; cursor: pointer;
+    transition: background .15s, border-color .15s;
   }
   .ctrl-btn:hover { background: var(--surface2); }
   .ctrl-btn.paused { border-color: var(--accent); color: var(--accent); }
   .speed-sel {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    color: var(--dim);
-    border-radius: 5px;
-    padding: 3px 6px;
-    font-family: ui-monospace, monospace;
-    font-size: 0.7rem;
-    cursor: pointer;
+    background: var(--surface); border: 1px solid var(--border); color: var(--dim);
+    border-radius: 5px; padding: 3px 6px;
+    font-family: ui-monospace,monospace; font-size: .7rem; cursor: pointer;
   }
-  .viewer-body {
-    display: flex;
-    align-items: stretch;
-    min-height: 240px;
-  }
-
+  .viewer-body { display: flex; align-items: stretch; }
   .v-img-area {
-    position: relative;
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    border-right: 1px solid var(--border);
-    background: var(--bg);
+    position: relative; flex-shrink: 0;
+    width: 720px; height: 720px; overflow: hidden;
+    border-right: 1px solid var(--border); background: var(--bg);
   }
-  .v-img-area img {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    display: none;
-  }
-
-  .v-right {
-    width: 260px;
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-  }
+  .v-img-area img { width: 100%; height: 100%; object-fit: contain; display: none; }
+  .v-right  { width: 260px; flex-shrink: 0; display: flex; flex-direction: column; }
   .viewer-scene {
-    padding: 0.6rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg);
-    overflow: hidden;
-    aspect-ratio: 16 / 9;
-    flex-shrink: 0;
+    padding: .6rem; display: flex; align-items: center; justify-content: center;
+    border-bottom: 1px solid var(--border); background: var(--bg); overflow: hidden;
+    aspect-ratio: 16/9; flex-shrink: 0;
   }
-  .viewer-scene svg {
-    border-radius: 4px;
-    border: 1px solid var(--border);
-    max-width: 100%;
-    max-height: 100%;
-    transition: opacity 0.2s;
-  }
+  .viewer-scene svg { border-radius: 4px; border: 1px solid var(--border); max-width: 100%; max-height: 100%; }
   .v-img-ph {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.4rem;
-    border: 1px dashed currentColor;
-    border-radius: 0;
-    opacity: 0.55;
-    transition: color 0.3s, border-color 0.3s;
-    padding: 0.5rem;
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: .4rem; border: 1px dashed currentColor; opacity: .55; padding: .5rem;
   }
-  .v-img-ph .ph-icon { font-size: 1.4rem; line-height: 1; }
-  .v-img-ph .ph-label {
-    font-size: 0.6rem;
-    font-family: ui-monospace, monospace;
-    text-align: center;
-    line-height: 1.4;
-  }
-
+  .v-img-ph .ph-icon  { font-size: 1.4rem; line-height: 1; }
+  .v-img-ph .ph-label { font-size: .6rem; font-family: ui-monospace,monospace; text-align: center; line-height: 1.4; }
   .v-text-area {
-    flex: 1;
-    padding: 0.75rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.55rem;
-    justify-content: space-between;
-    min-height: 0;
+    flex: 1; padding: .75rem; display: flex; flex-direction: column;
+    gap: .55rem; justify-content: space-between; min-height: 0;
   }
-  .viewer-info-name {
-    font-size: 0.75rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-  .viewer-info-data {
-    font-size: 0.62rem;
-    color: var(--dim);
-    line-height: 1.65;
-    font-family: ui-monospace, monospace;
-    flex: 1;
-    overflow: hidden;
-  }
+  .viewer-info-name { font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+  .viewer-info-data  { font-size: .62rem; color: var(--dim); line-height: 1.65; font-family: ui-monospace,monospace; flex: 1; overflow: hidden; }
   .viewer-info-data .k { color: var(--text); }
-  .viewer-dots {
-    display: flex;
-    gap: 5px;
-    flex-wrap: wrap;
-    padding-top: 0.4rem;
-    border-top: 1px solid var(--border);
-  }
-  .v-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    cursor: pointer;
-    opacity: 0.3;
-    transition: opacity 0.2s, transform 0.2s;
-  }
-  .v-dot:hover  { opacity: 0.65; }
-  .v-dot.on     { opacity: 1; transform: scale(1.35); }
-  .viewer-progress {
-    height: 3px;
-    background: var(--surface2);
-    border-top: 1px solid var(--border);
-    overflow: hidden;
-  }
+  .viewer-dots { display: flex; gap: 5px; flex-wrap: wrap; padding-top: .4rem; border-top: 1px solid var(--border); }
+  .v-dot { width: 10px; height: 10px; border-radius: 50%; cursor: pointer; opacity: .3; transition: opacity .2s, transform .2s; }
+  .v-dot:hover { opacity: .65; }
+  .v-dot.on    { opacity: 1; transform: scale(1.35); }
+  .viewer-progress { height: 3px; background: var(--surface2); border-top: 1px solid var(--border); overflow: hidden; }
   .v-prog { height: 100%; width: 0%; }
-  @keyframes prog-fill { from { width: 0%; } to { width: 100%; } }
+  @keyframes prog-fill { from { width:0% } to { width:100% } }
+
+  /* video comparison */
+  .vc-section {
+    margin-top: 1.5rem; border: 1px solid var(--border); border-radius: 10px;
+    overflow: hidden; background: var(--surface); max-width: 1300px;
+  }
+  .vc-header {
+    display: flex; align-items: center; gap: .75rem;
+    padding: .55rem 1rem; border-bottom: 1px solid var(--border);
+    background: var(--surface2); flex-wrap: wrap;
+  }
+  .vc-title { font-size: .75rem; font-weight: 700; letter-spacing: .05em; color: var(--text); }
+  .vc-body  { display: flex; gap: 0; }
+  .vc-pane  {
+    flex: 1; display: flex; flex-direction: column;
+    border-right: 1px solid var(--border); overflow: hidden;
+  }
+  .vc-pane:last-child { border-right: none; }
+  .vc-label {
+    padding: 4px 10px; font-size: .65rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .06em;
+    background: var(--surface2); border-bottom: 1px solid var(--border);
+  }
+  .vc-pane video {
+    width: 100%; max-height: 320px; display: block;
+    background: #000; object-fit: contain;
+  }
+  .vc-pane .vc-placeholder {
+    width: 100%; height: 200px; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: .4rem;
+    background: var(--bg); color: var(--dim); font-size: .65rem;
+    border: 1px dashed var(--border); opacity: .6;
+  }
+  .vc-placeholder .ph-icon { font-size: 1.6rem; }
+  .vc-controls {
+    display: flex; align-items: center; gap: .6rem;
+    padding: .5rem .75rem; border-top: 1px solid var(--border);
+    background: var(--surface2);
+  }
+  .vc-btn {
+    background: var(--surface); border: 1px solid var(--border); color: var(--text);
+    border-radius: 5px; padding: 3px 12px;
+    font-family: ui-monospace,monospace; font-size: .72rem; cursor: pointer;
+    transition: background .15s;
+  }
+  .vc-btn:hover { background: var(--bg); }
+  .vc-seek {
+    flex: 1; height: 3px; cursor: pointer;
+    accent-color: var(--accent); vertical-align: middle;
+  }
+  .vc-time { font-size: .65rem; color: var(--dim); white-space: nowrap; min-width: 72px; text-align: right; }
 </style>
 </head>
 <body>
 
-<!-- ══════════ HEADER ══════════ -->
 <header class="page-header">
   <h1>OBS System &mdash; Video Processing Pipeline</h1>
   <div class="subtitle">Data flow &amp; image state transitions &bull; Roadside Obstacle Detection</div>
@@ -423,566 +249,573 @@
   </div>
 </header>
 
-<!-- ══════════ PIPELINE ROW ══════════ -->
 <div class="pipeline-wrap">
 <div class="pipeline-row">
 
-  <!-- ─── S0: WEBUI CONFIG ─── -->
-  <div class="card">
-    <div class="card-top" style="background:var(--c0)"></div>
-    <div class="card-header">
-      <span class="card-num" style="background:var(--c0); color:#fff">0</span>
-      <span class="card-title" style="color:var(--c0)">WebUI Config</span>
-    </div>
-    <div class="card-scene">
-      <svg width="172" height="104" viewBox="0 0 172 104">
-        <rect x="0" y="0" width="172" height="104" fill="#0d1117"/>
-        <!-- header bar -->
-        <rect x="0" y="0" width="172" height="18" fill="#1e2736"/>
-        <text x="8" y="13" font-family="monospace" font-size="8" fill="#64748b" font-weight="bold">OBS CONFIG PANEL</text>
-        <!-- config rows -->
-        <text x="6"  y="30" font-family="monospace" font-size="7.5" fill="#3b82f6">model :</text>
-        <text x="50" y="30" font-family="monospace" font-size="7.5" fill="#e6edf3">yolov8s.engine</text>
-        <text x="6"  y="43" font-family="monospace" font-size="7.5" fill="#3b82f6">source:</text>
-        <text x="50" y="43" font-family="monospace" font-size="7.5" fill="#e6edf3">rtsp / .mp4</text>
-        <text x="6"  y="56" font-family="monospace" font-size="7.5" fill="#3b82f6">roi   :</text>
-        <text x="50" y="56" font-family="monospace" font-size="7.5" fill="#10b981">enabled</text>
-        <text x="6"  y="69" font-family="monospace" font-size="7.5" fill="#3b82f6">fep   :</text>
-        <text x="50" y="69" font-family="monospace" font-size="7.5" fill="#6b7280">disabled</text>
-        <text x="6"  y="82" font-family="monospace" font-size="7.5" fill="#3b82f6">conf  :</text>
-        <text x="50" y="82" font-family="monospace" font-size="7.5" fill="#e6edf3">0.35</text>
-        <text x="95" y="82" font-family="monospace" font-size="7.5" fill="#3b82f6">iou:</text>
-        <text x="113" y="82" font-family="monospace" font-size="7.5" fill="#e6edf3">0.45</text>
-        <!-- launch button -->
-        <rect x="6" y="89" width="160" height="12" fill="#1a2a3a" rx="2" stroke="#64748b" stroke-width="0.8"/>
-        <text x="40" y="98" font-family="monospace" font-size="7.5" fill="#94a3b8">&#9654;  Launch Pipeline</text>
-      </svg>
-    </div>
-    <div class="card-footer">
-      <div class="data-type">
-        <span class="k">in:</span>  CLI args / Web form<br>
-        <span class="k">out:</span> PipelineConfig dataclass<br>
-        <span class="k">ui:</span>  FastAPI / Streamlit
-      </div>
+<!-- ─── S0: WEBUI CONFIG ─── -->
+<div class="card">
+  <div class="card-top" style="background:var(--c0)"></div>
+  <div class="card-header">
+    <span class="card-num" style="background:var(--c0)">0</span>
+    <span class="card-title" style="color:var(--c0)">WebUI Config</span>
+  </div>
+  <div class="card-scene">
+    <svg width="172" height="104" viewBox="0 0 172 104">
+      <rect width="172" height="104" fill="#0d1117"/>
+      <rect width="172" height="18" fill="#1e2736"/>
+      <text x="8" y="13" font-family="monospace" font-size="8" fill="#64748b" font-weight="bold">OBS CONFIG PANEL</text>
+      <text x="6"  y="30" font-family="monospace" font-size="7.5" fill="#3b82f6">model :</text>
+      <text x="50" y="30" font-family="monospace" font-size="7.5" fill="#e6edf3">yolov8s.engine</text>
+      <text x="6"  y="43" font-family="monospace" font-size="7.5" fill="#3b82f6">source:</text>
+      <text x="50" y="43" font-family="monospace" font-size="7.5" fill="#e6edf3">rtsp / .mp4</text>
+      <text x="6"  y="56" font-family="monospace" font-size="7.5" fill="#3b82f6">roi   :</text>
+      <text x="50" y="56" font-family="monospace" font-size="7.5" fill="#10b981">enabled</text>
+      <text x="6"  y="69" font-family="monospace" font-size="7.5" fill="#3b82f6">fep   :</text>
+      <text x="50" y="69" font-family="monospace" font-size="7.5" fill="#6b7280">disabled</text>
+      <text x="6"  y="82" font-family="monospace" font-size="7.5" fill="#3b82f6">conf  :</text>
+      <text x="50" y="82" font-family="monospace" font-size="7.5" fill="#e6edf3">0.35</text>
+      <text x="95" y="82" font-family="monospace" font-size="7.5" fill="#3b82f6">iou:</text>
+      <text x="113" y="82" font-family="monospace" font-size="7.5" fill="#e6edf3">0.45</text>
+      <rect x="6" y="89" width="160" height="12" fill="#1a2a3a" rx="2" stroke="#64748b" stroke-width="0.8"/>
+      <text x="40" y="98" font-family="monospace" font-size="7.5" fill="#94a3b8">&#9654;  Launch Pipeline</text>
+    </svg>
+  </div>
+  <div class="card-footer">
+    <div class="data-type">
+      <span class="k">in:</span>  CLI args / Web form<br>
+      <span class="k">out:</span> PipelineConfig dataclass<br>
+      <span class="k">ui:</span>  FastAPI / Streamlit
     </div>
   </div>
+</div>
 
-  <!-- connector → -->
-  <div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="5" y="10" font-family="monospace" font-size="7" fill="#555">cfg</text></svg></div>
+<div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="7" y="10" font-family="monospace" font-size="7" fill="#555">cfg</text></svg></div>
 
-  <!-- ─── S1: VIDEO SOURCE ─── -->
-  <div class="card">
-    <div class="card-top" style="background:var(--c1)"></div>
-    <div class="card-header">
-      <span class="card-num" style="background:var(--c1)">1</span>
-      <span class="card-title" style="color:var(--c1)">Video Source</span>
-    </div>
-    <div class="card-scene">
-      <svg width="172" height="104" viewBox="0 0 172 104">
-        <defs>
-          <linearGradient id="sky1" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#7fb3d3"/>
-            <stop offset="100%" stop-color="#aecfe8"/>
-          </linearGradient>
-        </defs>
-        <rect x="0" y="0" width="172" height="40" fill="url(#sky1)"/>
-        <rect x="0" y="40" width="172" height="64" fill="#3a3a3a"/>
-        <line x1="0" y1="40" x2="172" y2="40" stroke="#888" stroke-width="0.5"/>
-        <!-- lane dashes -->
-        <rect x="83" y="48" width="6" height="12" fill="white" opacity="0.65"/>
-        <rect x="83" y="66" width="6" height="12" fill="white" opacity="0.65"/>
-        <rect x="83" y="84" width="6" height="12" fill="white" opacity="0.65"/>
-        <!-- vehicle 1 (car) -->
-        <rect x="14" y="55" width="44" height="28" fill="#c0c0c0" rx="2"/>
-        <rect x="18" y="46" width="36" height="20" fill="#aaaaaa" rx="2"/>
-        <rect x="16" y="75" width="8" height="8" fill="#333" rx="1"/>
-        <rect x="50" y="75" width="8" height="8" fill="#333" rx="1"/>
-        <!-- vehicle 2 (truck) -->
-        <rect x="108" y="48" width="52" height="38" fill="#909090" rx="2"/>
-        <rect x="108" y="48" width="18" height="20" fill="#7a7a7a" rx="1"/>
-        <rect x="110" y="80" width="10" height="8" fill="#333" rx="1"/>
-        <rect x="148" y="80" width="10" height="8" fill="#333" rx="1"/>
-        <!-- badge -->
-        <rect x="3" y="3" width="58" height="14" fill="#000" opacity="0.55" rx="2"/>
-        <text x="7" y="13" font-family="monospace" font-size="8" fill="#3b82f6">VIDEO / RTSP</text>
-        <rect x="115" y="3" width="54" height="14" fill="#000" opacity="0.55" rx="2"/>
-        <text x="119" y="13" font-family="monospace" font-size="8" fill="#888">H×W×3 BGR</text>
-      </svg>
-    </div>
-    <div class="card-footer">
-      <div class="data-type">
-        <span class="k">out:</span> BGR frame batch<br>
-        <span class="k">type:</span> List[np.ndarray]<br>
-        <span class="k">src:</span> cv2.VideoCapture
-      </div>
+<!-- ─── S1: VIDEO SOURCE ─── -->
+<div class="card">
+  <div class="card-top" style="background:var(--c1)"></div>
+  <div class="card-header">
+    <span class="card-num" style="background:var(--c1)">1</span>
+    <span class="card-title" style="color:var(--c1)">Video Source</span>
+  </div>
+  <div class="card-scene">
+    <svg width="172" height="104" viewBox="0 0 172 104">
+      <defs><linearGradient id="sky1" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#7fb3d3"/><stop offset="100%" stop-color="#aecfe8"/></linearGradient></defs>
+      <rect x="0" y="0" width="172" height="40" fill="url(#sky1)"/>
+      <rect x="0" y="40" width="172" height="64" fill="#3a3a3a"/>
+      <rect x="83" y="48" width="6" height="12" fill="white" opacity="0.65"/>
+      <rect x="83" y="66" width="6" height="12" fill="white" opacity="0.65"/>
+      <rect x="83" y="84" width="6" height="12" fill="white" opacity="0.65"/>
+      <rect x="14" y="55" width="44" height="28" fill="#c0c0c0" rx="2"/>
+      <rect x="18" y="46" width="36" height="20" fill="#aaaaaa" rx="2"/>
+      <rect x="16" y="75" width="8" height="8" fill="#333" rx="1"/>
+      <rect x="50" y="75" width="8" height="8" fill="#333" rx="1"/>
+      <rect x="108" y="48" width="52" height="38" fill="#909090" rx="2"/>
+      <rect x="108" y="48" width="18" height="20" fill="#7a7a7a" rx="1"/>
+      <rect x="110" y="80" width="10" height="8" fill="#333" rx="1"/>
+      <rect x="148" y="80" width="10" height="8" fill="#333" rx="1"/>
+      <rect x="3" y="3" width="58" height="14" fill="#000" opacity="0.55" rx="2"/>
+      <text x="7" y="13" font-family="monospace" font-size="8" fill="#3b82f6">VIDEO / RTSP</text>
+      <rect x="115" y="3" width="54" height="14" fill="#000" opacity="0.55" rx="2"/>
+      <text x="119" y="13" font-family="monospace" font-size="8" fill="#888">H×W×3 BGR</text>
+    </svg>
+  </div>
+  <div class="card-footer">
+    <div class="data-type">
+      <span class="k">out:</span> BGR frame batch<br>
+      <span class="k">type:</span> List[np.ndarray]<br>
+      <span class="k">src:</span> cv2.VideoCapture
     </div>
   </div>
+</div>
 
-  <!-- connector → -->
-  <div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="2" y="10" font-family="monospace" font-size="7" fill="#555">frames</text></svg></div>
+<div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="2" y="10" font-family="monospace" font-size="7" fill="#555">frames</text></svg></div>
 
-  <!-- ─── S2: ROI CROP ─── -->
-  <div class="card">
-    <div class="card-top" style="background:var(--c2)"></div>
-    <div class="card-header">
-      <span class="card-num" style="background:var(--c2)">2</span>
-      <span class="card-title" style="color:var(--c2)">ROI Crop</span>
-    </div>
-    <div class="card-scene">
-      <svg width="172" height="104" viewBox="0 0 172 104">
-        <rect x="0" y="0" width="172" height="104" fill="#111"/>
-        <!-- LEFT: full frame (0-80) -->
-        <rect x="0" y="0" width="80" height="38" fill="#7fb3d3"/>
-        <rect x="0" y="38" width="80" height="66" fill="#3a3a3a"/>
-        <!-- ROI trapezoid on full frame -->
-        <polygon points="2,38 78,38 79,102 1,102" fill="#10b981" opacity="0.22"/>
-        <polygon points="2,38 78,38 79,102 1,102" fill="none" stroke="#10b981" stroke-width="1.6" stroke-dasharray="4,2"/>
-        <!-- vehicles ghosted in full frame -->
-        <rect x="5"  y="50" width="18" height="12" fill="#aaaaaa" rx="1" opacity="0.4"/>
-        <rect x="50" y="46" width="24" height="16" fill="#909090" rx="1" opacity="0.4"/>
-        <!-- FULL badge -->
-        <rect x="2" y="2" width="28" height="11" fill="#000" opacity="0.65" rx="1"/>
-        <text x="4" y="10" font-family="monospace" font-size="7.5" fill="#10b981">FULL</text>
-        <!-- arrow -->
-        <line x1="80" y1="52" x2="88" y2="52" stroke="#10b981" stroke-width="1.5"/>
-        <polygon points="85,48 93,52 85,56" fill="#10b981"/>
-        <!-- divider -->
-        <line x1="83" y1="0" x2="83" y2="104" stroke="#30363d" stroke-width="1"/>
-        <!-- RIGHT: cropped region (88-172) -->
-        <rect x="90" y="0" width="82" height="36" fill="#6a9ab8"/>
-        <rect x="90" y="36" width="82" height="68" fill="#3a3a3a"/>
-        <rect x="90" y="0" width="82" height="104" fill="none" stroke="#10b981" stroke-width="1.5"/>
-        <!-- lane dashes in crop -->
-        <rect x="128" y="44" width="4" height="7" fill="white" opacity="0.55"/>
-        <rect x="128" y="58" width="4" height="7" fill="white" opacity="0.55"/>
-        <rect x="128" y="72" width="4" height="7" fill="white" opacity="0.55"/>
-        <rect x="128" y="86" width="4" height="7" fill="white" opacity="0.55"/>
-        <!-- car in crop -->
-        <rect x="93" y="46" width="28" height="18" fill="#c0c0c0" rx="1" opacity="0.75"/>
-        <!-- truck in crop -->
-        <rect x="144" y="40" width="26" height="24" fill="#909090" rx="1" opacity="0.75"/>
-        <!-- CROP badge -->
-        <rect x="92" y="2" width="30" height="11" fill="#000" opacity="0.65" rx="1"/>
-        <text x="94" y="10" font-family="monospace" font-size="7.5" fill="#10b981">CROP</text>
-      </svg>
-    </div>
-    <div class="card-footer">
-      <div class="data-type">
-        <span class="k">out:</span> cropped sub-frame<br>
-        <span class="k">op:</span> RegionSetter bbox crop<br>
-        <span class="k">cfg:</span> ROI profile (trapezoid)
-      </div>
+<!-- ─── S2: ROI CROP ─── -->
+<div class="card">
+  <div class="card-top" style="background:var(--c2)"></div>
+  <div class="card-header">
+    <span class="card-num" style="background:var(--c2)">2</span>
+    <span class="card-title" style="color:var(--c2)">ROI Crop</span>
+  </div>
+  <div class="card-scene">
+    <svg width="172" height="104" viewBox="0 0 172 104">
+      <rect width="172" height="104" fill="#111"/>
+      <rect x="0" y="0" width="80" height="38" fill="#7fb3d3"/>
+      <rect x="0" y="38" width="80" height="66" fill="#3a3a3a"/>
+      <polygon points="2,38 78,38 79,102 1,102" fill="#10b981" opacity="0.22"/>
+      <polygon points="2,38 78,38 79,102 1,102" fill="none" stroke="#10b981" stroke-width="1.6" stroke-dasharray="4,2"/>
+      <rect x="5"  y="50" width="18" height="12" fill="#aaaaaa" rx="1" opacity="0.4"/>
+      <rect x="50" y="46" width="24" height="16" fill="#909090" rx="1" opacity="0.4"/>
+      <rect x="2" y="2" width="28" height="11" fill="#000" opacity="0.65" rx="1"/>
+      <text x="4" y="10" font-family="monospace" font-size="7.5" fill="#10b981">FULL</text>
+      <line x1="80" y1="52" x2="88" y2="52" stroke="#10b981" stroke-width="1.5"/>
+      <polygon points="85,48 93,52 85,56" fill="#10b981"/>
+      <line x1="83" y1="0" x2="83" y2="104" stroke="#30363d" stroke-width="1"/>
+      <rect x="90" y="0" width="82" height="36" fill="#6a9ab8"/>
+      <rect x="90" y="36" width="82" height="68" fill="#3a3a3a"/>
+      <rect x="90" y="0" width="82" height="104" fill="none" stroke="#10b981" stroke-width="1.5"/>
+      <rect x="128" y="44" width="4" height="7" fill="white" opacity="0.55"/>
+      <rect x="128" y="58" width="4" height="7" fill="white" opacity="0.55"/>
+      <rect x="128" y="72" width="4" height="7" fill="white" opacity="0.55"/>
+      <rect x="128" y="86" width="4" height="7" fill="white" opacity="0.55"/>
+      <rect x="93"  y="46" width="28" height="18" fill="#c0c0c0" rx="1" opacity="0.75"/>
+      <rect x="144" y="40" width="26" height="24" fill="#909090" rx="1" opacity="0.75"/>
+      <rect x="92" y="2" width="30" height="11" fill="#000" opacity="0.65" rx="1"/>
+      <text x="94" y="10" font-family="monospace" font-size="7.5" fill="#10b981">CROP</text>
+    </svg>
+  </div>
+  <div class="card-footer">
+    <div class="data-type">
+      <span class="k">out:</span> cropped sub-frame<br>
+      <span class="k">op:</span>  RegionSetter bbox crop<br>
+      <span class="k">cfg:</span> ROI profile (trapezoid)
     </div>
   </div>
+</div>
 
-  <!-- connector → -->
-  <div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="5" y="10" font-family="monospace" font-size="7" fill="#555">crop</text></svg></div>
+<div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="5" y="10" font-family="monospace" font-size="7" fill="#555">crop</text></svg></div>
 
-  <!-- ─── S3: MOTION GATE ─── -->
-  <div class="card">
-    <div class="card-top" style="background:var(--c3)"></div>
-    <div class="card-header">
-      <span class="card-num" style="background:var(--c3)">3</span>
-      <span class="card-title" style="color:var(--c3)">Motion Gate</span>
-    </div>
-    <div class="card-scene">
-      <svg width="172" height="104" viewBox="0 0 172 104">
-        <!-- black bg = no motion area (operates on CROP) -->
-        <rect x="0" y="0" width="172" height="104" fill="#080808"/>
-        <!-- foreground blobs (moving vehicles) -->
-        <ellipse cx="44" cy="68" rx="26" ry="16" fill="white"/>
-        <ellipse cx="134" cy="63" rx="32" ry="20" fill="white"/>
-        <!-- calibration noise -->
-        <ellipse cx="88" cy="28" rx="4" ry="2.5" fill="white" opacity="0.15"/>
-        <!-- unstable-motion map hint -->
-        <rect x="60" y="8" width="40" height="18" fill="none" stroke="#8b5cf6" stroke-width="0.8" stroke-dasharray="3,3" rx="2" opacity="0.5"/>
-        <text x="63" y="20" font-family="monospace" font-size="7" fill="#8b5cf6" opacity="0.7">unstable</text>
-        <!-- lane mask hint (green diagonal) -->
-        <polygon points="8,55 50,55 58,102 0,102" fill="#10b981" opacity="0.15"/>
-        <polygon points="80,50 172,50 172,102 72,102" fill="#10b981" opacity="0.10"/>
-        <!-- motion gate status -->
-        <rect x="3" y="3" width="90" height="14" fill="#1a0a2e" rx="2"/>
-        <text x="7" y="13" font-family="monospace" font-size="8" fill="#8b5cf6">fg_score: 4.3%  YES</text>
-        <!-- on-crop label -->
-        <rect x="3" y="88" width="78" height="13" fill="#1a0a2e" rx="2" opacity="0.9"/>
-        <text x="7" y="98" font-family="monospace" font-size="7.5" fill="#555">no-motion → SKIP</text>
-        <!-- calibration label -->
-        <rect x="100" y="88" width="68" height="13" fill="#1a0a2e" rx="2" opacity="0.9"/>
-        <text x="104" y="98" font-family="monospace" font-size="7" fill="#8b5cf6">YOLO-gated calib.</text>
-      </svg>
-    </div>
-    <div class="card-footer">
-      <div class="data-type">
-        <span class="k">in:</span>  cropped BGR batch<br>
-        <span class="k">out:</span> motion_flags, lanes_mask<br>
-        <span class="k">op:</span>  MOG2 + CC filter @ 320×320
-      </div>
+<!-- ─── S3: MOTION GATE ─── -->
+<div class="card">
+  <div class="card-top" style="background:var(--c3)"></div>
+  <div class="card-header">
+    <span class="card-num" style="background:var(--c3)">3</span>
+    <span class="card-title" style="color:var(--c3)">Motion Gate</span>
+  </div>
+  <div class="card-scene">
+    <svg width="172" height="104" viewBox="0 0 172 104">
+      <rect width="172" height="104" fill="#080808"/>
+      <ellipse cx="44"  cy="68" rx="26" ry="16" fill="white"/>
+      <ellipse cx="134" cy="63" rx="32" ry="20" fill="white"/>
+      <ellipse cx="88"  cy="28" rx="4"  ry="2.5" fill="white" opacity="0.15"/>
+      <rect x="60" y="8" width="40" height="18" fill="none" stroke="#8b5cf6" stroke-width="0.8" stroke-dasharray="3,3" rx="2" opacity="0.5"/>
+      <text x="63" y="20" font-family="monospace" font-size="7" fill="#8b5cf6" opacity="0.7">unstable</text>
+      <polygon points="8,55 50,55 58,102 0,102"   fill="#10b981" opacity="0.15"/>
+      <polygon points="80,50 172,50 172,102 72,102" fill="#10b981" opacity="0.10"/>
+      <rect x="3"  y="3"  width="90" height="14" fill="#1a0a2e" rx="2"/>
+      <text x="7"  y="13" font-family="monospace" font-size="8" fill="#8b5cf6">fg_score: 4.3%  YES</text>
+      <rect x="3"  y="88" width="78" height="13" fill="#1a0a2e" rx="2" opacity="0.9"/>
+      <text x="7"  y="98" font-family="monospace" font-size="7.5" fill="#555">no-motion → SKIP</text>
+      <rect x="100" y="88" width="68" height="13" fill="#1a0a2e" rx="2" opacity="0.9"/>
+      <text x="104" y="98" font-family="monospace" font-size="7" fill="#8b5cf6">YOLO-gated calib.</text>
+    </svg>
+  </div>
+  <div class="card-footer">
+    <div class="data-type">
+      <span class="k">in:</span>  cropped BGR batch<br>
+      <span class="k">out:</span> motion_flags, lane accum.<br>
+      <span class="k">op:</span>  MOG2 + CC filter @ 320×320
     </div>
   </div>
+</div>
 
-  <!-- connector → -->
-  <div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="2" y="10" font-family="monospace" font-size="7" fill="#555">gated</text></svg></div>
+<div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="2" y="10" font-family="monospace" font-size="7" fill="#555">gated</text></svg></div>
 
-  <!-- ─── S4: FEP PROJECTION ─── -->
-  <div class="card">
-    <div class="card-top" style="background:var(--c4)"></div>
-    <div class="card-header">
-      <span class="card-num" style="background:var(--c4)">4</span>
-      <span class="card-title" style="color:var(--c4)">FEP Projection</span>
-      <span class="card-opt">optional</span>
-    </div>
-    <div class="card-scene">
-      <svg width="172" height="104" viewBox="0 0 172 104">
-        <rect x="0" y="0" width="172" height="104" fill="#0e1a24"/>
-        <!-- fisheye circle input -->
-        <circle cx="34" cy="52" r="28" fill="#162536" stroke="#06b6d4" stroke-width="1" stroke-dasharray="4,3"/>
-        <path d="M 16 42 Q 34 37 52 42" fill="none" stroke="#7fb3d3" stroke-width="0.8" opacity="0.5"/>
-        <path d="M 16 52 Q 34 47 52 52" fill="none" stroke="#7fb3d3" stroke-width="0.8" opacity="0.5"/>
-        <path d="M 16 62 Q 34 57 52 62" fill="none" stroke="#7fb3d3" stroke-width="0.8" opacity="0.5"/>
-        <text x="22" y="90" font-family="monospace" font-size="7.5" fill="#06b6d4">fisheye</text>
-        <!-- arrow -->
-        <line x1="65" y1="52" x2="76" y2="52" stroke="#06b6d4" stroke-width="1.5"/>
-        <polygon points="73,48 82,52 73,56" fill="#06b6d4"/>
-        <!-- 4 tangent view tiles (right) -->
-        <rect x="85" y="4"  width="38" height="22" fill="#1a2e3a" rx="2" stroke="#06b6d4" stroke-width="0.8"/>
-        <rect x="85" y="4"  width="38" height="8"  fill="#4a7a99" rx="1"/>
-        <text x="94" y="22" font-family="monospace" font-size="6.5" fill="#06b6d4">TOP</text>
-        <rect x="130" y="4"  width="38" height="22" fill="#1a2e3a" rx="2" stroke="#06b6d4" stroke-width="0.8"/>
-        <rect x="130" y="4"  width="38" height="8"  fill="#4a7a99" rx="1"/>
-        <text x="138" y="22" font-family="monospace" font-size="6.5" fill="#06b6d4">LEFT</text>
-        <rect x="85" y="30" width="38" height="22" fill="#1a2e3a" rx="2" stroke="#06b6d4" stroke-width="0.8"/>
-        <rect x="85" y="30" width="38" height="8"  fill="#4a7a99" rx="1"/>
-        <text x="91" y="48" font-family="monospace" font-size="6.5" fill="#06b6d4">RIGHT</text>
-        <rect x="130" y="30" width="38" height="22" fill="#1a2e3a" rx="2" stroke="#06b6d4" stroke-width="0.8"/>
-        <rect x="130" y="30" width="38" height="8"  fill="#4a7a99" rx="1"/>
-        <text x="135" y="48" font-family="monospace" font-size="6.5" fill="#06b6d4">PERSP</text>
-        <!-- combined output hint -->
-        <rect x="85" y="58" width="83" height="42" fill="#111d26" rx="2" stroke="#06b6d4" stroke-width="0.8"/>
-        <text x="93" y="72" font-family="monospace" font-size="6.5" fill="#06b6d4">all views tiled</text>
-        <text x="93" y="84" font-family="monospace" font-size="6.5" fill="#888">into one figure</text>
-        <text x="93" y="96" font-family="monospace" font-size="6.5" fill="#555">→ s4_fep_*.png</text>
-        <!-- FEP label -->
-        <text x="4" y="103" font-family="monospace" font-size="7" fill="#06b6d4">FishEyeProjection</text>
-      </svg>
-    </div>
-    <div class="card-footer">
-      <div class="data-type">
-        <span class="k">out:</span> rectilinear tile(s)<br>
-        <span class="k">op:</span>  fisheye → tangent views<br>
-        <span class="k">cfg:</span> --fep (fisheye cameras only)
-      </div>
+<!-- ─── S4: FEP PROJECTION + TILING (LARGE) ─── -->
+<div class="card large">
+  <div class="card-top" style="background:var(--c4)"></div>
+  <div class="card-header">
+    <span class="card-num" style="background:var(--c4)">4</span>
+    <span class="card-title" style="color:var(--c4)">FEP Projection · Tiling</span>
+    <span class="card-opt">optional</span>
+  </div>
+  <div class="card-scene">
+    <svg width="280" height="152" viewBox="0 0 280 152">
+      <rect width="280" height="152" fill="#0a1520"/>
+
+      <!-- LEFT: FEP section (0-136) -->
+      <rect x="0" y="0" width="137" height="20" fill="#0e1e2e"/>
+      <text x="8"  y="13" font-family="monospace" font-size="7.5" fill="#06b6d4" font-weight="bold">FEP PROJECTION</text>
+      <text x="8"  y="26" font-family="monospace" font-size="6.5" fill="#06b6d4" opacity="0.55">--fep  (fisheye cameras)</text>
+
+      <!-- fisheye circle -->
+      <circle cx="30" cy="86" r="26" fill="#0d1f2e" stroke="#06b6d4" stroke-width="1" stroke-dasharray="4,3"/>
+      <path d="M 12 79 Q 30 74 48 79" fill="none" stroke="#7fb3d3" stroke-width="0.8" opacity="0.5"/>
+      <path d="M 12 86 Q 30 81 48 86" fill="none" stroke="#7fb3d3" stroke-width="0.8" opacity="0.5"/>
+      <path d="M 12 93 Q 30 88 48 93" fill="none" stroke="#7fb3d3" stroke-width="0.8" opacity="0.5"/>
+      <text x="18" y="121" font-family="monospace" font-size="7" fill="#06b6d4">fisheye</text>
+
+      <!-- arrow -->
+      <line x1="58" y1="86" x2="68" y2="86" stroke="#06b6d4" stroke-width="1.5"/>
+      <polygon points="65,82 74,86 65,90" fill="#06b6d4"/>
+
+      <!-- 4 tangent tiles 2x2 -->
+      <rect x="76" y="33" width="28" height="20" fill="#102030" rx="2" stroke="#06b6d4" stroke-width="0.8"/>
+      <rect x="76" y="33" width="28" height="7"  fill="#3a6080" rx="1"/>
+      <text x="82" y="48" font-family="monospace" font-size="6" fill="#06b6d4">TOP</text>
+
+      <rect x="108" y="33" width="24" height="20" fill="#102030" rx="2" stroke="#06b6d4" stroke-width="0.8"/>
+      <rect x="108" y="33" width="24" height="7"  fill="#3a6080" rx="1"/>
+      <text x="110" y="48" font-family="monospace" font-size="6" fill="#06b6d4">LEFT</text>
+
+      <rect x="76" y="57" width="28" height="20" fill="#102030" rx="2" stroke="#06b6d4" stroke-width="0.8"/>
+      <rect x="76" y="57" width="28" height="7"  fill="#3a6080" rx="1"/>
+      <text x="78" y="72" font-family="monospace" font-size="6" fill="#06b6d4">RIGHT</text>
+
+      <rect x="108" y="57" width="24" height="20" fill="#102030" rx="2" stroke="#06b6d4" stroke-width="0.8"/>
+      <rect x="108" y="57" width="24" height="7"  fill="#3a6080" rx="1"/>
+      <text x="110" y="72" font-family="monospace" font-size="6" fill="#06b6d4">PERSP</text>
+
+      <!-- output note -->
+      <rect x="76" y="83" width="56" height="24" fill="#071520" rx="2" stroke="#06b6d4" stroke-width="0.7"/>
+      <text x="80" y="93" font-family="monospace" font-size="6" fill="#06b6d4">views tiled</text>
+      <text x="80" y="103" font-family="monospace" font-size="6" fill="#555">→ single img</text>
+
+      <rect x="76" y="112" width="56" height="24" fill="#071520" rx="2" stroke="#06b6d4" stroke-width="0.6" stroke-dasharray="3,2"/>
+      <text x="78" y="122" font-family="monospace" font-size="6" fill="#555">s4_fep_*.png</text>
+      <text x="78" y="132" font-family="monospace" font-size="6" fill="#555">per view saved</text>
+
+      <!-- DIVIDER -->
+      <line x1="142" y1="4" x2="142" y2="148" stroke="#30363d" stroke-width="1.5"/>
+
+      <!-- RIGHT: TILING section (144-280) -->
+      <rect x="143" y="0" width="137" height="20" fill="#1a0e28"/>
+      <text x="150" y="13" font-family="monospace" font-size="7.5" fill="#ec4899" font-weight="bold">TILING</text>
+      <text x="150" y="26" font-family="monospace" font-size="6.5" fill="#ec4899" opacity="0.55">--force-tiles  (2×N grid)</text>
+
+      <!-- road scene in tile frame -->
+      <rect x="148" y="33" width="126" height="110" fill="#2a2a2a" rx="2"/>
+      <rect x="148" y="33" width="126" height="26"  fill="#6a9ab8" rx="2"/>
+      <!-- lane dashes -->
+      <rect x="207" y="42" width="4" height="5" fill="white" opacity="0.4"/>
+      <rect x="207" y="55" width="4" height="5" fill="white" opacity="0.4"/>
+      <rect x="207" y="70" width="4" height="5" fill="white" opacity="0.4"/>
+      <rect x="207" y="86" width="4" height="5" fill="white" opacity="0.4"/>
+      <rect x="207" y="102" width="4" height="5" fill="white" opacity="0.4"/>
+      <rect x="207" y="118" width="4" height="5" fill="white" opacity="0.4"/>
+      <!-- vehicles -->
+      <rect x="152" y="68" width="34" height="20" fill="#c0c0c0" rx="1" opacity="0.4"/>
+      <rect x="228" y="60" width="42" height="28" fill="#909090" rx="1" opacity="0.35"/>
+      <!-- grid lines -->
+      <line x1="211" y1="33"  x2="211" y2="143" stroke="#ec4899" stroke-width="1.8"/>
+      <line x1="148" y1="88"  x2="274" y2="88"  stroke="#ec4899" stroke-width="1.8"/>
+      <!-- tile labels -->
+      <text x="153" y="47" font-family="monospace" font-size="7" fill="#ec4899" font-weight="bold">T0</text>
+      <text x="214" y="47" font-family="monospace" font-size="7" fill="#ec4899" font-weight="bold">T1</text>
+      <text x="153" y="102" font-family="monospace" font-size="7" fill="#ec4899" font-weight="bold">T2</text>
+      <text x="214" y="102" font-family="monospace" font-size="7" fill="#ec4899" font-weight="bold">T3</text>
+    </svg>
+  </div>
+  <div class="card-footer">
+    <div class="data-type">
+      <span class="k">FEP:</span>   fisheye → rectilinear tangent views<br>
+      <span class="k">Tiling:</span> TileActivation 2×N grid split<br>
+      <span class="k">cfg:</span>   --fep · --force-tiles (independent)
     </div>
   </div>
+</div>
 
-  <!-- connector → -->
-  <div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="4" y="10" font-family="monospace" font-size="7" fill="#555">views</text></svg></div>
+<!-- connector → amber (tensor) -->
+<div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#f59e0b" stroke-width="1.8"/><polygon points="27,10 36,14 27,18" fill="#f59e0b"/><text x="2" y="10" font-family="monospace" font-size="7" fill="#f59e0b">tensor</text></svg></div>
 
-  <!-- ─── S5: TILING ─── -->
-  <div class="card">
-    <div class="card-top" style="background:var(--c5)"></div>
-    <div class="card-header">
-      <span class="card-num" style="background:var(--c5)">5</span>
-      <span class="card-title" style="color:var(--c5)">Tiling</span>
-      <span class="card-opt">optional</span>
-    </div>
-    <div class="card-scene">
-      <svg width="172" height="104" viewBox="0 0 172 104">
-        <!-- background = cropped road frame -->
-        <rect x="0" y="0" width="172" height="104" fill="#2e2e2e"/>
-        <!-- sky strip in crop -->
-        <rect x="0" y="0" width="172" height="28" fill="#6a9ab8"/>
-        <!-- lane dashes -->
-        <rect x="83" y="30" width="5" height="8"  fill="white" opacity="0.45"/>
-        <rect x="83" y="46" width="5" height="8"  fill="white" opacity="0.45"/>
-        <rect x="83" y="62" width="5" height="8"  fill="white" opacity="0.45"/>
-        <rect x="83" y="78" width="5" height="8"  fill="white" opacity="0.45"/>
-        <!-- vehicles (faint) -->
-        <rect x="14" y="44" width="38" height="22" fill="#c0c0c0" rx="1" opacity="0.35"/>
-        <rect x="112" y="38" width="46" height="30" fill="#909090" rx="1" opacity="0.35"/>
-        <!-- tile grid lines -->
-        <line x1="86" y1="0"   x2="86"  y2="104" stroke="#ec4899" stroke-width="1.8"/>
-        <line x1="0"  y1="52"  x2="172" y2="52"  stroke="#ec4899" stroke-width="1.8"/>
-        <!-- tile labels -->
-        <text x="6"  y="14" font-family="monospace" font-size="8" fill="#ec4899" font-weight="bold">Tile 0</text>
-        <text x="92" y="14" font-family="monospace" font-size="8" fill="#ec4899" font-weight="bold">Tile 1</text>
-        <text x="6"  y="66" font-family="monospace" font-size="8" fill="#ec4899" font-weight="bold">Tile 2</text>
-        <text x="92" y="66" font-family="monospace" font-size="8" fill="#ec4899" font-weight="bold">Tile 3</text>
-        <!-- active tile highlight -->
-        <rect x="87" y="53" width="85" height="51" fill="#ec4899" opacity="0.08"/>
-        <!-- info badge -->
-        <rect x="3" y="88" width="70" height="13" fill="#000" opacity="0.55" rx="2"/>
-        <text x="6" y="98" font-family="monospace" font-size="7.5" fill="#ec4899">2×2 grid</text>
-      </svg>
-    </div>
-    <div class="card-footer">
-      <div class="data-type">
-        <span class="k">out:</span> N sub-tile frames<br>
-        <span class="k">op:</span>  TileActivation split<br>
-        <span class="k">cfg:</span> --force-tiles / profile
-      </div>
+<!-- ─── S5: BACKEND INFERENCE (LARGE) ─── -->
+<div class="card large">
+  <div class="card-top" style="background:var(--c5)"></div>
+  <div class="card-header">
+    <span class="card-num" style="background:var(--c5)">5</span>
+    <span class="card-title" style="color:var(--c5)">Backend Inference</span>
+  </div>
+  <div class="card-scene">
+    <svg width="280" height="152" viewBox="0 0 280 152">
+      <defs><linearGradient id="sky5" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#7fb3d3"/><stop offset="100%" stop-color="#aecfe8"/></linearGradient></defs>
+      <rect x="0"   y="0"   width="280" height="52"  fill="url(#sky5)"/>
+      <rect x="0"   y="52"  width="280" height="100" fill="#3a3a3a"/>
+      <rect x="136" y="60"  width="8"   height="14"  fill="white" opacity="0.6"/>
+      <rect x="136" y="82"  width="8"   height="14"  fill="white" opacity="0.6"/>
+      <rect x="136" y="104" width="8"   height="14"  fill="white" opacity="0.6"/>
+      <rect x="136" y="126" width="8"   height="14"  fill="white" opacity="0.6"/>
+      <rect x="16" y="58" width="70" height="50" fill="none" stroke="#00e676" stroke-width="2"/>
+      <rect x="16" y="58" width="68" height="15" fill="#00e676" opacity="0.85"/>
+      <text x="19" y="69" font-family="monospace" font-size="9" fill="#000" font-weight="bold">car  0.89</text>
+      <rect x="20" y="72" width="62" height="32" fill="#b8b8b8" rx="2" opacity="0.6"/>
+      <rect x="26" y="64" width="50" height="18" fill="#aaaaaa" rx="2" opacity="0.6"/>
+      <rect x="168" y="48" width="96" height="70" fill="none" stroke="#00e676" stroke-width="2"/>
+      <rect x="168" y="48" width="80" height="15" fill="#00e676" opacity="0.85"/>
+      <text x="171" y="59" font-family="monospace" font-size="9" fill="#000" font-weight="bold">truck  0.94</text>
+      <rect x="172" y="62" width="88" height="50" fill="#909090" rx="2" opacity="0.6"/>
+      <rect x="172" y="62" width="26" height="28" fill="#7a7a7a" rx="1" opacity="0.6"/>
+      <rect x="4"   y="4" width="36" height="16" fill="#1c1208" rx="3" stroke="#f59e0b" stroke-width="1"/>
+      <text x="8"   y="14" font-family="monospace" font-size="8" fill="#f59e0b" font-weight="bold">.pt</text>
+      <rect x="44"  y="4" width="46" height="16" fill="#1c1208" rx="3" stroke="#f59e0b" stroke-width="1"/>
+      <text x="48"  y="14" font-family="monospace" font-size="8" fill="#f59e0b" font-weight="bold">.onnx</text>
+      <rect x="94"  y="4" width="62" height="16" fill="#1c1208" rx="3" stroke="#f59e0b" stroke-width="1"/>
+      <text x="98"  y="14" font-family="monospace" font-size="8" fill="#f59e0b" font-weight="bold">.engine</text>
+      <rect x="160" y="4" width="56" height="16" fill="#1c1208" rx="3" stroke="#f59e0b" stroke-width="1" stroke-dasharray="3,2"/>
+      <text x="164" y="14" font-family="monospace" font-size="8" fill="#888">TensorRT</text>
+      <rect x="0" y="136" width="280" height="16" fill="#1c1c1c" opacity="0.7"/>
+      <text x="6" y="147" font-family="monospace" font-size="8" fill="#f59e0b">LetterBox → [B, 3, 640, 640]  FP32 / FP16  · YOLOv8s</text>
+    </svg>
+  </div>
+  <div class="card-footer">
+    <div class="data-type">
+      <span class="k">in:</span>  [B,3,640,640] letterboxed tensor<br>
+      <span class="k">out:</span> raw dets [N×(x,y,x,y,conf,cls)]<br>
+      <span class="k">model:</span> YOLOv8s
     </div>
   </div>
+</div>
 
-  <!-- connector → (amber = tensor path to inference) -->
-  <div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#f59e0b" stroke-width="1.8"/><polygon points="27,10 36,14 27,18" fill="#f59e0b"/><text x="2" y="10" font-family="monospace" font-size="7" fill="#f59e0b">tensor</text></svg></div>
+<div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="4" y="10" font-family="monospace" font-size="7" fill="#555">dets</text></svg></div>
 
-  <!-- ─── S6: BACKEND INFERENCE (LARGE) ─── -->
-  <div class="card large">
-    <div class="card-top" style="background:var(--c6)"></div>
-    <div class="card-header">
-      <span class="card-num" style="background:var(--c6)">6</span>
-      <span class="card-title" style="color:var(--c6)">Backend Inference</span>
-    </div>
-    <div class="card-scene">
-      <svg width="280" height="152" viewBox="0 0 280 152">
-        <defs>
-          <linearGradient id="sky6" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#7fb3d3"/>
-            <stop offset="100%" stop-color="#aecfe8"/>
-          </linearGradient>
-        </defs>
-        <rect x="0" y="0" width="280" height="52" fill="url(#sky6)"/>
-        <rect x="0" y="52" width="280" height="100" fill="#3a3a3a"/>
-        <rect x="136" y="60" width="8" height="14" fill="white" opacity="0.6"/>
-        <rect x="136" y="82" width="8" height="14" fill="white" opacity="0.6"/>
-        <rect x="136" y="104" width="8" height="14" fill="white" opacity="0.6"/>
-        <rect x="136" y="126" width="8" height="14" fill="white" opacity="0.6"/>
-        <!-- Detection: car (green bbox) -->
-        <rect x="16" y="58" width="70" height="50" fill="none" stroke="#00e676" stroke-width="2"/>
-        <rect x="16" y="58" width="68" height="15" fill="#00e676" opacity="0.85"/>
-        <text x="19" y="69" font-family="monospace" font-size="9" fill="#000" font-weight="bold">car  0.89</text>
-        <rect x="20" y="72" width="62" height="32" fill="#b8b8b8" rx="2" opacity="0.6"/>
-        <rect x="26" y="64" width="50" height="18" fill="#aaaaaa" rx="2" opacity="0.6"/>
-        <!-- Detection: truck (green bbox) -->
-        <rect x="168" y="48" width="96" height="70" fill="none" stroke="#00e676" stroke-width="2"/>
-        <rect x="168" y="48" width="80" height="15" fill="#00e676" opacity="0.85"/>
-        <text x="171" y="59" font-family="monospace" font-size="9" fill="#000" font-weight="bold">truck  0.94</text>
-        <rect x="172" y="62" width="88" height="50" fill="#909090" rx="2" opacity="0.6"/>
-        <rect x="172" y="62" width="26" height="28" fill="#7a7a7a" rx="1" opacity="0.6"/>
-        <!-- Backend format badges -->
-        <rect x="4"   y="4" width="36" height="16" fill="#1c1208" rx="3" stroke="#f59e0b" stroke-width="1"/>
-        <text x="8"   y="14" font-family="monospace" font-size="8" fill="#f59e0b" font-weight="bold">.pt</text>
-        <rect x="44"  y="4" width="46" height="16" fill="#1c1208" rx="3" stroke="#f59e0b" stroke-width="1"/>
-        <text x="48"  y="14" font-family="monospace" font-size="8" fill="#f59e0b" font-weight="bold">.onnx</text>
-        <rect x="94"  y="4" width="62" height="16" fill="#1c1208" rx="3" stroke="#f59e0b" stroke-width="1"/>
-        <text x="98"  y="14" font-family="monospace" font-size="8" fill="#f59e0b" font-weight="bold">.engine</text>
-        <rect x="160" y="4" width="56" height="16" fill="#1c1208" rx="3" stroke="#f59e0b" stroke-width="1" stroke-dasharray="3,2"/>
-        <text x="164" y="14" font-family="monospace" font-size="8" fill="#888">TensorRT</text>
-        <!-- Model label -->
-        <rect x="0" y="136" width="280" height="16" fill="#1c1c1c" opacity="0.7"/>
-        <text x="6" y="147" font-family="monospace" font-size="8" fill="#f59e0b">LetterBox → [B, 3, 640, 640]  FP32 / FP16  · YOLOv8s</text>
-      </svg>
-    </div>
-    <div class="card-footer">
-      <div class="data-type">
-        <span class="k">in:</span>  [B,3,640,640] letterboxed tensor<br>
-        <span class="k">out:</span> raw dets [N×(x,y,x,y,conf,cls)]<br>
-        <span class="k">model:</span> YOLOv8s · NMS inside
-      </div>
+<!-- ─── S6: LANE DETECTION ─── -->
+<div class="card">
+  <div class="card-top" style="background:var(--c6)"></div>
+  <div class="card-header">
+    <span class="card-num" style="background:var(--c6); color:#000">6</span>
+    <span class="card-title" style="color:var(--c6)">Lane Detection</span>
+  </div>
+  <div class="card-scene">
+    <svg width="172" height="104" viewBox="0 0 172 104">
+      <rect width="172" height="104" fill="#1a1a1a"/>
+      <!-- lane zone -->
+      <polygon points="14,10 158,10 165,100 7,100" fill="#f59e0b" opacity="0.10"/>
+      <polygon points="14,10 158,10 165,100 7,100" fill="none" stroke="#f59e0b" stroke-width="1" stroke-dasharray="5,3" opacity="0.5"/>
+      <!-- accumulated lane lines -->
+      <line x1="52"  y1="15" x2="42"  y2="102" stroke="#84cc16" stroke-width="2.5" opacity="0.85"/>
+      <line x1="86"  y1="15" x2="86"  y2="102" stroke="white"   stroke-width="1.5" opacity="0.3" stroke-dasharray="6,5"/>
+      <line x1="120" y1="15" x2="130" y2="102" stroke="#84cc16" stroke-width="2.5" opacity="0.85"/>
+      <!-- vehicles ghosted -->
+      <rect x="20" y="40" width="36" height="22" fill="#c0c0c0" rx="1" opacity="0.22"/>
+      <rect x="110" y="36" width="48" height="28" fill="#909090" rx="1" opacity="0.22"/>
+      <!-- status -->
+      <rect x="3" y="3"  width="108" height="14" fill="#0a1a0a" rx="2"/>
+      <text x="7" y="13" font-family="monospace" font-size="8" fill="#84cc16">acc. frames: 847</text>
+      <rect x="3" y="20" width="90"  height="13" fill="#0a1a0a" rx="2"/>
+      <text x="7" y="30" font-family="monospace" font-size="7.5" fill="#84cc16">confidence: HIGH</text>
+      <rect x="3" y="89" width="165" height="13" fill="#000" opacity="0.55" rx="2"/>
+      <text x="7" y="99" font-family="monospace" font-size="7" fill="#555">vehicle-confirmed frames only</text>
+    </svg>
+  </div>
+  <div class="card-footer">
+    <div class="data-type">
+      <span class="k">out:</span> lanes_mask, lane_polygon<br>
+      <span class="k">op:</span>  MOG2 accumulator (S3)<br>
+      <span class="k">feed:</span> via notify_vehicle_detections
     </div>
   </div>
+</div>
 
-  <!-- connector → -->
-  <div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="4" y="10" font-family="monospace" font-size="7" fill="#555">dets</text></svg></div>
+<div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="5" y="10" font-family="monospace" font-size="7" fill="#555">filt.</text></svg></div>
 
-  <!-- ─── S7: POST-PROCESSING ─── -->
-  <div class="card">
-    <div class="card-top" style="background:var(--c7)"></div>
-    <div class="card-header">
-      <span class="card-num" style="background:var(--c7)">7</span>
-      <span class="card-title" style="color:var(--c7)">Post-Process</span>
-    </div>
-    <div class="card-scene">
-      <svg width="172" height="104" viewBox="0 0 172 104">
-        <rect x="0" y="0" width="172" height="38" fill="#7fb3d3"/>
-        <rect x="0" y="38" width="172" height="66" fill="#3a3a3a"/>
-        <!-- lane mask overlay -->
-        <polygon points="8,38 164,38 170,102 2,102" fill="#f59e0b" opacity="0.10"/>
-        <polygon points="8,38 164,38 170,102 2,102" fill="none" stroke="#f59e0b" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
-        <!-- Car bbox KEPT -->
-        <rect x="12" y="44" width="46" height="32" fill="none" stroke="#00e676" stroke-width="1.8"/>
-        <rect x="12" y="44" width="36" height="12" fill="#00e676" opacity="0.85"/>
-        <text x="14" y="53" font-family="monospace" font-size="7.5" fill="#000" font-weight="bold">car ✓</text>
-        <!-- Truck bbox KEPT -->
-        <rect x="106" y="40" width="56" height="42" fill="none" stroke="#00e676" stroke-width="1.8"/>
-        <rect x="106" y="40" width="44" height="12" fill="#00e676" opacity="0.85"/>
-        <text x="108" y="49" font-family="monospace" font-size="7.5" fill="#000" font-weight="bold">truck ✓</text>
-        <!-- Person FILTERED -->
-        <rect x="62" y="44" width="22" height="34" fill="none" stroke="#ef4444" stroke-width="1.2" stroke-dasharray="3,2.5" opacity="0.6"/>
-        <line x1="62" y1="44" x2="84" y2="78" stroke="#ef4444" stroke-width="1.5" opacity="0.7"/>
-        <line x1="84" y1="44" x2="62" y2="78" stroke="#ef4444" stroke-width="1.5" opacity="0.7"/>
-        <rect x="62" y="44" width="30" height="11" fill="#ef4444" opacity="0.65"/>
-        <text x="64" y="52" font-family="monospace" font-size="7" fill="white">person ✗</text>
-        <!-- labels -->
-        <rect x="3" y="90" width="90" height="12" fill="#000" opacity="0.5" rx="2"/>
-        <text x="6" y="99" font-family="monospace" font-size="7.5" fill="#ef4444">NMS · class filter</text>
-        <rect x="97" y="90" width="72" height="12" fill="#000" opacity="0.5" rx="2"/>
-        <text x="100" y="99" font-family="monospace" font-size="7" fill="#ef4444">cross-view NMS</text>
-      </svg>
-    </div>
-    <div class="card-footer">
-      <div class="data-type">
-        <span class="k">out:</span> FrameDetections (filtered)<br>
-        <span class="k">op:</span>  class whitelist + cross-view NMS<br>
-        <span class="k">feed:</span> vehicle idxs → calib. (S3)
-      </div>
+<!-- ─── S7: POST-PROCESS ─── -->
+<div class="card">
+  <div class="card-top" style="background:var(--c7)"></div>
+  <div class="card-header">
+    <span class="card-num" style="background:var(--c7)">7</span>
+    <span class="card-title" style="color:var(--c7)">Post-Process</span>
+  </div>
+  <div class="card-scene">
+    <svg width="172" height="104" viewBox="0 0 172 104">
+      <rect x="0" y="0" width="172" height="38" fill="#7fb3d3"/>
+      <rect x="0" y="38" width="172" height="66" fill="#3a3a3a"/>
+      <polygon points="8,38 164,38 170,102 2,102" fill="#f59e0b" opacity="0.09"/>
+      <rect x="12" y="44" width="46" height="32" fill="none" stroke="#00e676" stroke-width="1.8"/>
+      <rect x="12" y="44" width="36" height="12" fill="#00e676" opacity="0.85"/>
+      <text x="14" y="53" font-family="monospace" font-size="7.5" fill="#000" font-weight="bold">car ✓</text>
+      <rect x="106" y="40" width="56" height="42" fill="none" stroke="#00e676" stroke-width="1.8"/>
+      <rect x="106" y="40" width="44" height="12" fill="#00e676" opacity="0.85"/>
+      <text x="108" y="49" font-family="monospace" font-size="7.5" fill="#000" font-weight="bold">truck ✓</text>
+      <rect x="62" y="44" width="22" height="34" fill="none" stroke="#ef4444" stroke-width="1.2" stroke-dasharray="3,2.5" opacity="0.6"/>
+      <line x1="62" y1="44" x2="84" y2="78" stroke="#ef4444" stroke-width="1.5" opacity="0.7"/>
+      <line x1="84" y1="44" x2="62" y2="78" stroke="#ef4444" stroke-width="1.5" opacity="0.7"/>
+      <rect x="62" y="44" width="30" height="11" fill="#ef4444" opacity="0.65"/>
+      <text x="64" y="52" font-family="monospace" font-size="7" fill="white">person ✗</text>
+      <rect x="3"  y="90" width="90" height="12" fill="#000" opacity="0.5" rx="2"/>
+      <text x="6"  y="99" font-family="monospace" font-size="7.5" fill="#ef4444">NMS · class filter</text>
+      <rect x="97" y="90" width="72" height="12" fill="#000" opacity="0.5" rx="2"/>
+      <text x="100" y="99" font-family="monospace" font-size="7" fill="#ef4444">cross-view NMS</text>
+    </svg>
+  </div>
+  <div class="card-footer">
+    <div class="data-type">
+      <span class="k">out:</span> FrameDetections (filtered)<br>
+      <span class="k">op:</span>  class whitelist + cross-view NMS<br>
+      <span class="k">feed:</span> vehicle idxs → calib. (S3)
     </div>
   </div>
+</div>
 
-  <!-- connector → -->
-  <div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="5" y="10" font-family="monospace" font-size="7" fill="#555">filt.</text></svg></div>
+<div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="2" y="10" font-family="monospace" font-size="7" fill="#555">tracks</text></svg></div>
 
-  <!-- ─── S8: TRACKER ─── -->
-  <div class="card">
-    <div class="card-top" style="background:var(--c8)"></div>
-    <div class="card-header">
-      <span class="card-num" style="background:var(--c8)">8</span>
-      <span class="card-title" style="color:var(--c8)">Tracker</span>
-    </div>
-    <div class="card-scene">
-      <svg width="172" height="104" viewBox="0 0 172 104">
-        <rect x="0" y="0" width="172" height="38" fill="#7fb3d3"/>
-        <rect x="0" y="38" width="172" height="66" fill="#3a3a3a"/>
-        <rect x="82" y="44" width="5" height="10" fill="white" opacity="0.5"/>
-        <rect x="82" y="62" width="5" height="10" fill="white" opacity="0.5"/>
-        <rect x="82" y="80" width="5" height="10" fill="white" opacity="0.5"/>
-        <!-- Track 3: car yellow -->
-        <rect x="12" y="44" width="46" height="32" fill="none" stroke="#ffff00" stroke-width="2"/>
-        <rect x="12" y="32" width="32" height="14" fill="#ffff00" rx="2"/>
-        <text x="15" y="42" font-family="monospace" font-size="8.5" fill="#000" font-weight="bold">T #3</text>
-        <circle cx="35" cy="58" r="2.5" fill="#ffff00" opacity="0.4"/>
-        <circle cx="34" cy="72" r="2"   fill="#ffff00" opacity="0.25"/>
-        <circle cx="33" cy="86" r="1.5" fill="#ffff00" opacity="0.15"/>
-        <!-- Track 7: truck cyan -->
-        <rect x="106" y="40" width="56" height="42" fill="none" stroke="#00ffff" stroke-width="2"/>
-        <rect x="106" y="28" width="32" height="14" fill="#00ffff" rx="2"/>
-        <text x="109" y="38" font-family="monospace" font-size="8.5" fill="#000" font-weight="bold">T #7</text>
-        <circle cx="134" cy="60" r="2.5" fill="#00ffff" opacity="0.4"/>
-        <circle cx="133" cy="74" r="2"   fill="#00ffff" opacity="0.25"/>
-        <!-- byte tracker label -->
-        <rect x="3" y="90" width="86" height="12" fill="#000" opacity="0.5" rx="2"/>
-        <text x="6" y="99" font-family="monospace" font-size="7.5" fill="#a855f7">ByteTrack</text>
-        <text x="94" y="99" font-family="monospace" font-size="7" fill="#555">hist: 30fr</text>
-      </svg>
-    </div>
-    <div class="card-footer">
-      <div class="data-type">
-        <span class="k">out:</span> sv.Detections + track_id<br>
-        <span class="k">op:</span>  ByteTrack<br>
-        <span class="k">hist:</span> 30-frame centroid trail
-      </div>
+<!-- ─── S8: TRACKER ─── -->
+<div class="card">
+  <div class="card-top" style="background:var(--c8)"></div>
+  <div class="card-header">
+    <span class="card-num" style="background:var(--c8)">8</span>
+    <span class="card-title" style="color:var(--c8)">Tracker</span>
+  </div>
+  <div class="card-scene">
+    <svg width="172" height="104" viewBox="0 0 172 104">
+      <rect x="0" y="0" width="172" height="38" fill="#7fb3d3"/>
+      <rect x="0" y="38" width="172" height="66" fill="#3a3a3a"/>
+      <rect x="82" y="44" width="5" height="10" fill="white" opacity="0.5"/>
+      <rect x="82" y="62" width="5" height="10" fill="white" opacity="0.5"/>
+      <rect x="82" y="80" width="5" height="10" fill="white" opacity="0.5"/>
+      <rect x="12" y="44" width="46" height="32" fill="none" stroke="#ffff00" stroke-width="2"/>
+      <rect x="12" y="32" width="32" height="14" fill="#ffff00" rx="2"/>
+      <text x="15" y="42" font-family="monospace" font-size="8.5" fill="#000" font-weight="bold">T #3</text>
+      <circle cx="35" cy="58" r="2.5" fill="#ffff00" opacity="0.4"/>
+      <circle cx="34" cy="72" r="2"   fill="#ffff00" opacity="0.25"/>
+      <circle cx="33" cy="86" r="1.5" fill="#ffff00" opacity="0.15"/>
+      <rect x="106" y="40" width="56" height="42" fill="none" stroke="#00ffff" stroke-width="2"/>
+      <rect x="106" y="28" width="32" height="14" fill="#00ffff" rx="2"/>
+      <text x="109" y="38" font-family="monospace" font-size="8.5" fill="#000" font-weight="bold">T #7</text>
+      <circle cx="134" cy="60" r="2.5" fill="#00ffff" opacity="0.4"/>
+      <circle cx="133" cy="74" r="2"   fill="#00ffff" opacity="0.25"/>
+      <rect x="3" y="90" width="86" height="12" fill="#000" opacity="0.5" rx="2"/>
+      <text x="6" y="99" font-family="monospace" font-size="7.5" fill="#a855f7">ByteTrack</text>
+      <text x="94" y="99" font-family="monospace" font-size="7" fill="#555">hist: 30fr</text>
+    </svg>
+  </div>
+  <div class="card-footer">
+    <div class="data-type">
+      <span class="k">out:</span> sv.Detections + track_id<br>
+      <span class="k">op:</span>  ByteTrack<br>
+      <span class="k">hist:</span> 30-frame centroid trail
     </div>
   </div>
+</div>
 
-  <!-- connector → -->
-  <div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="2" y="10" font-family="monospace" font-size="7" fill="#555">tracks</text></svg></div>
+<div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="4" y="10" font-family="monospace" font-size="7" fill="#555">evts</text></svg></div>
 
-  <!-- ─── S9: FINAL OUTPUT ─── -->
-  <div class="card">
-    <div class="card-top" style="background:var(--c9)"></div>
-    <div class="card-header">
-      <span class="card-num" style="background:var(--c9)">9</span>
-      <span class="card-title" style="color:var(--c9)">Output</span>
-    </div>
-    <div class="card-scene">
-      <svg width="172" height="104" viewBox="0 0 172 104">
-        <defs>
-          <linearGradient id="sky9" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#7fb3d3"/>
-            <stop offset="100%" stop-color="#aecfe8"/>
-          </linearGradient>
-        </defs>
-        <!-- full original frame -->
-        <rect x="0" y="0" width="172" height="38" fill="url(#sky9)"/>
-        <rect x="0" y="38" width="172" height="66" fill="#3a3a3a"/>
-        <!-- ROI region overlay on original (trapezoid outline) -->
-        <polygon points="6,38 166,38 170,102 2,102" fill="#10b981" opacity="0.10"/>
-        <polygon points="6,38 166,38 170,102 2,102" fill="none" stroke="#10b981" stroke-width="1.2" stroke-dasharray="4,2"/>
-        <!-- lane mask inside ROI (amber) -->
-        <polygon points="6,38 166,38 170,102 2,102" fill="#f59e0b" opacity="0.09"/>
-        <!-- hazard zone (red) -->
-        <polygon points="70,42 168,42 172,102 64,102" fill="#ef4444" opacity="0.18"/>
-        <polygon points="70,42 168,42 172,102 64,102" fill="none" stroke="#ef4444" stroke-width="1"/>
-        <!-- Safe car T#3 (yellow) -->
-        <rect x="8"  y="44" width="46" height="30" fill="none" stroke="#ffff00" stroke-width="1.8"/>
-        <rect x="8"  y="33" width="28" height="13" fill="#ffff00" rx="2"/>
-        <text x="10" y="43" font-family="monospace" font-size="7.5" fill="#000" font-weight="bold">T#3</text>
-        <text x="8"  y="55" font-family="monospace" font-size="6.5" fill="#ffff00">safe</text>
-        <!-- Hazard truck T#7 (red) -->
-        <rect x="106" y="38" width="58" height="46" fill="none" stroke="#ef4444" stroke-width="2"/>
-        <rect x="106" y="27" width="28" height="13" fill="#ef4444" rx="2"/>
-        <text x="108" y="37" font-family="monospace" font-size="7.5" fill="white" font-weight="bold">T#7</text>
-        <!-- warning triangle -->
-        <polygon points="135,44 148,66 122,66" fill="#ef4444" opacity="0.88"/>
-        <text x="132" y="62" font-family="monospace" font-size="10" fill="white" font-weight="bold">!</text>
-        <!-- hazard event badge -->
-        <rect x="3" y="3" width="88" height="13" fill="#2a0a0a" rx="2" opacity="0.9"/>
-        <text x="6" y="13" font-family="monospace" font-size="7.5" fill="#ef4444">&#9888; obstacle_in_lane</text>
-        <!-- MQTT + save labels -->
-        <rect x="3" y="90" width="165" height="12" fill="#000" opacity="0.5" rx="2"/>
-        <text x="6" y="99" font-family="monospace" font-size="7" fill="#f97316">CBOR/MQTT · MJPEG preview · .mp4 save</text>
-      </svg>
-    </div>
-    <div class="card-footer">
-      <div class="data-type">
-        <span class="k">out:</span> annotated full-frame video<br>
-        <span class="k">      </span> ROI + lane + hazard overlay<br>
-        <span class="k">mqtt:</span> CBOR crop · MJPEG preview
-      </div>
+<!-- ─── S9: HAZARD DETECTION ─── -->
+<div class="card">
+  <div class="card-top" style="background:var(--c9)"></div>
+  <div class="card-header">
+    <span class="card-num" style="background:var(--c9)">9</span>
+    <span class="card-title" style="color:var(--c9)">Hazard Detection</span>
+  </div>
+  <div class="card-scene">
+    <svg width="172" height="104" viewBox="0 0 172 104">
+      <rect width="172" height="104" fill="#1a1a1a"/>
+      <!-- lane zone -->
+      <polygon points="14,8 158,8 166,102 6,102" fill="#f59e0b" opacity="0.10"/>
+      <polygon points="14,8 158,8 166,102 6,102" fill="none" stroke="#f59e0b" stroke-width="1" stroke-dasharray="5,3"/>
+      <!-- lane lines -->
+      <line x1="52"  y1="10" x2="42"  y2="102" stroke="#84cc16" stroke-width="2" opacity="0.7"/>
+      <line x1="120" y1="10" x2="130" y2="102" stroke="#84cc16" stroke-width="2" opacity="0.7"/>
+      <!-- hazard zone between lane lines -->
+      <polygon points="52,10 120,10 130,102 42,102" fill="#ef4444" opacity="0.18"/>
+      <polygon points="52,10 120,10 130,102 42,102" fill="none" stroke="#ef4444" stroke-width="1.2"/>
+      <!-- safe car (yellow, left of zone) -->
+      <rect x="4" y="44" width="32" height="22" fill="none" stroke="#ffff00" stroke-width="1.5"/>
+      <rect x="4" y="38" width="22" height="11" fill="#ffff00" rx="2"/>
+      <text x="5" y="46" font-family="monospace" font-size="7" fill="#000" font-weight="bold">T#3</text>
+      <text x="4" y="57" font-family="monospace" font-size="6.5" fill="#ffff00">safe</text>
+      <!-- hazard truck (red, inside zone) -->
+      <rect x="58" y="36" width="52" height="40" fill="none" stroke="#ef4444" stroke-width="2"/>
+      <rect x="58" y="29" width="24" height="11" fill="#ef4444" rx="2"/>
+      <text x="59" y="37" font-family="monospace" font-size="7" fill="white" font-weight="bold">T#7</text>
+      <!-- warning triangle -->
+      <polygon points="83,42 96,64 70,64" fill="#ef4444" opacity="0.9"/>
+      <text x="80" y="61" font-family="monospace" font-size="10" fill="white" font-weight="bold">!</text>
+      <!-- event label -->
+      <rect x="2" y="2" width="106" height="13" fill="#2a0a0a" rx="2"/>
+      <text x="5" y="12" font-family="monospace" font-size="7.5" fill="#ef4444">&#9888; obstacle_in_lane</text>
+      <!-- HAZ badge -->
+      <rect x="120" y="40" width="48" height="13" fill="#ef4444" rx="2"/>
+      <text x="123" y="50" font-family="monospace" font-size="7.5" fill="white" font-weight="bold">HAZ T#7</text>
+      <!-- bottom -->
+      <rect x="2"  y="89" width="168" height="13" fill="#000" opacity="0.55" rx="2"/>
+      <text x="5"  y="99" font-family="monospace" font-size="7" fill="#f97316">lane intersect · dwell count</text>
+    </svg>
+  </div>
+  <div class="card-footer">
+    <div class="data-type">
+      <span class="k">out:</span> HazardEvent (track_id, type)<br>
+      <span class="k">op:</span>  lane bbox intersect + dwell<br>
+      <span class="k">evt:</span> obstacle_in_lane · slow_vehicle
     </div>
   </div>
+</div>
+
+<div class="conn"><svg width="36" height="28" viewBox="0 0 36 28"><line x1="0" y1="14" x2="27" y2="14" stroke="#7d8590" stroke-width="1.5"/><polygon points="27,10 36,14 27,18" fill="#7d8590"/><text x="2" y="10" font-family="monospace" font-size="7" fill="#555">hazard</text></svg></div>
+
+<!-- ─── S10: OUTPUT / CBOR ─── -->
+<div class="card">
+  <div class="card-top" style="background:var(--c10)"></div>
+  <div class="card-header">
+    <span class="card-num" style="background:var(--c10)">10</span>
+    <span class="card-title" style="color:var(--c10)">Output / CBOR</span>
+  </div>
+  <div class="card-scene">
+    <svg width="172" height="104" viewBox="0 0 172 104">
+      <rect width="172" height="104" fill="#0d1117"/>
+      <rect width="172" height="18" fill="#0e2020"/>
+      <text x="8" y="13" font-family="monospace" font-size="8" fill="#14b8a6" font-weight="bold">MQTT / CBOR PAYLOAD</text>
+      <text x="6"  y="30" font-family="monospace" font-size="7.5" fill="#64748b">topic :</text>
+      <text x="46" y="30" font-family="monospace" font-size="7.5" fill="#14b8a6">obs/events</text>
+      <text x="6"  y="43" font-family="monospace" font-size="7.5" fill="#64748b">frame :</text>
+      <text x="46" y="43" font-family="monospace" font-size="7.5" fill="#e6edf3">1234</text>
+      <text x="6"  y="56" font-family="monospace" font-size="7.5" fill="#64748b">hazard:</text>
+      <text x="46" y="56" font-family="monospace" font-size="7.5" fill="#ef4444">TRUE</text>
+      <text x="6"  y="69" font-family="monospace" font-size="7.5" fill="#64748b">type  :</text>
+      <text x="46" y="69" font-family="monospace" font-size="7.5" fill="#e6edf3">obstacle_in_lane</text>
+      <text x="6"  y="82" font-family="monospace" font-size="7.5" fill="#64748b">crop  :</text>
+      <text x="46" y="82" font-family="monospace" font-size="7.5" fill="#e6edf3">JPEG bytes</text>
+      <rect x="6"  y="88" width="74" height="13" fill="#0e2020" rx="2" stroke="#14b8a6" stroke-width="0.8"/>
+      <text x="10" y="98" font-family="monospace" font-size="7.5" fill="#14b8a6">MJPEG preview</text>
+      <rect x="84" y="88" width="82" height="13" fill="#0e2020" rx="2" stroke="#14b8a6" stroke-width="0.8"/>
+      <text x="88" y="98" font-family="monospace" font-size="7.5" fill="#14b8a6">.mp4 event save</text>
+    </svg>
+  </div>
+  <div class="card-footer">
+    <div class="data-type">
+      <span class="k">out:</span> CBOR over paho-MQTT<br>
+      <span class="k">      </span> MJPEG preview stream<br>
+      <span class="k">save:</span> annotated .mp4 on event
+    </div>
+  </div>
+</div>
 
 </div><!-- end pipeline-row -->
 
-<!-- ── YOLO-Gated Calibration Feedback Arrow (S7 → S3) ── -->
-<!--
-  Layout (left edges):
-    S0(0)  conn  S1(224)  conn  S2(448)  conn  S3(672)  conn  S4(896)  conn
-    S5(1120)  conn  S6_large(1344)  conn  S7(1676)  conn  S8(1900)  conn  S9(2124)
-  S3 left = 672, S3 center = 766
-  S7 left = 1676, S7 center = 1770
-  SVG padding-left = 672 (S3 left edge).
-  In SVG relative coords: S3-center=94, S7-center=1770-672=1098
+<!-- ── YOLO-Gated Calibration Feedback (S7 → S3) ──
+  Left-edges:
+    S0(0) c S1(224) c S2(448) c S3(672) c S4_L(896) c S5_L(1228) c S6(1560) c S7(1748) c S8(1972) c S9(2196) c S10(2420)
+  S3 center = 672+94 = 766
+  S7 center = 1748+94 = 1842
+  padding-left=672; SVG relative: S3-ctr=94, S7-ctr=1842-672=1170
 -->
 <div style="min-width:max-content; margin-top:6px; padding-left:672px;">
-  <svg width="1110" height="32" viewBox="0 0 1110 32">
-    <line x1="94" y1="16" x2="1098" y2="16" stroke="#8b5cf6" stroke-width="1.2" stroke-dasharray="5,4"/>
+  <svg width="1185" height="32" viewBox="0 0 1185 32">
+    <line x1="94" y1="16" x2="1170" y2="16" stroke="#8b5cf6" stroke-width="1.2" stroke-dasharray="5,4"/>
     <polygon points="94,12 82,16 94,20" fill="#8b5cf6"/>
-    <line x1="1098" y1="6" x2="1098" y2="16" stroke="#8b5cf6" stroke-width="1.2" stroke-dasharray="5,4"/>
-    <rect x="380" y="6" width="240" height="14" fill="#0d1117" rx="2"/>
-    <text x="390" y="17" font-family="monospace" font-size="8.5" fill="#8b5cf6">YOLO-gated calibration feedback (vehicle_indices → S3)</text>
+    <line x1="1170" y1="6" x2="1170" y2="16" stroke="#8b5cf6" stroke-width="1.2" stroke-dasharray="5,4"/>
+    <rect x="380" y="5" width="264" height="14" fill="#0d1117" rx="2"/>
+    <text x="388" y="16" font-family="monospace" font-size="8.5" fill="#8b5cf6">YOLO-gated calibration feedback (vehicle_indices → S3)</text>
   </svg>
 </div>
 
-<!-- ── Motion skip bypass (S3 → S6, skipping S4+S5) ── -->
-<!--
-  In SVG relative to S3 left (672):
-    S3 right edge = 188, S6 left = 1344-672 = 672
+<!-- ── Motion skip bypass (S3 → S5, skipping S4) ──
+  S3 right edge relative = 188
+  S5 left relative = 1228-672 = 556
 -->
-<div style="min-width:max-content; margin-top:0px; padding-left:672px;">
-  <svg width="740" height="28" viewBox="0 0 740 28">
-    <line x1="188" y1="14" x2="692" y2="14" stroke="#555" stroke-width="1" stroke-dasharray="4,3"/>
-    <polygon points="692,10 702,14 692,18" fill="#555"/>
-    <text x="290" y="11" font-family="monospace" font-size="7.5" fill="#555">no motion → skip S4–S6</text>
+<div style="min-width:max-content; margin-top:0; padding-left:672px;">
+  <svg width="700" height="28" viewBox="0 0 700 28">
+    <line x1="188" y1="14" x2="596" y2="14" stroke="#555" stroke-width="1" stroke-dasharray="4,3"/>
+    <polygon points="596,10 606,14 596,18" fill="#555"/>
+    <text x="286" y="11" font-family="monospace" font-size="7.5" fill="#555">no motion → skip S4–S5</text>
   </svg>
 </div>
 
-</div><!-- end pipeline-wrap -->
+</div><!-- pipeline-wrap -->
 
-<!-- ══════════ ANIMATED VIEWER ══════════ -->
+<!-- ══════════ VIEWER ══════════ -->
 <div class="viewer-section" id="viewer-section">
   <div class="viewer-header">
-    <span class="viewer-badge" id="v-badge">Stage 0 / 9: WebUI Config</span>
+    <span class="viewer-badge" id="v-badge">Stage 0 / 10: WebUI Config</span>
     <span class="viewer-badge-sub" id="v-sub"></span>
     <div class="viewer-controls">
       <button class="ctrl-btn" onclick="stepStage(-1)">&#9664; Prev</button>
       <button class="ctrl-btn" id="btn-play" onclick="togglePlay()">&#9646;&#9646; Pause</button>
       <button class="ctrl-btn" onclick="stepStage(1)">Next &#9654;</button>
-      <select class="speed-sel" id="speed-sel" onchange="setSpeed(+this.value)">
-        <option value="600">0.6s</option>
-        <option value="1000" selected>1s</option>
+      <select class="speed-sel" onchange="setSpeed(+this.value)">
+        <option value="1000">1s</option>
+        <option value="1500" selected>1.5s</option>
         <option value="2000">2s</option>
-        <option value="3000">3s</option>
+        <option value="2500">2.5s</option>
       </select>
     </div>
   </div>
@@ -1006,109 +839,183 @@
   <div class="viewer-progress"><div class="v-prog" id="v-prog"></div></div>
 </div>
 
-<!-- ══════════ BOTTOM SECTION ══════════ -->
-<div class="bottom-section">
+<!-- ══════════ VIDEO COMPARISON ══════════ -->
+<!--
+  Drop two ~15-second clips into  diagrams/videos/
+  and update the src attributes below.
+  Both videos share a single seek bar and stay in sync.
+-->
+<div class="vc-section">
+  <div class="vc-header">
+    <span class="vc-title">Video Comparison</span>
+    <span style="font-size:.65rem;color:var(--dim)">place clips in diagrams/videos/ · shared seek · auto-loop</span>
+  </div>
+  <div class="vc-body">
+    <div class="vc-pane">
+      <div class="vc-label" style="color:var(--c1)">A — Input / Raw</div>
+      <video id="vc-a" src="videos/video_a.mp4" muted preload="metadata"
+             onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"></video>
+      <div class="vc-placeholder" style="display:none">
+        <span class="ph-icon">&#127909;</span>
+        <span>videos/video_a.mp4</span>
+      </div>
+    </div>
+    <div class="vc-pane">
+      <div class="vc-label" style="color:var(--c9)">B — Pipeline Output</div>
+      <video id="vc-b" src="videos/video_b.mp4" muted preload="metadata"
+             onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"></video>
+      <div class="vc-placeholder" style="display:none">
+        <span class="ph-icon">&#127909;</span>
+        <span>videos/video_b.mp4</span>
+      </div>
+    </div>
+  </div>
+  <div class="vc-controls">
+    <button class="vc-btn" id="vc-play-btn" onclick="vcToggle()">&#9654; Play</button>
+    <input  class="vc-seek" type="range" id="vc-seek" min="0" step="0.05" value="0"
+            oninput="vcSeek(+this.value)" style="width:100%">
+    <span   class="vc-time" id="vc-time">0:00 / 0:00</span>
+  </div>
+</div>
 
+<script>
+(function () {
+  const va   = document.getElementById('vc-a');
+  const vb   = document.getElementById('vc-b');
+  const seek = document.getElementById('vc-seek');
+  const btn  = document.getElementById('vc-play-btn');
+  const time = document.getElementById('vc-time');
+  let playing = false;
+
+  function fmt(s) {
+    const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+    return `${m}:${sec.toString().padStart(2,'0')}`;
+  }
+
+  function syncB() {
+    if (Math.abs(vb.currentTime - va.currentTime) > 0.15) vb.currentTime = va.currentTime;
+  }
+
+  va.addEventListener('timeupdate', () => {
+    const dur = va.duration || 0;
+    seek.max = dur;
+    seek.value = va.currentTime;
+    time.textContent = `${fmt(va.currentTime)} / ${fmt(dur)}`;
+    syncB();
+  });
+
+  va.addEventListener('ended', () => {
+    va.currentTime = 0; vb.currentTime = 0;
+    va.pause(); vb.pause();
+    playing = false;
+    btn.textContent = '▶ Play';
+  });
+
+  window.vcToggle = function () {
+    if (!playing) {
+      vb.currentTime = va.currentTime;
+      va.play(); vb.play();
+      playing = true; btn.textContent = '⏸ Pause';
+    } else {
+      va.pause(); vb.pause();
+      playing = false; btn.textContent = '▶ Play';
+    }
+  };
+
+  window.vcSeek = function (t) {
+    va.currentTime = t; vb.currentTime = t;
+  };
+})();
+</script>
+
+<!-- ══════════ BOTTOM ══════════ -->
+<div class="bottom-section">
   <div class="legend">
     <h3>Stage Legend</h3>
     <div class="legend-grid">
       <div class="legend-item"><div class="legend-dot" style="background:var(--c0)"></div>S0: WebUI Config — PipelineConfig / CLI args</div>
-      <div class="legend-item"><div class="legend-dot" style="background:var(--c6)"></div>S6: Backend Inference — YOLOv8s .pt / .onnx / TRT</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--c6)"></div>S6: Lane Detection — MOG2 accumulator result</div>
       <div class="legend-item"><div class="legend-dot" style="background:var(--c1)"></div>S1: Video Source — cv2.VideoCapture (file / RTSP)</div>
       <div class="legend-item"><div class="legend-dot" style="background:var(--c7)"></div>S7: Post-Process — class whitelist + cross-view NMS</div>
       <div class="legend-item"><div class="legend-dot" style="background:var(--c2)"></div>S2: ROI Crop — RegionSetter bbox crop</div>
       <div class="legend-item"><div class="legend-dot" style="background:var(--c8)"></div>S8: Tracker — ByteTrack (supervision)</div>
       <div class="legend-item"><div class="legend-dot" style="background:var(--c3)"></div>S3: Motion Gate — MOG2 + CC filter on cropped frame</div>
-      <div class="legend-item"><div class="legend-dot" style="background:var(--c9)"></div>S9: Output — CBOR/MQTT · MJPEG · annotated video</div>
-      <div class="legend-item"><div class="legend-dot" style="background:var(--c4)"></div>S4: FEP Projection — fisheye → tangent views (optional)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--c9)"></div>S9: Hazard Detection — lane intersect + dwell logic</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--c4)"></div>S4: FEP + Tiling — tangent views &amp; grid split (optional)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--c10)"></div>S10: Output — CBOR/MQTT · MJPEG · .mp4 event save</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--c5)"></div>S5: Backend Inference — YOLOv8s .pt / .onnx / TRT</div>
       <div class="legend-item"><div class="legend-dot" style="background:#8b5cf6"></div>Feedback — YOLO-gated lane calibration loop (S7→S3)</div>
-      <div class="legend-item"><div class="legend-dot" style="background:var(--c5)"></div>S5: Tiling — TileActivation 2×N grid split (optional)</div>
     </div>
   </div>
 
   <div class="notes">
     <h3>Pipeline Notes</h3>
-    <p><b>ROI crop (S2) is first</b>: motion gating (S3) operates exclusively on the cropped sub-frame at 320×320 downscale, not on the full resolution input. This is necessary for valid lane calibration.</p>
-    <p><b>Motion gate (S3)</b>: frames where fg_score falls below threshold skip S4–S6 entirely, saving GPU cycles. The lane mask and calibration state are still maintained.</p>
-    <p><b>S4 (FEP) and S5 (Tiling) are optional</b>; activated by <code>--fep</code> (fisheye cameras) or <code>--force-tiles</code> respectively. Without either, the cropped frame passes directly to S6.</p>
-    <p><b>YOLO-gated calibration</b>: S7 feeds confirmed vehicle frame indices back to the Subtractor in S3. Only frames where YOLO detected a vehicle contribute to the lane accumulator, preventing tree/shadow contamination.</p>
-    <p><b>S9 (Output)</b> renders the final composite onto the original full-resolution frame: ROI boundary, lane mask overlay, per-track bounding boxes, and hazard zone highlighting — matching the saved video output.</p>
+    <p><b>ROI crop (S2) precedes motion gating (S3):</b> MOG2 runs exclusively on the cropped sub-frame at 320×320, keeping the background model stable and lane calibration valid.</p>
+    <p><b>S4 (FEP + Tiling)</b> groups the two optional pre-processing paths in one card. FEP corrects fisheye distortion (<code>--fep</code>); Tiling splits the crop into a 2×N grid (<code>--force-tiles</code>). Both are independent; neither is required for flat-camera setups.</p>
+    <p><b>S6 (Lane Detection)</b> shows the accumulated lane mask state at the point YOLO detections are available. Only vehicle-confirmed frames (S7 → <code>notify_vehicle_detections</code> → S3) contribute to the accumulator, preventing tree/shadow contamination.</p>
+    <p><b>S9 (Hazard Detection)</b> checks per-track bboxes against the lane polygon. A dwell counter increments each frame a track overlaps the hazard zone; threshold crossing emits an <code>obstacle_in_lane</code> or <code>slow_vehicle</code> event.</p>
+    <p><b>S10 (Output)</b> emits the CBOR MQTT message and MJPEG preview frame. Annotated video is appended to the event .mp4 when recording is enabled.</p>
   </div>
-
 </div>
 
 <script>
 (function () {
   const COLORS = [
-    '#64748b',  // S0 WebUI
-    '#3b82f6',  // S1 Video Source
-    '#10b981',  // S2 ROI Crop
-    '#8b5cf6',  // S3 Motion Gate
-    '#06b6d4',  // S4 FEP Projection
-    '#ec4899',  // S5 Tiling
-    '#f59e0b',  // S6 Backend Inference
-    '#ef4444',  // S7 Post-Process
-    '#a855f7',  // S8 Tracker
-    '#f97316',  // S9 Output
+    '#64748b',  // S0  WebUI Config
+    '#3b82f6',  // S1  Video Source
+    '#10b981',  // S2  ROI Crop
+    '#8b5cf6',  // S3  Motion Gate
+    '#06b6d4',  // S4  FEP + Tiling
+    '#f59e0b',  // S5  Backend Inference
+    '#84cc16',  // S6  Lane Detection
+    '#ef4444',  // S7  Post-Process
+    '#a855f7',  // S8  Tracker
+    '#f97316',  // S9  Hazard Detection
+    '#14b8a6',  // S10 Output / CBOR
   ];
 
-  /* ── Stage image paths ──────────────────────────────────────────────
-     Place real screenshots in  diagrams/stage_images/
-     and set the corresponding entry to the relative path, e.g.:
-       './stage_images/s1_raw.jpg'
-     Leave as null to show the placeholder.
-  ─────────────────────────────────────────────────────────────────── */
+  /* Place screenshots in diagrams/stage_images/ and set paths below */
   const stageImages = [
-    null,  // S0 · WebUI config      './stage_images/s0_webui.jpg'
-    null,  // S1 · raw frame         './stage_images/s1_raw.jpg'
-    null,  // S2 · ROI crop          './stage_images/s2_roi.jpg'
-    null,  // S3 · motion mask       './stage_images/s3_motion.jpg'
-    null,  // S4 · FEP tangent views './stage_images/s4_fep.jpg'
-    null,  // S5 · tiling            './stage_images/s5_tiles.jpg'
-    null,  // S6 · backend inference './stage_images/s6_inference.jpg'
-    null,  // S7 · post-process      './stage_images/s7_filtered.jpg'
-    null,  // S8 · tracker           './stage_images/s8_tracked.jpg'
-    null,  // S9 · output            './stage_images/s9_output.jpg'
+    'stage_images/s0_webui.png',  // S0  · s0_webui.jpg
+    'stage_images/s1_raw.png',  // S1  · s1_raw.jpg
+    'stage_images/s2_roi.png',  // S2  · s2_roi.jpg
+    'stage_images/s3_motion.png',  // S3  · s3_motion.jpg
+    'stage_images/s4_fep.png',  // S4  · s4_fep_tiling.jpg
+    'stage_images/s5_detections.png',  // S5  · s5_inference.jpg
+    'stage_images/s6_lane.png',  // S6  · s6_lanes.jpg
+    'stage_images/s7_filtered.png',  // S7  · s7_filtered.jpg
+    'stage_images/s8_tracked.png',  // S8  · s8_tracked.jpg
+    'stage_images/s9_hazard.png',  // S9  · s9_hazard.jpg
+    'stage_images/s10_output.png',  // S10 · s10_output.jpg
   ];
 
   const stageImageLabels = [
-    's0_webui.jpg',
-    's1_raw.jpg',
-    's2_roi.jpg',
-    's3_motion.jpg',
-    's4_fep.jpg',
-    's5_tiles.jpg',
-    's6_inference.jpg',
-    's7_filtered.jpg',
-    's8_tracked.jpg',
-    's9_output.jpg',
+    'stage_images/s0_webui.png', 'stage_images/s1_raw.png', 'stage_images/s2_roi.png', 'stage_images/s3_motion.png',
+    'stage_images/s4_fep_tiling.png', 'stage_images/s5_inference.png', 'stage_images/s6_lanes.png',
+    'stage_images/s7_filtered.png', 'stage_images/s8_tracked.png', 'stage_images/s9_hazard.png', 'stage_images/s10_output.png',
   ];
 
   const cards   = Array.from(document.querySelectorAll('.card'));
   const section = document.getElementById('viewer-section');
   const vScene  = document.getElementById('v-scene');
   const vBadge  = document.getElementById('v-badge');
-  const vSub    = document.getElementById('v-sub');
   const vName   = document.getElementById('v-name');
   const vData   = document.getElementById('v-data');
   const vDots   = document.getElementById('v-dots');
   const vProg   = document.getElementById('v-prog');
   const btnPlay = document.getElementById('btn-play');
 
-  let current = 0;
-  let playing = true;
-  let ms      = 1000;
-  let ticker  = null;
+  let current = 0, playing = true, ms = 2500, ticker = null;
 
-  cards.forEach((card, i) => {
-    card.style.setProperty('--stage-c', COLORS[i]);
-    card.style.setProperty('--stage-shadow', COLORS[i] + '44');
+  cards.forEach((c, i) => {
+    c.style.setProperty('--stage-c',      COLORS[i]);
+    c.style.setProperty('--stage-shadow', COLORS[i] + '44');
   });
 
-  COLORS.forEach((c, i) => {
+  COLORS.forEach((col, i) => {
     const d = document.createElement('div');
     d.className = 'v-dot';
-    d.style.background = c;
+    d.style.background = col;
     d.title = `Stage ${i}`;
     d.addEventListener('click', () => { goTo(i); restartTicker(); });
     vDots.appendChild(d);
@@ -1124,19 +1031,21 @@
 
     cards.forEach(c => c.classList.remove('active'));
     card.classList.add('active');
-    card.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
-
+    const wrap = card.closest('.pipeline-wrap');
+    if (wrap) {
+      const target = card.offsetLeft - (wrap.offsetWidth - card.offsetWidth) / 2;
+      wrap.scrollTo({ left: Math.max(0, target), behavior: 'smooth' });
+    }
     section.style.borderColor = color + '77';
 
     if (svg) {
       const clone = svg.cloneNode(true);
-      const vb    = clone.getAttribute('viewBox');
+      const vb = clone.getAttribute('viewBox');
       if (vb) {
-        const parts = vb.split(' ').map(Number);
-        const w = parts[2], h = parts[3];
-        const scale = Math.min(560 / w, 280 / h, 2.2);
-        clone.setAttribute('width',  Math.round(w * scale));
-        clone.setAttribute('height', Math.round(h * scale));
+        const p = vb.split(' ').map(Number);
+        const s = Math.min(560 / p[2], 280 / p[3], 2.2);
+        clone.setAttribute('width',  Math.round(p[2] * s));
+        clone.setAttribute('height', Math.round(p[3] * s));
       }
       clone.style.borderColor = color + '55';
       vScene.innerHTML = '';
@@ -1156,14 +1065,9 @@
     const path  = stageImages[idx];
 
     phEl.style.color = color;
-
     if (path) {
       imgEl.onload  = () => { imgEl.style.display = 'block'; phEl.style.display = 'none'; };
-      imgEl.onerror = () => {
-        imgEl.style.display = 'none';
-        phEl.style.display  = 'flex';
-        phLbl.textContent   = `not found: ${path}`;
-      };
+      imgEl.onerror = () => { imgEl.style.display = 'none'; phEl.style.display = 'flex'; phLbl.textContent = `not found: ${path}`; };
       imgEl.src = path;
     } else {
       imgEl.style.display = 'none';
@@ -1172,9 +1076,7 @@
       phLbl.textContent   = `diagrams/stage_images/${stageImageLabels[idx]}`;
     }
 
-    document.querySelectorAll('.v-dot').forEach((d, i) =>
-      d.classList.toggle('on', i === idx));
-
+    document.querySelectorAll('.v-dot').forEach((d, i) => d.classList.toggle('on', i === idx));
     animateProg();
   }
 
@@ -1188,11 +1090,7 @@
 
   function restartTicker() {
     clearInterval(ticker);
-    if (playing) {
-      ticker = setInterval(() => {
-        goTo((current + 1) % cards.length);
-      }, ms);
-    }
+    if (playing) ticker = setInterval(() => goTo((current + 1) % cards.length), ms);
     animateProg();
   }
 
@@ -1202,21 +1100,10 @@
     btnPlay.classList.toggle('paused', !playing);
     restartTicker();
   };
+  window.stepStage = function (dir) { goTo((current + dir + cards.length) % cards.length); restartTicker(); };
+  window.setSpeed  = function (n)   { ms = n; restartTicker(); };
 
-  window.stepStage = function (dir) {
-    goTo((current + dir + cards.length) % cards.length);
-    restartTicker();
-  };
-
-  window.setSpeed = function (newMs) {
-    ms = newMs;
-    restartTicker();
-  };
-
-  cards.forEach((card, i) => {
-    card.addEventListener('click', () => { goTo(i); restartTicker(); });
-  });
-
+  cards.forEach((c, i) => c.addEventListener('click', () => { goTo(i); restartTicker(); }));
   goTo(0);
   restartTicker();
 })();
